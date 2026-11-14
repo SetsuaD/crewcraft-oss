@@ -35,3 +35,6 @@ unsafe_code = "forbid"
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
+# The Craft "never crash" set. `clippy::todo` joins when task T144 replaces the stubs in server-core/src/durable.rs.
+unimplemented = "warn"
+unreachable = "warn"

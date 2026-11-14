@@ -9,12 +9,14 @@ enrolled. Contributions of code, tests, documentation, translations and bug repo
   strings or assets from other projects, including other chat servers; open-source *dependencies* under licenses
   compatible with Apache-2.0 are fine.
 - **Read [AGENTS.md](AGENTS.md).** The same short rules apply to people and to AI coding agents.
+- **Read the Craft house rules.** CrewCraft follows the shared rules of the Craft apps; [AGENTS.md](AGENTS.md)
+  links them and lists where CrewCraft differs.
 - **Security issues are not filed as issues.** See [SECURITY.md](SECURITY.md).
 
 ## Finding work
 
 - Open work is in [`tasks/`](tasks/README.md). Each task is a folder with a written `spec`, a `test.rs` that defines
-  "done", and the list of files the change may touch. Milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
+  "done", and the list of files the change may touch. Milestones are in [ROADMAP.md](ROADMAP.md).
 - **Claim before you build:** comment on the task's issue (or open one named after the task, e.g. `T150 room export`)
   and open a draft pull request early, so two people don't do the same work.
 - Larger ideas (new features, protocol changes, new dependencies) start as an issue so the design can be agreed first.
@@ -51,7 +53,17 @@ This repository does not use hosted CI services, so please run the gate yourself
 Maintainers read a pull request before running any of its code, and run contributors' code only in a disposable,
 network-restricted environment that holds no credentials.
 
+## Credits
+
+Everyone who contributes is credited by GitHub username. To be credited by more (a real name, a display name, or a
+role), add **your own** entry to [`contributors/people.toml`](contributors/people.toml) in your own pull request.
+Never add or edit someone else's entry.
+
+Changes to the security-sensitive code (enrollment, one-time codes, accounts, the server's access rules, the scan)
+are reviewed by the security contributor listed there; [`.github/CODEOWNERS`](.github/CODEOWNERS) requests that
+review automatically.
+
 ## License
 
-CrewCraft is licensed under the [Apache License 2.0](LICENSE). By submitting a contribution you agree that it is
+CrewCraft is licensed under the [Apache License 2.0](LICENSE-APACHE). By submitting a contribution you agree that it is
 licensed under the same terms (Apache-2.0, section 5), and that you have the right to submit it.
