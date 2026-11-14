@@ -17,7 +17,11 @@ tools/task.sh done T001-base32      # marks status done
 
 Writing a new task: describe the behaviour in `spec`, write `test.rs` against the public API (with expected values from a
 standard, an RFC test vector, or computed independently, never from the implementation), list the files, and keep the
-stub in the source compiling (`todo!("T00N: ...")`) so the gate stays green until the task lands.
+stub in the source compiling (`todo!("T00N: ...")`) so the gate stays green until the task lands. The workspace lints
+`clippy::todo`, so a stub carries an item-level `#[allow(clippy::todo, reason = "...")]` that the task removes when it
+replaces the `todo!()`. Before a task is published, write a throwaway implementation and run its test against it (and
+against the stub: it must compile and fail), so a test that cannot be satisfied is found by its author, not by a worker.
+Keep `test.rs` rustfmt-clean: it is copied into the workspace unchanged and the gate checks formatting.
 
 The same folders feed automated workers (local models in a test-gated loop): they receive `spec`, `test.rs` and the
 listed files, and their output is only ever a proposed change that a reviewer accepts or rejects.

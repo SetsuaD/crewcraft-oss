@@ -14,7 +14,8 @@ Where CrewCraft differs, and why:
 - **CI.** There are no hosted workflows. `ci/validate.sh` is the whole gate; contributors run it before review and
   the maintainers run it on their own machines. It does not call `storytold/craft-common-actions`.
 - **Never crash.** The workspace forbids `unsafe` and turns the crash lints into errors through `[workspace.lints]`
-  plus `clippy -D warnings`, instead of a `deny` attribute in each crate root.
+  plus `clippy -D warnings`, instead of a `deny` attribute in each crate root. `clippy::todo` is enabled too: an open task's
+  stub carries an item-level `#[allow(clippy::todo)]` that the task removes (tasks/README.md).
 - **Licenses.** CrewCraft itself is MIT OR Apache-2.0, as in the Craft apps. `deny.toml` also admits a few permissive identifiers that are
   common in the Rust dependency tree and are not on the Craft allowlist (`Apache-2.0 WITH LLVM-exception`, `Zlib`,
   `Unicode-3.0`, `CDLA-Permissive-2.0`); they are reviewed before any catalog request.

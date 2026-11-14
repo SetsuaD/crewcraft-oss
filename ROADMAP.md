@@ -21,3 +21,33 @@ Rust ([docs/SPEC.md](docs/SPEC.md) section 7). The target is feature parity with
 | M11 | **Plugins and themes** (2.18, 2.19): WebAssembly plugin host, `crewcraft-plugin-sdk`, declarative plugin UI, theme packages | a sample bot, a slash command and a channel tab built with the SDK run on a real server; a theme package installs and passes the contrast check |
 | M12 | **Parity sweep**: whiteboard, spreadsheets, live cards, breakout rooms, webinars, captions and the other rows of PARITY.md | every PARITY.md row is `done` or a recorded non-goal |
 | M13 | **1.0 release**: an external security review and signed installers for every platform | review findings closed and 1.0 tagged |
+
+## M2 task breakdown
+
+Ten tasks are written and ready (`tasks/T200` to `T209`); each is a spec, a test and a compiling stub, and each test has been
+shown to be satisfiable. They are independent except where `depends_on` says so.
+
+| Task | Piece of M2 | Crate |
+|---|---|---|
+| T200 | Ed25519 public key of the bootstrap key pair (RFC 8032 vectors) | enroll |
+| T201 | TOTP guard: one enrollment per person, replay protection, skew | accounts |
+| T202 | Sign-in throttle: doubling delay per wrong attempt, lock on the tenth | accounts |
+| T203 | Certificate policy: enrolled devices and live bootstrap keys in, everything else out | server-core |
+| T204 | Bootstrap calls (redeem with a signing request, confirm TOTP) and their codec | proto |
+| T205 | Two-step enrollment: the device is registered only after the first TOTP code; per-source and global limits | server-core (needs T201) |
+| T206 | Delete means redaction (SPEC.md section 3 requires it before the server takes network connections) | server-core |
+| T207 | WebSocket handshake: parse the upgrade, check the origin, answer 101 | proto |
+| T208 | WebSocket frames, strict for both peers (RFC 6455 section 5.7 examples) | proto |
+| T209 | WebSocket messages: fragments, interleaved control frames, close codes | proto (needs T208) |
+
+Not yet written, each waiting on a decision recorded here rather than guessed:
+
+- **Device certificate issuance** (CA, signing request to certificate, forced subject, 90-day lifetime, revocation list).
+  Needs a choice of X.509 crates. The RustCrypto set (`x509-cert`, `p256`, `der`) keeps to the license allowlist and the
+  "no hand-rolled cryptography" rule; the task is large enough to be cut in two (key and request handling, then
+  certificate building).
+- **The dark TLS acceptor** (rustls with the verifier from SECURITY-DESIGN.md section 3, using `cert_policy`, and the M2
+  integration test). Needs a rustls crypto provider decision: `ring` and `aws-lc-rs` both carry license text outside
+  `deny.toml`'s allowlist and need a reviewed `clarify` entry; a pure-RustCrypto provider avoids that but is less
+  mature. Whoever picks adds the dependency and the license entry in the same change.
+- **Journal compaction**, so a deleted message's text also leaves the durable journal (T206 redacts the in-memory log only).

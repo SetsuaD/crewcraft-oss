@@ -1,0 +1,17 @@
+{
+  "id": "T201-totp-guard",
+  "title": "TOTP guard: one enrollment per person, codes accepted once",
+  "crate": "crewcraft-accounts",
+  "files": [
+    "crates/accounts/src/totp_guard.rs"
+  ],
+  "test_path": "crates/accounts/tests/t201_totp_guard.rs",
+  "test_cmd": "cargo test -p crewcraft-accounts --test t201_totp_guard",
+  "depends_on": [],
+  "spec": "Implement TotpGuard as its doc comments say, on crewcraft_totp::Totp (Totp::with_defaults, Totp::verify with SKEW_STEPS and the stored last_used counter). The Debug impl stays. Delete the `#[allow(clippy::todo)]` on the impl and the `_fields` helper at the bottom (it only keeps the stub free of dead-code warnings). The `crewcraft-totp` dependency is already added to the crate. No other new dependencies.",
+  "status": "open",
+  "context": [
+    "crates/totp/src/lib.rs",
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

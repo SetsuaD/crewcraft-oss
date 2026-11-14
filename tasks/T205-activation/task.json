@@ -1,0 +1,23 @@
+{
+  "id": "T205-activation",
+  "title": "Two-step enrollment: register the device only after the first TOTP code",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/activation.rs"
+  ],
+  "test_path": "crates/server-core/tests/t205_activation.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t205_activation",
+  "depends_on": [
+    "T201-totp-guard"
+  ],
+  "spec": "Implement Activation as its doc comments say, composing invites::InviteBook (including the new get), devices::Devices, rate_limit::Limiter and crewcraft_accounts::totp_guard::TotpGuard (shown for reference; its own task is T201, so use the real guard once that lands). Replace the `todo!()`s and delete the `#[allow(clippy::todo)]` and the `#[allow(dead_code)]` on Pending. Use `Totp::with_defaults` and `Totp::verify` (skew `SKEW_STEPS`, no last_used) to check a first code against the pending secret; on success call `TotpGuard::enroll` and then `TotpGuard::verify` with the same code and time so the guard's last counter records it. The `crewcraft-accounts` and `crewcraft-totp` dependencies are already added to the crate. No other new dependencies.",
+  "status": "open",
+  "context": [
+    "crates/server-core/src/enrollment.rs",
+    "crates/server-core/src/invites.rs",
+    "crates/server-core/src/devices.rs",
+    "crates/server-core/src/rate_limit.rs",
+    "crates/accounts/src/totp_guard.rs",
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

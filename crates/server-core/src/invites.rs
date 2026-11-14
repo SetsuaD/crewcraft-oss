@@ -68,6 +68,11 @@ impl InviteBook {
         self.invites.iter().any(|i| &i.bootstrap_pub == bootstrap_pub && now_ms < i.expires_ms)
     }
 
+    /// The live invitation with this bootstrap key, without using it up (`None` if there is none or it has expired).
+    pub fn get(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> Option<&Invite> {
+        self.invites.iter().find(|i| &i.bootstrap_pub == bootstrap_pub && now_ms < i.expires_ms)
+    }
+
     /// Remove every expired invitation; returns how many.
     pub fn prune(&mut self, now_ms: u64) -> usize {
         let before = self.invites.len();

@@ -56,6 +56,14 @@ impl<T: Clone> EventLog<T> {
         Since::Events(events)
     }
 
+    /// Visit every event held, oldest first, with its cursor, and let `f` change it in place. Cursors, `head` and `len`
+    /// are untouched: the log's shape stays, only the events' contents change (used to redact deleted messages). Task T206.
+    #[allow(clippy::todo, reason = "stub until task T206 lands; remove this allow with the stub")]
+    pub fn for_each_mut(&mut self, f: impl FnMut(u64, &mut T)) {
+        let _ = (f, &mut self.events);
+        todo!("T206: for_each_mut")
+    }
+
     /// Events held now.
     pub fn len(&self) -> usize {
         self.events.len()
