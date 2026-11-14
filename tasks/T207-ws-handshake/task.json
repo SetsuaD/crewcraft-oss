@@ -1,0 +1,17 @@
+{
+  "id": "T207-ws-handshake",
+  "title": "WebSocket opening handshake: parse the upgrade, check the origin, answer 101",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/websocket.rs"
+  ],
+  "test_path": "crates/proto/tests/t207_ws_handshake.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t207_ws_handshake",
+  "depends_on": [],
+  "spec": "Implement accept_key, head_len, parse_upgrade and upgrade_response as the doc comments say, by hand over bytes and &str (no HTTP or WebSocket library: the handshake is small and the rules are the contract). accept_key uses the sha1 and base64 crates, which are existing workspace dependencies now added to this crate. Delete the `#[allow(clippy::todo)]` on the stubs. No other new dependencies.",
+  "status": "open",
+  "context": [
+    "docs/SPEC.md",
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "id": "T204-bootstrap-codec",
+  "title": "Bootstrap calls: redeem with a signing request, confirm the first TOTP code",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/bootstrap.rs"
+  ],
+  "test_path": "crates/proto/tests/t204_bootstrap_codec.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t204_bootstrap_codec",
+  "depends_on": [],
+  "spec": "Implement the four codec functions as the module doc comment says, in the style of request.rs (private helpers for the str, bytes, u32 and u16 fields are fine). The Debug impl for BootstrapRequest stays as written. Delete the `#[allow(clippy::todo)]` on the stubs. No new dependencies.",
+  "status": "open",
+  "context": [
+    "crates/proto/src/request.rs",
+    "crates/proto/src/message.rs",
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

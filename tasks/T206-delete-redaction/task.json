@@ -1,0 +1,19 @@
+{
+  "id": "T206-delete-redaction",
+  "title": "Delete means redaction: a deleted message's text leaves the log",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/cursor_log.rs",
+    "crates/server-core/src/room_service.rs"
+  ],
+  "test_path": "crates/server-core/tests/t206_delete_redaction.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t206_delete_redaction",
+  "depends_on": [],
+  "spec": "SPEC.md section 3 requires this before the server accepts network connections: today a Deleted event is appended but the original Posted event (and every Edited event for it) still carries its html and mentions, so a sync from an older cursor returns text the author deleted. Implement EventLog::for_each_mut (visit held events oldest first with their cursors; head and len unchanged) and make RoomService::delete, after it succeeds, redact in place the Posted event at `target` and every Edited { target } event: html becomes empty and mentions become empty, while cursor, actor and kind stay (cursors must keep their meaning for clients that sync). Events of other messages are untouched. Delete the `#[allow(clippy::todo)]` on the stub. No new dependencies. Known limit, not part of this task: the durable journal (T140/T144) still holds the original Post operation until journal compaction exists; docs/SPEC.md notes it.",
+  "status": "open",
+  "context": [
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/cursor_log.rs",
+    "docs/SPEC.md"
+  ]
+}

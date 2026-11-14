@@ -55,7 +55,9 @@ CrewCraft implements REQUIREMENTS.md sections 2.1 to 2.7 and 2.9 to 2.21 as writ
 
 > **Implementation status (early development).** Deleting a message currently appends a deletion event while the
 > original body stays in the room log, so a sync from an older cursor still returns it. Clearing the body in place
-> (delete means redaction) is required before the server accepts network connections (ROADMAP M2).
+> (delete means redaction, task T206) is required before the server accepts network connections (ROADMAP M2). Even
+> then the durable journal (`journal`, T140) keeps the original `Post` operation until journal compaction exists, so
+> "removed means removed" holds for clients and the live log, not yet for the file on disk.
 
 - **Accounts.** CrewCraft is standalone: it has its own account store (email, TOTP, devices) because a public product
   cannot depend on any one organization's identity system. The password is the person's mailbox password, checked at

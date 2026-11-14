@@ -8,6 +8,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+crewcraft-totp.workspace = true
 argon2.workspace = true
 base64.workspace = true
 rand_core.workspace = true

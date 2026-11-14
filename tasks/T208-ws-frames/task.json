@@ -1,0 +1,17 @@
+{
+  "id": "T208-ws-frames",
+  "title": "WebSocket frames: strict decoder for either peer, encoders with minimal lengths",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/ws_frame.rs"
+  ],
+  "test_path": "crates/proto/tests/t208_ws_frames.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t208_ws_frames",
+  "depends_on": [],
+  "spec": "Implement FrameDecoder::next_frame, encode_server_frame and encode_client_frame as the doc comments say, by hand (no WebSocket library; the RFC 6455 section 5.7 examples are in the test). Every length or index taken from received bytes must be checked before it is used to slice or allocate: a hostile peer controls them. Delete the `#[allow(clippy::todo)]` on the stubs. No new dependencies.",
+  "status": "open",
+  "context": [
+    "crates/proto/src/frame.rs",
+    "docs/SPEC.md"
+  ]
+}

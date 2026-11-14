@@ -1,0 +1,18 @@
+{
+  "id": "T209-ws-messages",
+  "title": "WebSocket messages: fragments joined, control frames interleaved, close frames decoded",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/ws_message.rs"
+  ],
+  "test_path": "crates/proto/tests/t209_ws_messages.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t209_ws_messages",
+  "depends_on": [
+    "T208-ws-frames"
+  ],
+  "spec": "Implement Assembler::push and to_frame as the doc comments say. Frame, Opcode and WsError come from ws_frame (their stubs and the WsError variants for this task already exist, so this compiles before T208 lands). Guard the size before copying: a frame that would push the message over max_message is refused without appending it. Delete the `#[allow(clippy::todo)]` on the stubs. No new dependencies.",
+  "status": "open",
+  "context": [
+    "crates/proto/src/ws_frame.rs"
+  ]
+}
