@@ -14,5 +14,5 @@
     "T144-durable-server"
   ],
   "spec": "Add Connection::receive_durable with the same framing, request IDs, room access, cursor and push behavior as receive. Journal accepted mutations before responding. After reopening the journal, previous posts, edits, deletions and read markers are still visible to eligible members. Preserve existing domain refusal codes and the original in-memory API. Use DurableConnError::Protocol for fatal framing and codec errors and DurableConnError::Storage for fatal journal and poisoned-state errors. A poisoned server cannot serve requests or pushes through any durable connection. A fatal error returns no bytes from that call.",
-  "status": "open"
+  "status": "done"
 }
