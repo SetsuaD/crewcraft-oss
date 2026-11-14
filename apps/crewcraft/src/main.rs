@@ -1,5 +1,5 @@
 //! The CrewCraft desktop client (Windows, macOS, Linux). Calls: `crewcraft-client-core`.
-//! Filled in from milestone M3 (docs/ROADMAP.md).
+//! Filled in from milestone M3 (ROADMAP.md).
 
 fn main() {
     let (major, minor) = crewcraft_client_core::PROTOCOL_VERSION;

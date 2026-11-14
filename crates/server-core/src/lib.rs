@@ -1,7 +1,7 @@
 //! Server domain logic: accounts, devices, rooms, memberships, messages and the access rules over them.
 //!
 //! Owns: behaviour, not transport or storage (those are traits implemented by `apps/crewcraft-server`).
-//! Called by: `apps/crewcraft-server`. Calls: `crewcraft-proto`. Filled in from milestone M1 (docs/ROADMAP.md).
+//! Called by: `apps/crewcraft-server`. Calls: `crewcraft-proto`. Filled in from milestone M1 (ROADMAP.md).
 
 pub use crewcraft_proto::PROTOCOL_VERSION;
 

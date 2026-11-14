@@ -1,45 +1,111 @@
-# CrewCraft
+<h1 align="center">CrewCraft</h1>
 
-**Self-hosted team chat, written in Rust.** Direct messages, group rooms, teams with threaded channels, files,
-presence, search, and end-to-end encrypted calls, on a server you own. Every device is enrolled from an emailed
-one-time code, every person signs in with a mandatory authenticator-app code, and the server answers nothing to a
-device it has not enrolled.
+<p align="center">
+  <b>Self-hosted team chat; open source, built from scratch in pure Rust.</b>
+</p>
 
-> **Status: early development.** Nothing here is usable yet. The plan is in [docs/ROADMAP.md](docs/ROADMAP.md), and
-> [CONTRIBUTING.md](CONTRIBUTING.md) says how to help.
+<p align="center">
+  Direct messages, group rooms, teams with threaded channels, files, presence, search, and end-to-end encrypted
+  calls, on a server you own. The server runs on Linux; the clients are native egui apps for desktop and mobile,
+  and the same code runs in the browser through WebAssembly.<br>
+  <i>A community app by CRU Technologies, built to the Craft apps' conventions.</i>
+</p>
 
-| Read | For |
-|---|---|
-| [docs/SPEC.md](docs/SPEC.md) | what CrewCraft is: deliverables, onboarding, scope |
-| [docs/SECURITY-DESIGN.md](docs/SECURITY-DESIGN.md) | keys, dark enrollment, TOTP, sessions |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | milestones and how each is proven |
-| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | the behaviours CrewCraft must have, section by section |
-| [docs/CLEAN-ROOM.md](docs/CLEAN-ROOM.md) | rules that keep this an independent, publishable codebase |
-| [tasks/README.md](tasks/README.md) | work units, each defined by a test |
+<p align="center">
+  <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-2b47b5?style=flat-square&logo=rust&logoColor=white">
+  <img alt="Server on Linux; clients on Windows, macOS, Linux, Android, iOS and the web" src="https://img.shields.io/badge/runs%20on-Linux%20server%20%C2%B7%20desktop%20%C2%B7%20mobile%20%C2%B7%20web-3b5bdb?style=flat-square">
+  <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2b47b5?style=flat-square">
+  <img alt="Strict mTLS: the server answers only enrolled devices" src="https://img.shields.io/badge/server-strict%20mTLS%20%C2%B7%20dark-3b5bdb?style=flat-square">
+  <img alt="Status: early development" src="https://img.shields.io/badge/status-early%20development-lightgrey?style=flat-square">
+</p>
 
-## Layout
+> [!NOTE]
+> **Early development.** Nothing here is usable yet. The server core is being built task by task; the plan is in
+> [ROADMAP.md](ROADMAP.md), and [CONTRIBUTING.md](CONTRIBUTING.md) says how to pick up a task.
+
+<p align="center">
+  <a href="#why-crewcraft">Why CrewCraft</a> ·
+  <a href="#what-works-today">What works today</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#roadmap">Roadmap</a> ·
+  <a href="#contributing">Contributing</a> ·
+  <a href="#license-and-credits">License and credits</a>
+</p>
+
+## Why CrewCraft
+
+- **Dark by design.** The staff entrance completes a TLS handshake only with a device that holds a client certificate
+  the server issued. Everything else gets a closed connection and no bytes: no login page, no banner, nothing to probe.
+- **Every person, every sign-in.** Devices are enrolled from an emailed one-time code, keys never leave the device, and
+  every person signs in with an authenticator-app code. The server never trusts a name a client claims.
+- **Yours to run.** One server binary on a Linux machine or VM, with its own certificate authority created at install
+  time. No third-party service is in the path, and nothing phones home.
+- **Built in the open.** Clean-room, Apache-2.0, and every open task is a written behaviour plus the test that defines it.
+
+## What works today
+
+Libraries, each proven by the tests in `crates/*/tests`:
+
+- **Sign-in building blocks:** one-time codes (RFC 6238, base32, `otpauth://` URIs), enrollment codes and the bootstrap
+  key they derive, email identities, Argon2id password hashing, PKCE, sessions.
+- **Wire protocol:** framing, handshake, messages, requests and push payloads.
+- **Server core (in memory):** rooms and membership, messages and edits, mentions, unread counts, search, presence,
+  invites, devices and enrollment, uploads, rate limits, retention, an operation journal and an audit chain.
+- **Client core:** timeline, room view, inbox, outbox, notifications and the client session.
+
+There is no network server, client app or installer yet: the dark TLS server is milestone M2 and the desktop client M3.
+
+## Quick start
+
+Rust 1.95 or newer.
+
+```sh
+git clone https://github.com/SetsuaD/crewcraft-oss.git
+cd crewcraft-oss
+bash ci/validate.sh                  # the whole gate: format, lint, every test, sanitize scan
+cargo build --release --workspace
+```
+
+On Windows, `setup.bat`, `run_dev.bat` and `build.bat` do the same.
+
+## Architecture
 
 | Path | Owns |
 |---|---|
 | `crates/totp` | RFC 6238 one-time passwords, base32, `otpauth://` URIs |
 | `crates/enroll` | enrollment codes and the bootstrap key they derive |
+| `crates/accounts` | standalone accounts: email identity, password hashing, PKCE for mail-client sign-in |
 | `crates/proto` | wire types shared by server and clients |
 | `crates/server-core` | server behaviour: accounts, devices, rooms, messages, access rules |
 | `crates/client-core` | client behaviour shared by desktop, web, Android, iOS |
-| `apps/crewcraft-server` | the server binary (TLS, web client, admin console) |
+| `apps/crewcraft-server` | the server binary (dark TLS, web client, admin console) |
 | `apps/crewcraft` | the desktop client |
 | `tasks/` | open work, one test per task |
-| `ci/validate.sh` | the whole gate: format, lint, tests, sanitize scan |
+| `ci/validate.sh` | the whole gate |
 
-## Build
+| Read | For |
+|---|---|
+| [docs/SPEC.md](docs/SPEC.md) | what CrewCraft is: deliverables, onboarding, scope |
+| [docs/SECURITY-DESIGN.md](docs/SECURITY-DESIGN.md) | keys, dark enrollment, TOTP, sessions |
+| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | the behaviours CrewCraft must have, section by section |
+| [docs/CLEAN-ROOM.md](docs/CLEAN-ROOM.md) | rules that keep this an independent, publishable codebase |
+| [tasks/README.md](tasks/README.md) | work units, each defined by a test |
 
-Rust 1.95 or newer. `bash ci/validate.sh` runs the gate; `cargo build --release --workspace` builds. On Windows,
-`setup.bat`, `run_dev.bat` and `build.bat` do the same.
+## Roadmap
+
+[ROADMAP.md](ROADMAP.md) lists the milestones, each ending in something a person can run and proven by a command:
+M1 the server core, M2 the dark TLS server, M3 the desktop client, then the web client, mobile apps, calls and 1.0.
+
+## Downloads
+
+None yet. Desktop releases will be signed and published on this repository's Releases page with a `SHA256SUMS.txt`,
+starting at milestone M3.
 
 ## Secrets & access
 
-None yet. The server will generate its own certificate authority at install time, under its data directory; nothing
-secret is committed to this repository, and the sanitize scan in the gate fails on private keys.
+None. The server will generate its own certificate authority at install time, under its data directory; nothing secret
+is committed to this repository, and the sanitize scan in the gate fails on private keys.
 
 ## Vendored binaries
 
@@ -47,9 +113,17 @@ None.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Open work is in [`tasks/`](tasks/README.md), one test per task. Report security
-problems privately as described in [SECURITY.md](SECURITY.md).
+Contributions of code, tests, documentation and bug reports are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and
+[AGENTS.md](AGENTS.md) (the Craft house rules, and where CrewCraft differs), then pick an open task in
+[`tasks/`](tasks/README.md). Report security problems privately as described in [SECURITY.md](SECURITY.md).
 
-## License
+## License and credits
 
-[Apache License 2.0](LICENSE). See [NOTICE](NOTICE).
+CrewCraft is licensed under the [Apache License 2.0](LICENSE-APACHE). Copyright (c) 2026 CRU Technologies and the
+CrewCraft contributors. Required notices are in [NOTICE](NOTICE); assets, when there are
+any, are listed with their authors and licenses in [ATTRIBUTION.md](ATTRIBUTION.md). Contributors are credited in
+[`contributors/people.toml`](contributors/people.toml).
+
+CrewCraft is an independent community project. It follows the conventions of the open-source Craft apps by the
+ArtCraft team and uses [egui](https://github.com/emilk/egui) for its interface, but it is not made, endorsed or
+reviewed by the ArtCraft team, and it carries none of their trademarks.

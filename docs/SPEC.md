@@ -3,7 +3,7 @@
 CrewCraft is a self-hosted team-communication server and its clients, written in Rust: direct messages, group rooms,
 teams with threaded channels, files, presence, search, calls and guest meetings. It runs entirely on hardware its owner
 controls. This file says **what CrewCraft is**; [REQUIREMENTS.md](REQUIREMENTS.md) lists the behaviours it must have,
-[SECURITY-DESIGN.md](SECURITY-DESIGN.md) is how access works, and [ROADMAP.md](ROADMAP.md) is the order it gets built in.
+[SECURITY-DESIGN.md](SECURITY-DESIGN.md) is how access works, and [ROADMAP.md](../ROADMAP.md) is the order it gets built in.
 
 Where this file and REQUIREMENTS.md disagree, this file wins.
 
