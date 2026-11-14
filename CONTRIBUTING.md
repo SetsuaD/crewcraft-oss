@@ -7,7 +7,7 @@ enrolled. Contributions of code, tests, documentation, translations and bug repo
 
 - **Read [docs/CLEAN-ROOM.md](docs/CLEAN-ROOM.md).** CrewCraft is written from scratch. Do not copy code, schemas,
   strings or assets from other projects, including other chat servers; open-source *dependencies* under licenses
-  compatible with Apache-2.0 are fine.
+  compatible with MIT OR Apache-2.0 are fine.
 - **Read [AGENTS.md](AGENTS.md).** The same short rules apply to people and to AI coding agents.
 - **Read the Craft house rules.** CrewCraft follows the shared rules of the Craft apps; [AGENTS.md](AGENTS.md)
   links them and lists where CrewCraft differs.
@@ -65,5 +65,7 @@ review automatically.
 
 ## License
 
-CrewCraft is licensed under the [Apache License 2.0](LICENSE-APACHE). By submitting a contribution you agree that it is
-licensed under the same terms (Apache-2.0, section 5), and that you have the right to submit it.
+CrewCraft is licensed under either of the [Apache License 2.0](LICENSE-APACHE) or the [MIT license](LICENSE-MIT), at
+your option. Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion in
+CrewCraft, as defined in the Apache-2.0 license, is dual licensed as above, without any additional terms or
+conditions, and you confirm that you have the right to submit it.
