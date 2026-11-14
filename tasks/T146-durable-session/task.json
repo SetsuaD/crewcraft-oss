@@ -1,0 +1,16 @@
+{
+  "id": "T146-durable-session",
+  "title": "Use durable storage from the first welcomed session request",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/session.rs"
+  ],
+  "test_path": "crates/server-core/tests/t146_durable_session.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t146_durable_session",
+  "depends_on": [
+    "T138-session",
+    "T145-durable-connection"
+  ],
+  "spec": "Add Session::receive_durable over DurableServer. Preserve the existing Session::receive API, negotiation, frame buffering and reply order. Route both bytes after a welcomed Hello in the same call and requests in later calls through Connection::receive_durable. A refused Hello ignores trailing requests. DurableSessionError::Protocol wraps the existing SessionError and DurableSessionError::Storage wraps a DurableError. A fatal error closes the session and returns no bytes, including any buffered Welcome. Already poisoned storage closes any waiting or open session before it can respond. An already closed session returns Protocol(SessionError::Closed).",
+  "status": "open"
+}
