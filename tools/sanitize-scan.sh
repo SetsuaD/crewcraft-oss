@@ -7,7 +7,7 @@
 # Exit 0 clean, 1 findings, 2 cannot scan.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
-exclude='^LICENSE-APACHE$|^NOTICE$|^Cargo\.lock$'
+exclude='^LICENSE-APACHE$|^LICENSE-MIT$|^NOTICE$|^Cargo\.lock$'
 # NUL-separated, so git never quotes or escapes a name and no file is silently skipped.
 mapfile -d '' -t files < <(git ls-files -z | grep -z -v -E "$exclude")
 [ "${#files[@]}" -gt 0 ] || { echo "sanitize-scan: no tracked files" >&2; exit 2; }
