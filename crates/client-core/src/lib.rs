@@ -1,7 +1,7 @@
 //! Client logic shared by every CrewCraft client: connection, sync, local cache, enrollment flow.
 //!
 //! Owns: behaviour with no UI. Called by: `apps/crewcraft` (desktop), the web client, and the Android/iOS shells
-//! (through generated bindings). Calls: `crewcraft-proto`. Filled in from milestone M2 (docs/ROADMAP.md).
+//! (through generated bindings). Calls: `crewcraft-proto`. Filled in from milestone M2 (ROADMAP.md).
 
 pub use crewcraft_proto::PROTOCOL_VERSION;
 pub mod client;

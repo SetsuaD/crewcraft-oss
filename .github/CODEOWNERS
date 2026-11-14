@@ -1,0 +1,14 @@
+# Review requests for security-sensitive code go to the security contributor (SECURITY.md).
+# CODEOWNERS only requests the review; branch protection decides what a merge needs.
+
+/crates/enroll/        @SetsuaD
+/crates/totp/          @SetsuaD
+/crates/accounts/      @SetsuaD
+/crates/server-core/   @SetsuaD
+/docs/SECURITY-DESIGN.md @SetsuaD
+/SECURITY.md           @SetsuaD
+/tools/sanitize-scan.sh @SetsuaD
+/.githooks/            @SetsuaD
+/ci/                   @SetsuaD
+/deny.toml             @SetsuaD
+/.github/CODEOWNERS    @SetsuaD

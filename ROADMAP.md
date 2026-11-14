@@ -1,7 +1,7 @@
 # CrewCraft roadmap
 
 Each milestone ends in something a person can run, and has a `DONE_WHEN` that a command proves. Work inside a milestone
-is cut into tasks under [`tasks/`](../tasks/README.md): a written behaviour plus the test that defines it.
+is cut into tasks under [`tasks/`](tasks/README.md): a written behaviour plus the test that defines it.
 
 | M | Milestone | DONE_WHEN |
 |---|---|---|
