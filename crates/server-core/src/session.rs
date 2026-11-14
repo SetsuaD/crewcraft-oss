@@ -99,7 +99,11 @@ impl Session {
         })
     }
 
-    fn receive_with<E: From<SessionError>>(&mut self, bytes: &[u8], receive: impl FnOnce(&mut Connection, &[u8]) -> Result<Vec<u8>, E>) -> Result<Vec<u8>, E> {
+    fn receive_with<E: From<SessionError>>(
+        &mut self,
+        bytes: &[u8],
+        receive: impl FnOnce(&mut Connection, &[u8]) -> Result<Vec<u8>, E>,
+    ) -> Result<Vec<u8>, E> {
         let result = match self.phase {
             Phase::Closed => Err(SessionError::Closed.into()),
             Phase::Hello => self.receive_hello(bytes, receive),
