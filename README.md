@@ -14,7 +14,7 @@
 <p align="center">
   <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-2b47b5?style=flat-square&logo=rust&logoColor=white">
   <img alt="Server on Linux; clients on Windows, macOS, Linux, Android, iOS and the web" src="https://img.shields.io/badge/runs%20on-Linux%20server%20%C2%B7%20desktop%20%C2%B7%20mobile%20%C2%B7%20web-3b5bdb?style=flat-square">
-  <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2b47b5?style=flat-square">
+  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-2b47b5?style=flat-square">
   <img alt="Strict mTLS: the server answers only enrolled devices" src="https://img.shields.io/badge/server-strict%20mTLS%20%C2%B7%20dark-3b5bdb?style=flat-square">
   <img alt="Status: early development" src="https://img.shields.io/badge/status-early%20development-lightgrey?style=flat-square">
 </p>
@@ -41,7 +41,7 @@
   every person signs in with an authenticator-app code. The server never trusts a name a client claims.
 - **Yours to run.** One server binary on a Linux machine or VM, with its own certificate authority created at install
   time. No third-party service is in the path, and nothing phones home.
-- **Built in the open.** Clean-room, Apache-2.0, and every open task is a written behaviour plus the test that defines it.
+- **Built in the open.** Clean-room, MIT OR Apache-2.0, and every open task is a written behaviour plus the test that defines it.
 
 ## What works today
 
@@ -119,8 +119,8 @@ Contributions of code, tests, documentation and bug reports are welcome. Read [C
 
 ## License and credits
 
-CrewCraft is licensed under the [Apache License 2.0](LICENSE-APACHE). Copyright (c) 2026 CRU Technologies and the
-CrewCraft contributors. Required notices are in [NOTICE](NOTICE); assets, when there are
+CrewCraft is licensed under either of the [Apache License 2.0](LICENSE-APACHE) or the [MIT license](LICENSE-MIT), at
+your option. Copyright (c) 2026 CRU Technologies and the CrewCraft contributors. Required notices are in [NOTICE](NOTICE); assets, when there are
 any, are listed with their authors and licenses in [ATTRIBUTION.md](ATTRIBUTION.md). Contributors are credited in
 [`contributors/people.toml`](contributors/people.toml).
 

@@ -1,5 +1,5 @@
 # cargo-deny policy (https://embarkstudios.github.io/cargo-deny/). Run: cargo deny check
-# Licenses must be compatible with CrewCraft's Apache-2.0 (docs/CLEAN-ROOM.md rule 3).
+# Licenses must be compatible with CrewCraft's MIT OR Apache-2.0 (docs/CLEAN-ROOM.md rule 3).
 
 [graph]
 all-features = true
