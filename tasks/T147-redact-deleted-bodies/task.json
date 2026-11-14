@@ -5,14 +5,17 @@
   "files": [
     "crates/server-core/src/cursor_log.rs",
     "crates/server-core/src/room_service.rs",
-    "crates/server-core/src/connection.rs"
+    "crates/server-core/src/connection.rs",
+    "crates/server-core/tests/t145_durable_connection.rs",
+    "tasks/T145-durable-connection/test.rs",
+    "docs/SPEC.md"
   ],
   "test_path": "crates/server-core/tests/t147_redact_deleted_bodies.rs",
   "test_cmd": "cargo test -p crewcraft-server-core --test t147_redact_deleted_bodies",
   "depends_on": [
     "T120-room-service",
     "T135-connection",
-    "T144-durable-server"
+    "T145-durable-connection"
   ],
   "spec": "After an authorized delete, clear the stored body and mentions of the original post and every held edit of that post. Keep their event kinds, cursors and positions, and append the usual deletion tombstone. Sync sends Other at each redacted post or edit cursor and still sends Deleted at the tombstone, including after reloading the journal. Other posts and edits stay visible, and a refused deletion clears nothing. Journal file erasure is outside this task.",
   "status": "open"

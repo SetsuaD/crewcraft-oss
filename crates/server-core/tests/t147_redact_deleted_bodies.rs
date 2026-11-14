@@ -103,8 +103,17 @@ fn replay_redacts_the_post_and_each_held_revision() {
         assert_redacted(server.server().room(&room).unwrap(), &room);
     }
     {
-        let server = DurableServer::open(&path).unwrap();
+        let mut server = DurableServer::open(&path).unwrap();
         assert_redacted(server.server().room(&room).unwrap(), &room);
+        let wire = Connection::new("bob").receive_durable(&mut server, &sync_request(5, &room, 1), 1).unwrap();
+        let pushes = [
+            Push::Other { room: room.clone(), cursor: 2 },
+            Push::Other { room: room.clone(), cursor: 3 },
+            Push::Posted { room: room.clone(), cursor: 4, author: "alice".into(), html: "keep @bob".into(), mentions: vec!["bob".into()] },
+            Push::Other { room: room.clone(), cursor: 5 },
+            Push::Deleted { room, cursor: 6, target: 2 },
+        ];
+        assert_eq!(wire, sync_reply(5, 6, &pushes));
     }
     fs::remove_file(path).unwrap();
 }

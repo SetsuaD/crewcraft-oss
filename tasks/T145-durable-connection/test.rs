@@ -65,7 +65,7 @@ fn acknowledged_changes_replay_and_sync_in_order() {
         let pushes = [
             Push::Posted { room: room.clone(), cursor: 2, author: "alice".into(), html: "hello".into(), mentions: vec![] },
             Push::Edited { room: room.clone(), cursor: 3, target: 2, html: "hello again".into(), mentions: vec![] },
-            Push::Posted { room: room.clone(), cursor: 4, author: "alice".into(), html: "temporary".into(), mentions: vec![] },
+            Push::Other { room: room.clone(), cursor: 4 },
             Push::Deleted { room, cursor: 5, target: 4 },
         ];
         let mut expected = framed_response(9, &Response::Ok { cursor: 5 });
