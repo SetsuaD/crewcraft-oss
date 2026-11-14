@@ -5,9 +5,10 @@
 </p>
 
 <p align="center">
-  Direct messages, group rooms, teams with threaded channels, files, presence, search, and end-to-end encrypted
-  calls, on a server you own. The server runs on Linux; the clients are native egui apps for desktop and mobile,
-  and the same code runs in the browser through WebAssembly.<br>
+  Chats, teams with threaded channels, end-to-end encrypted calls and meetings, guests by invite link, shared files,
+  documents you edit together, calendar, contacts, user management, plugins and themes, on a server you own.
+  Rust from end to end: a Linux server, native egui apps for desktop and mobile, and the same client in the browser
+  through WebAssembly.<br>
   <i>A community app by CRU Technologies, built to the Craft apps' conventions.</i>
 </p>
 
@@ -41,6 +42,10 @@
   every person signs in with an authenticator-app code. The server never trusts a name a client claims.
 - **Yours to run.** One server binary on a Linux machine or VM, with its own certificate authority created at install
   time. No third-party service is in the path, and nothing phones home.
+- **Familiar from day one.** The layout and workflow people know from Microsoft Teams, with feature parity as the
+  target ([docs/PARITY.md](docs/PARITY.md)), in CrewCraft's own look.
+- **Rust from end to end.** Server, media server, desktop, web and phone apps, plugins and tooling; the gate refuses
+  other languages (docs/SPEC.md section 7).
 - **Built in the open.** Clean-room, MIT OR Apache-2.0, and every open task is a written behaviour plus the test that defines it.
 
 ## What works today
@@ -90,12 +95,16 @@ On Windows, `setup.bat`, `run_dev.bat` and `build.bat` do the same.
 | [docs/SECURITY-DESIGN.md](docs/SECURITY-DESIGN.md) | keys, dark enrollment, TOTP, sessions |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | the behaviours CrewCraft must have, section by section |
 | [docs/CLEAN-ROOM.md](docs/CLEAN-ROOM.md) | rules that keep this an independent, publishable codebase |
+| [docs/PARITY.md](docs/PARITY.md) | feature parity with Microsoft Teams, row by row |
+| [docs/NON-RUST-DEPENDENCIES.md](docs/NON-RUST-DEPENDENCIES.md) | the only dependencies allowed to contain non-Rust code |
 | [tasks/README.md](tasks/README.md) | work units, each defined by a test |
 
 ## Roadmap
 
 [ROADMAP.md](ROADMAP.md) lists the milestones, each ending in something a person can run and proven by a command:
-M1 the server core, M2 the dark TLS server, M3 the desktop client, then the web client, mobile apps, calls and 1.0.
+M1 the server core, M2 the dark TLS server, M3 the desktop client, then the web client with user management,
+installers, mobile apps, calls and guests, files, calendar and contacts, collaborative documents, plugins and themes,
+a parity sweep and 1.0.
 
 ## Downloads
 
