@@ -1,7 +1,9 @@
 # CrewCraft product specification
 
-CrewCraft is a self-hosted team-communication server and its clients, written in Rust: direct messages, group rooms,
-teams with threaded channels, files, presence, search, calls and guest meetings. It runs entirely on hardware its owner
+CrewCraft is a self-hosted team-communication server and its clients, written entirely in Rust (section 7): direct
+messages, group rooms, teams with threaded channels, files and documents edited together, presence, search, calls
+and guest meetings, calendar, contacts, user management, plugins and themes. The target is feature parity with
+Microsoft Teams, tracked in [PARITY.md](PARITY.md). It runs entirely on hardware its owner
 controls. This file says **what CrewCraft is**; [REQUIREMENTS.md](REQUIREMENTS.md) lists the behaviours it must have,
 [SECURITY-DESIGN.md](SECURITY-DESIGN.md) is how access works, and [ROADMAP.md](../ROADMAP.md) is the order it gets built in.
 
@@ -13,9 +15,10 @@ Where this file and REQUIREMENTS.md disagree, this file wins.
 |---|---|---|---|
 | D1 | **Server installer** | Linux (deb, rpm, container image), Windows (MSI or NSIS, runs as a service), macOS (pkg, launchd) | Installs the server, the built-in **web client and admin console**, creates the server's certificate authority on first run, and prints the first administrator's enrollment code. |
 | D2 | **Desktop client installer** | Windows, macOS, Linux (AppImage, deb, rpm) | Native client (egui, the toolkit the ArtCraft Craft apps also use). Enrolls the device, keeps the device key in the OS key store, and registers the device certificate with the OS so a browser on the same machine can open the web client. |
-| D3 | **Web client** | Any modern browser | Served by the server (D1). The same features as the desktop client. Reachable only from a browser that presents an enrolled device certificate (D2 installs one), or from the server's own loopback address during setup. |
-| D4 | **Android app** | Android 10+ | Native shell (Kotlin) over the shared Rust client core. Device key in Android Keystore (hardware-backed where available). |
-| D5 | **iOS app** | iOS 17+ | Native shell (Swift) over the shared Rust client core. Device key in the Secure Enclave. |
+| D3 | **Web client** | Any modern browser | The Rust client compiled to WebAssembly, served by the server (D1). The same features as the desktop client. Reachable only from a browser that presents an enrolled device certificate (D2 installs one), or from the server's own loopback address during setup. |
+| D4 | **Android app** | Android 10+ | All Rust: the egui client over the shared client core, with Android features reached from Rust. Device key in Android Keystore (hardware-backed where available). |
+| D5 | **iOS app** | iOS 17+ | All Rust: the egui client over the shared client core, with iOS features reached from Rust. Device key in the Secure Enclave. |
+| D6 | **Plugin SDK** | A Rust crate and its guide | Builds WebAssembly plugins and theme packages (REQUIREMENTS 2.18, 2.19). |
 
 Every client talks to the same server API; features are built once in `crewcraft-client-core` and each platform gets
 them together (REQUIREMENTS.md section 5: one client logic, thin shells).
@@ -48,7 +51,7 @@ already-enrolled device (approved with a TOTP code).
 
 ## 3. Product scope
 
-CrewCraft implements REQUIREMENTS.md sections 2.1 to 2.7 and 2.9 to 2.11 as written, with these decisions:
+CrewCraft implements REQUIREMENTS.md sections 2.1 to 2.7 and 2.9 to 2.20 as written, with these decisions:
 
 > **Implementation status (early development).** Deleting a message currently appends a deletion event while the
 > original body stays in the room log, so a sync from an older cursor still returns it. Clearing the body in place
@@ -72,10 +75,22 @@ CrewCraft implements REQUIREMENTS.md sections 2.1 to 2.7 and 2.9 to 2.11 as writ
   (principle 10).
 - **Pre-provisioned people**: an invited person exists (and can be messaged) before they enroll (principle 8).
 - Website visitor chat (REQUIREMENTS 2.8) is a later, optional module; managed-device chat is a plug-in API.
+- **The look.** Every client uses the layout and workflow in REQUIREMENTS 2.20, the shape people know from Microsoft
+  Teams, so nobody has to relearn their day. Colours, type and density come from themes (2.19); CrewCraft ships its own
+  themes, and an organization can install a theme of its own.
+- **Guests** join teams and chats from invite links that lead to the same dark enrollment staff use, with a
+  guest-scoped certificate and TOTP, and join meetings from a browser lobby (REQUIREMENTS 2.5, 2.13).
+- **Collaborative documents** use conflict-free replicated data types so offline edits merge deterministically, and
+  live in the file libraries so versions, quotas and permissions apply (2.14, 2.15).
+- **Interoperability through open standards**: WebDAV for files, CalDAV and iCalendar for calendars, CardDAV and vCard
+  for contacts, SCIM for directory provisioning, OpenID Connect for sign-in, all behind the certificate-gated entrance.
+- **Plugins are WebAssembly** modules written in Rust against `crewcraft-plugin-sdk`, sandboxed with declared
+  capabilities, and draw client UI only through declarative cards (2.18).
 
 ## 4. Non-goals
 
-Telephone dial-in; matching any commercial product's branding; an anonymous sign-up page; portable certificate files;
+Telephone dial-in; matching any commercial product's branding (CrewCraft matches the workflow and layout, never a
+name, icon set or colour scheme); an anonymous sign-up page; portable certificate files;
 any feature that needs a paid third-party service to work.
 
 ## 5. Signed releases
@@ -88,4 +103,21 @@ need none of this: unsigned builds work, with the operating system's usual warni
 
 The real-device proof of REQUIREMENTS principle 1, not a simulation: two people, each enrolled from an emailed code with TOTP,
 on two different platforms, exchange messages, share a file and hold an encrypted call; a third person on a phone with
-the app closed receives the ring.
+the app closed receives the ring. For 1.0, additionally, every row of [PARITY.md](PARITY.md) is `done` or a recorded
+non-goal.
+
+## 7. Rust only
+
+Every part of CrewCraft is written in Rust: the server, the media server, the desktop, web, Android and iOS clients,
+the plugin host and SDK, and, from milestone M2, the build tooling (`cargo xtask`).
+
+- **Source.** The repository holds Rust plus data (TOML, JSON, Markdown). The web client is Rust compiled to
+  WebAssembly. The phone apps have no Kotlin, Java, Swift or Objective-C source; platform features (key store, camera,
+  notifications, call screens) are reached from Rust through bindings. The root `setup.bat`, `run_dev.bat` and
+  `build.bat` stay as one-line launchers around cargo; the shell scripts in `ci/` and `tools/` are transitional.
+- **Dependencies** are pure Rust by default. One that compiles C, C++ or assembly, or a platform SDK not written in
+  Rust, is allowed only when [NON-RUST-DEPENDENCIES.md](NON-RUST-DEPENDENCIES.md) lists it with the reason and the
+  pure-Rust option considered. Security outranks purity: cryptography comes from mature, audited crates even when
+  they contain assembly.
+- **Enforced** by `tools/rust-only.sh` in the gate: it fails on a non-Rust source file outside the launcher and
+  transitional list, and on a native build helper in `Cargo.lock` that the register does not list.

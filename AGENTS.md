@@ -27,3 +27,5 @@ Where CrewCraft differs, and why:
 3. The gate is `ci/validate.sh`. A change is done when the gate passes with the task's test installed.
 4. Nothing private in the tree (the sanitize scan enforces it). Use `example.org` and documentation IP ranges in tests.
 5. No new dependency without saying why; cryptography only from audited crates.
+6. **Rust only** (docs/SPEC.md section 7). No source in another language; a dependency that compiles C, C++ or
+   assembly needs a row in docs/NON-RUST-DEPENDENCIES.md in the same change. `tools/rust-only.sh` enforces both.

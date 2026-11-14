@@ -12,8 +12,8 @@ Numbers called "default" are starting values; each should be a setting an admini
 
 CrewCraft is a team-communication server, plus its clients, that an organization runs on hardware it controls. Staff
 use it for direct messages, group rooms, team channels with threaded posts, files, presence, scheduling, and audio and
-video calls with screen sharing. Its workflow follows the familiar shape of mainstream team-chat tools, so people do not
-need retraining, while its look is neutral and themeable. It can also reach people outside the organization: guests
+video calls with screen sharing. Its layout and workflow follow the familiar shape of mainstream team-chat tools (2.20), so people do
+not need retraining, while its appearance comes from themes (2.19). It can also reach people outside the organization: guests
 join video meetings from an ordinary browser through a lobby, without an account. It keeps everything that was said
 (edits keep their history, deletion is redaction), can hold history imported from another system, and lets an
 organization plug in its own identity provider and authorization service instead of the built-in ones.
@@ -278,6 +278,168 @@ organization plug in its own identity provider and authorization service instead
   shared with a service.
 - **Export.** People and administrators can export conversation data.
 
+### 2.12 User management
+
+- **People.** Administrators create and invite people (SPEC.md section 2), edit their profile fields (name, email, job
+  title, department, manager, phone, location, picture), deactivate them and reactivate them. Deactivation signs the
+  person out everywhere and revokes their devices at once, and keeps everything they wrote. People are never deleted;
+  on a legal request an administrator can erase a deactivated person's profile data, and their messages then show a
+  neutral placeholder name.
+- **Groups.** Named groups of people, either listed by hand or defined by a rule over profile fields (for example a
+  department). Groups can be added to teams, rooms and meetings, mentioned, and targeted by policies.
+- **Roles and capabilities.** Built-in roles (owner, administrator, moderator, member, guest) and custom roles made from
+  the published capability list, granted for the whole organization, a team or a room. Every change is audited and read
+  back before it reports success (principle 4).
+- **Policies.** Settings applied to groups or people: messaging (editing and deleting own messages, priority messages),
+  meetings (who may create guest links, recording, length), files (quota, sharing outside the organization), guests
+  (allowed or not), and retention. The most specific policy wins, and a "why does this person get this" view explains
+  the effective value and where it came from.
+- **Bulk changes.** People, groups and memberships import from and export to CSV, with a dry-run preview and a result for
+  every row. An export imports back unchanged.
+- **Security actions.** Reset a password (built-in password source), reset TOTP, revoke a device or a session, issue a
+  new enrollment code, and sign a person out everywhere. TOTP reset needs a second administrator's approval. All of these
+  are audited.
+- **Delegated administration.** Team owners manage their own team's members and guests without organization-wide rights.
+- **Provisioning.** An optional SCIM 2.0 endpoint lets an external directory create, update and deactivate people and
+  groups. Fields owned by a configured identity provider or authorizer are shown read-only (SPEC.md section 3).
+- **Admin console.** Search and filters over people, saved views, and a page per person showing devices, sessions,
+  groups, roles, effective policies and their audit trail.
+
+### 2.13 Guest access and invite links
+
+- **Two kinds of guest.** Meeting guests join a meeting from a browser through the lobby without an account (2.5). Chat
+  guests hold a guest account and take part in the teams, channels and chats they were invited to.
+- **Invite links.** When policy allows, an owner of a team, channel or chat creates an invite link with a scope, an expiry
+  (default 7 days, at most 30), a maximum number of uses (default 1), and whether each request needs approval (always for
+  a link with more than one use). Links are listed with their use counts, can be revoked at once, and are audited.
+- **Joining from a link.** A link opens a page on the public guest entrance, never the staff entrance. The guest gives a
+  name and an email address; after approval, if required, the server emails a single-use enrollment code. The guest then
+  enrolls a device exactly as staff do, with a guest-scoped certificate and mandatory TOTP. The link itself grants nothing.
+- **Guest limits.** Guests see only the rooms they belong to and the people in them. They cannot browse the directory,
+  create teams, rooms or invite links, or see anyone else's presence. They show only an external profile, are labelled
+  "Guest" wherever their name appears, and a room shows that it contains guests.
+- **Guest lifecycle.** Guest accounts end after a period without activity (default 90 days) or when their last room
+  removes them; owners and administrators can remove a guest at any time, which revokes the guest's devices at once.
+
+### 2.14 Team files and sharing
+
+- **Libraries.** Every team channel and every chat has a Files tab backed by a shared library, and every person has a
+  private library. Libraries hold folders; files can be uploaded (streamed as in 2.4), moved, renamed, copied and deleted
+  to a recycle bin (default kept 30 days) from which they can be restored.
+- **Versions.** Saving a file creates a version. People can list versions, download one and restore it; how many versions
+  are kept is a policy.
+- **Permissions.** A channel or chat library is readable by its members. A person's own files stay private until shared.
+  Sharing goes to a person, group, room or team with view or edit rights, and never grants more than the sharer has.
+- **Share links.** Internal links work for members only. Where policy allows, a link for guests carries an expiry and is
+  view-only unless the sharer allows editing or downloading. Links are revocable and audited. A file request link lets a
+  guest upload into one folder without seeing it.
+- **Preview.** Images, PDF, text and code, audio, video and CrewCraft documents (2.15) open inside the client; everything
+  else downloads.
+- **Other tools.** Libraries are reachable over WebDAV through the certificate-gated entrance, so the operating system's
+  file manager on an enrolled device can open them. A desktop sync folder is also in scope.
+- **Storage.** Quotas per person and per team with storage use shown; content-addressed storage as in 2.4; a plug-in
+  point for malware scanning that needs no outside service.
+- **Search** covers file names and, for formats that carry text, their content.
+
+### 2.15 Collaborative documents
+
+- **Editing together.** Documents are created and edited inside every client (desktop, web, phone). Several people edit
+  the same document at once and see each other's cursors and selections.
+- **Kinds.** Rich-text documents first (headings, lists, tables, images, links, code, checklists, mentions); then a
+  whiteboard; then spreadsheets (cells, formulas, sorting and filtering); then live cards, small shared pieces such as a
+  list or a table that stay in sync wherever they are posted in a chat.
+- **Offline.** Editing works offline. When the device reconnects its changes merge without conflicts, using conflict-free
+  replicated data types; the merge is deterministic and covered by tests.
+- **History and comments.** Automatic and named versions, who changed what, and restoring a version. Comment threads are
+  anchored to the text, can mention people and can be resolved. A suggestions mode (tracked changes) is also in scope.
+- **Access.** Documents are files in a library (2.14), so their permissions, versions, quotas and search follow the
+  library. When someone loses access their further changes are refused at once.
+- **Import and export.** Markdown, HTML, PDF and plain text first; OpenDocument and Office Open XML formats are also in
+  scope.
+
+### 2.16 Calendar
+
+Extends the meeting calendar in 2.5.
+
+- **Calendars.** A personal calendar and a calendar per team or channel, with day, work-week, week, month and agenda
+  views, a time zone per event and per person, and working hours.
+- **Events.** Online meetings (2.5) with a join button, and plain events; recurring series with exceptions; reminders;
+  attachments; categories.
+- **Invitations.** Invite people, groups, rooms or outside email addresses. Outside invitees receive a standard
+  iCalendar invitation whose join link leads to the guest entrance. Invitees accept, decline, answer tentatively or
+  propose a new time, and the organizer sees every answer.
+- **Scheduling assistant.** Free and busy times of the invitees, without event details unless shared, and suggested times.
+- **Other apps.** A CalDAV server through the certificate-gated entrance for the calendar apps on enrolled devices;
+  iCalendar import and export; read-only subscriptions to outside calendar feeds.
+- **Presence and absence.** "In a meeting" presence comes from the calendar; out-of-office shows on the person's card and
+  answers new chats with the person's message.
+- **Bookable rooms and equipment** are also in scope.
+
+### 2.17 Contacts and directory
+
+- **Directory.** Built from the people records (2.12): search by name, title, department and location. A profile card
+  shows presence, local time and actions: chat, call, video call, email and schedule a meeting.
+- **Org chart** from the manager field.
+- **Personal contacts.** People outside the organization (name, email, phone, company, notes), contact lists and
+  favourites. From a contact a person can email, schedule, or invite them as a guest (2.13).
+- **Team contacts.** A shared address book per team.
+- **Other apps.** CardDAV through the certificate-gated entrance; vCard and CSV import and export.
+- **Privacy.** Guests see only the people they share rooms with. Each person decides which optional fields, such as a
+  phone number, others can see.
+
+### 2.18 Plugins and integrations
+
+- **What plugins add.** Bots, slash commands, message actions, compose actions, tabs in channels and chats, activity
+  feed items, incoming webhooks (post into a room) and outgoing webhooks (notify an address), meeting extensions and
+  admin-console pages.
+- **Sandboxed WebAssembly.** Plugins are WebAssembly modules written in Rust against `crewcraft-plugin-sdk`. The server
+  runs them in a sandbox with no ambient access: a plugin declares the capabilities it needs (read messages where it is
+  installed, post as its bot, reach a listed outside address, keep its own data) and gets nothing else, with limits on
+  CPU, memory and time per call.
+- **Declarative client UI.** A plugin describes its UI as data (cards, forms, lists) that each client draws itself, so
+  no plugin code runs inside a client.
+- **Lifecycle.** Administrators approve plugins for the organization; team owners install approved plugins into their
+  teams; the approval screen lists every capability. An update that asks for more capabilities needs approval again.
+  Disabling or removing a plugin ends its access at once, and its data can be exported.
+- **Trust.** Plugin packages are signed and the server checks the signature and hash. Administrators add catalogs (a
+  folder or an address); there is no built-in outside catalog.
+- **Bots** are service accounts (section 7): labelled as bots and audited.
+- **Stable API.** The plugin API is versioned with compatibility tests; a plugin built for an unsupported version is
+  refused, never half-loaded.
+
+### 2.19 Themes and appearance
+
+- **Themes are data.** A theme is a TOML file of design tokens: colours (backgrounds, surfaces, text, strokes, the accent
+  and its states, status and presence colours), font family and sizes, density, corner radii and icon set. A theme holds
+  no code.
+- **Built in:** CrewCraft Light, CrewCraft Dark, High contrast, and following the operating system.
+- **Choices.** Each person picks a theme and a density; an administrator sets the organization's default theme, an
+  accent colour, and the logo and name in the title bar.
+- **Theme packages** install like plugins (signed, approved by an administrator) and can be previewed before use.
+- **Accessible by rule.** Every theme passes WCAG 2.2 AA contrast for text and controls; the theme validator refuses one
+  that does not, and tests draw the main screens in every built-in theme.
+- **Appearance only.** Themes never change layout or workflow (2.20), so help and training apply to every theme.
+
+### 2.20 Layout
+
+- **One layout everywhere.** Desktop and web share the layout people know from mainstream team-chat suites; phones adapt
+  it.
+- **Title bar:** back and forward, a central search box (Ctrl+E), the person's picture with presence and the status menu,
+  and settings.
+- **App bar** down the left side: Activity, Chat, Teams, Calendar, Calls, Files and Apps, with unread badges. Plugins can
+  pin their own entries.
+- **List pane** for Activity, Chat and Teams: the room list with filters, sections, pinned rooms and favourites. Calendar,
+  Calls and Files use the whole main area instead.
+- **Main pane:** a conversation header (name, pictures, tabs such as Chat, Files, Documents and plugin tabs, and the
+  audio and video call buttons), the feed (bubbles in chats, posts with threaded replies in channels), and the composer
+  with formatting, emoji, attachments and plugin actions.
+- **Side pane** for thread replies, details and in-call chat.
+- **Calls** fill the main area with a call stage that can pop out into its own window, with grid and focus layouts and a
+  control bar.
+- **Phones** replace the app bar with a bottom tab bar (2.9) and show one pane at a time with back navigation.
+- **Keyboard and accessibility.** Every main action has a keyboard shortcut, listed in a shortcuts dialog, and every
+  screen works with a keyboard and a screen reader.
+
 ---
 
 ## 3. Domain model
@@ -499,5 +661,7 @@ CrewCraft runs on its own with no outside services. Each of these lets an organi
 | Device conversations | An API for third-party agents: device identity asserted by a trusted relay, one room per device and OS user, a staff inbox. |
 | Personal room templates | Per-person default rooms defined by configuration. |
 | Push | Standard web push with no vendor account, and optional relays for native phone apps. |
-| Appearance | A neutral design system with light, dark and system themes. |
+| Appearance | Themes as token files with light, dark, high-contrast and system variants, plus installable theme packages (2.19). |
+| Plugins | Sandboxed WebAssembly plugins written in Rust against `crewcraft-plugin-sdk` (2.18). |
+| Open standards | WebDAV (files), CalDAV and iCalendar (calendars), CardDAV and vCard (contacts), SCIM 2.0 (provisioning), all behind the certificate-gated entrance. |
 | Media store | A pluggable, content-addressed store for files (local filesystem or object storage). |

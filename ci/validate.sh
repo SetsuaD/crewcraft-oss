@@ -11,6 +11,7 @@ step "rustfmt";  cargo fmt --all -- --check
 step "clippy";   cargo clippy --workspace --all-targets --locked -- -D warnings
 step "tests";    cargo test --workspace --locked
 step "sanitize"; bash tools/sanitize-scan.sh
+step "rust-only"; bash tools/rust-only.sh
 
 if [ "${1:-}" = "--tasks" ]; then
   step "open tasks (informational)"
