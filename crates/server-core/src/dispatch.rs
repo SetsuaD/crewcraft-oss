@@ -97,11 +97,9 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
                 _ => refusal(E_NO_SUCH_ROOM),
             });
         }
-        Request::MarkRead { room, cursor } => {
-            backend.change(|s| s.mark_read(room, user, *cursor), |s| s.mark_read(room, user, *cursor)).and_then(|_| {
-                backend.server().room(room).map(|service| service.head()).map_err(|_| DurableError::Server(ServerError::NoSuchRoom))
-            })
-        }
+        Request::MarkRead { room, cursor } => backend
+            .change(|s| s.mark_read(room, user, *cursor), |s| s.mark_read(room, user, *cursor))
+            .and_then(|_| backend.server().room(room).map(|service| service.head()).map_err(|_| DurableError::Server(ServerError::NoSuchRoom))),
     };
     match result {
         Ok(cursor) => Ok(Response::Ok { cursor }),
