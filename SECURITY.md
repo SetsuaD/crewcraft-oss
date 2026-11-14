@@ -22,6 +22,17 @@ unless you'd rather not be named.
 fixes and advisories, and review changes to the security-sensitive code (see
 [`.github/CODEOWNERS`](.github/CODEOWNERS)).
 
+## Keeping secrets out of this repository
+
+- GitHub secret scanning and push protection are on, so a push that contains a known credential type is refused.
+- `main` changes only through pull requests, administrators included; force pushes and branch deletion are blocked.
+- The gate (`ci/validate.sh`) and the optional pre-commit hook run `tools/sanitize-scan.sh`, which fails on private
+  keys, credentials and private network details.
+- Changes that come from the maintainers' own development line are scanned again before they are proposed here, with
+  gitleaks and an additional private pattern list.
+
+If you find a secret in this repository, report it privately as above; do not open a public issue.
+
 ## Supported versions
 
 CrewCraft is in early development and has no release yet. Fixes go into `main`; once releases exist, fixes ship in the

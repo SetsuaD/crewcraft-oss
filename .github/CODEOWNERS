@@ -8,6 +8,8 @@
 /docs/SECURITY-DESIGN.md @SetsuaD
 /SECURITY.md           @SetsuaD
 /tools/sanitize-scan.sh @SetsuaD
+/tools/rust-only.sh    @SetsuaD
+/docs/NON-RUST-DEPENDENCIES.md @SetsuaD
 /.githooks/            @SetsuaD
 /ci/                   @SetsuaD
 /deny.toml             @SetsuaD
