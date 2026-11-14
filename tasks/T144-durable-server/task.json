@@ -11,7 +11,7 @@
     "T143-op-codec"
   ],
   "spec": "Implement DurableServer as its doc comments say, composing server::Server, journal::Journal and op::{encode_op, decode_op} (shown for reference). Replace the `_todo` field. Tests write their journals under std::env::temp_dir(), one fresh file per test, and prove durability by reopening. No new dependencies.",
-  "status": "open",
+  "status": "done",
   "context": [
     "crates/server-core/src/server.rs",
     "crates/server-core/src/journal.rs",
