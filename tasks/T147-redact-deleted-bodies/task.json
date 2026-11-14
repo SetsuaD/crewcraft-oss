@@ -18,5 +18,5 @@
     "T145-durable-connection"
   ],
   "spec": "After an authorized delete, clear the stored body and mentions of the original post and every held edit of that post. Keep their event kinds, cursors and positions, and append the usual deletion tombstone. Sync sends Other at each redacted post or edit cursor and still sends Deleted at the tombstone, including after reloading the journal. Other posts and edits stay visible, and a refused deletion clears nothing. Journal file erasure is outside this task.",
-  "status": "open"
+  "status": "done"
 }
