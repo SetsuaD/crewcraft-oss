@@ -1,0 +1,18 @@
+{
+  "id": "T145-durable-connection",
+  "title": "Route authenticated connection requests through the durable server",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/connection.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/durable.rs"
+  ],
+  "test_path": "crates/server-core/tests/t145_durable_connection.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t145_durable_connection",
+  "depends_on": [
+    "T135-connection",
+    "T144-durable-server"
+  ],
+  "spec": "Add Connection::receive_durable with the same framing, request IDs, room access, cursor and push behavior as receive. Journal accepted mutations before responding. After reopening the journal, previous posts, edits, deletions and read markers are still visible to eligible members. Preserve existing domain refusal codes and the original in-memory API. Use DurableConnError::Protocol for fatal framing and codec errors and DurableConnError::Storage for fatal journal and poisoned-state errors. A poisoned server cannot serve requests or pushes through any durable connection. A fatal error returns no bytes from that call.",
+  "status": "open"
+}
