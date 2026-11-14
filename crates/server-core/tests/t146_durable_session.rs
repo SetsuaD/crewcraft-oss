@@ -4,6 +4,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crewcraft_client_core::client::{Client, ClientEvent};
+use crewcraft_client_core::notify::Settings;
+use crewcraft_client_core::requests::Reply as ClientReply;
+use crewcraft_client_core::room_view::Shown;
+use crewcraft_client_core::session::{ClientSession, Phase as ClientPhase};
+use crewcraft_client_core::timeline::Line;
 use crewcraft_proto::frame::encode;
 use crewcraft_proto::handshake::{Hello, Reply, ServerSide, encode_hello, encode_reply};
 use crewcraft_proto::message::CodecError;
@@ -82,6 +88,71 @@ fn coalesced_post_and_later_edit_replay_after_reconnecting() {
             expected.extend(encode(&encode_push(&push).unwrap()).unwrap());
         }
         assert_eq!(session.receive_durable(&mut server, &input, 2).unwrap(), expected);
+    }
+
+    fs::remove_file(path).unwrap();
+}
+
+fn connect(server: &mut DurableServer, user: &str, room: &str) -> (ClientSession, Session) {
+    let hello = Hello { min_version: 1, max_version: 3, features: 0b1100, client: "test-client".into() };
+    let mut client = ClientSession::new(hello, Client::new(user, Settings::new(user)));
+    assert!(client.client_mut().inbox_mut().follow(room, false));
+    let mut session = Session::new(user, server_side());
+
+    let input = client.start().unwrap();
+    let reply = session.receive_durable(server, &input, 0).unwrap();
+    assert!(client.receive(&reply, 0, 0).unwrap().is_empty());
+    assert_eq!(client.phase(), ClientPhase::Open { version: 3, features: 0b1000 });
+
+    (client, session)
+}
+
+fn exchange(client: &mut ClientSession, session: &mut Session, server: &mut DurableServer, request: Request, head: u64) {
+    let input = client.client_mut().send(request, 0).unwrap();
+    let reply = session.receive_durable(server, &input, 0).unwrap();
+    let events = client.receive(&reply, 0, 0).unwrap();
+    assert!(matches!(events.first(), Some(ClientEvent::Reply(ClientReply::Done { response: Response::Ok { cursor }, .. })) if *cursor == head));
+}
+
+fn assert_timeline(client: &mut ClientSession, room: &str, cursor: u64, messages: &[Shown]) {
+    let view = client.client_mut().inbox().view(room).unwrap();
+    assert_eq!(view.cursor(), cursor);
+    assert_eq!(view.shown().as_slice(), messages);
+}
+
+#[test]
+fn two_clients_exchange_and_replay_posts_after_reconnecting() {
+    let path = journal_path("two-clients");
+    let messages = [
+        Shown::Line(Line { cursor: 2, author: "alice".into(), html: "hello bob".into(), edited: false }),
+        Shown::Line(Line { cursor: 3, author: "bob".into(), html: "hello alice".into(), edited: false }),
+    ];
+    let room;
+    {
+        let mut server = DurableServer::open(&path).unwrap();
+        room = server.create_room("alice", "General").unwrap();
+        assert_eq!(server.add_member(&room, "alice", "bob", Role::Member).unwrap(), 1);
+        let (mut alice, mut alice_session) = connect(&mut server, "alice", &room);
+        let (mut bob, mut bob_session) = connect(&mut server, "bob", &room);
+
+        exchange(&mut alice, &mut alice_session, &mut server, Request::Post { room: room.clone(), text: "hello bob".into() }, 2);
+        exchange(&mut bob, &mut bob_session, &mut server, Request::Sync { room: room.clone(), cursor: 0 }, 2);
+        assert_timeline(&mut bob, &room, 2, &messages[..1]);
+
+        exchange(&mut bob, &mut bob_session, &mut server, Request::Post { room: room.clone(), text: "hello alice".into() }, 3);
+        exchange(&mut bob, &mut bob_session, &mut server, Request::Sync { room: room.clone(), cursor: 2 }, 3);
+        exchange(&mut alice, &mut alice_session, &mut server, Request::Sync { room: room.clone(), cursor: 0 }, 3);
+        assert_timeline(&mut alice, &room, 3, &messages);
+        assert_timeline(&mut bob, &room, 3, &messages);
+    }
+
+    {
+        let mut server = DurableServer::open(&path).unwrap();
+        for user in ["alice", "bob"] {
+            let (mut client, mut session) = connect(&mut server, user, &room);
+            exchange(&mut client, &mut session, &mut server, Request::Sync { room: room.clone(), cursor: 0 }, 3);
+            assert_timeline(&mut client, &room, 3, &messages);
+        }
     }
 
     fs::remove_file(path).unwrap();

@@ -3,7 +3,9 @@
   "title": "Use durable storage from the first welcomed session request",
   "crate": "crewcraft-server-core",
   "files": [
-    "crates/server-core/src/session.rs"
+    "crates/server-core/src/session.rs",
+    "crates/server-core/Cargo.toml",
+    "Cargo.lock"
   ],
   "test_path": "crates/server-core/tests/t146_durable_session.rs",
   "test_cmd": "cargo test -p crewcraft-server-core --test t146_durable_session",
@@ -11,6 +13,6 @@
     "T138-session",
     "T145-durable-connection"
   ],
-  "spec": "Add Session::receive_durable over DurableServer. Preserve the existing Session::receive API, negotiation, frame buffering and reply order. Route both bytes after a welcomed Hello in the same call and requests in later calls through Connection::receive_durable. A refused Hello ignores trailing requests. DurableSessionError::Protocol wraps the existing SessionError and DurableSessionError::Storage wraps a DurableError. A fatal error closes the session and returns no bytes, including any buffered Welcome. Already poisoned storage closes any waiting or open session before it can respond. An already closed session returns Protocol(SessionError::Closed).",
+  "spec": "Add Session::receive_durable over DurableServer. Preserve the existing Session::receive API, negotiation, frame buffering and reply order. Route both bytes after a welcomed Hello in the same call and requests in later calls through Connection::receive_durable. A refused Hello ignores trailing requests. DurableSessionError::Protocol wraps the existing SessionError and DurableSessionError::Storage wraps a DurableError. A fatal error closes the session and returns no bytes, including any buffered Welcome. Already poisoned storage closes any waiting or open session before it can respond. An already closed session returns Protocol(SessionError::Closed). An in-process integration case uses two real ClientSessions with separate server Sessions for distinct members of one room. They exchange posts via Sync and both reconnect after reopening the same journal, verifying authors, text and cursors. Use crewcraft-client-core as a workspace dev-dependency only.",
   "status": "open"
 }
