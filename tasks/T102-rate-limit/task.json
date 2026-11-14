@@ -1,0 +1,13 @@
+{
+  "id": "T102-rate-limit",
+  "title": "Token bucket and per-key limiter",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/rate_limit.rs"
+  ],
+  "test_path": "crates/server-core/tests/t102_rate_limit.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t102_rate_limit",
+  "depends_on": [],
+  "spec": "Implement TokenBucket and Limiter as their doc comments say, with integer milli-token arithmetic: refill_per_sec tokens a second is refill_per_sec milli-tokens a millisecond, capped at capacity * 1000. Use saturating arithmetic. Replace the `_todo` fields (a HashMap<K, TokenBucket> for Limiter). No new dependencies.",
+  "status": "done"
+}

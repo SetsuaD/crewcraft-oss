@@ -1,0 +1,15 @@
+[package]
+name = "crewcraft-enroll"
+description = "Enrollment codes: format, checksum and the bootstrap key they derive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+hkdf.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

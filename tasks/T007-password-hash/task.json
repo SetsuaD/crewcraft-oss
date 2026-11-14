@@ -1,0 +1,13 @@
+{
+  "id": "T007-password-hash",
+  "title": "Argon2id password hashing in PHC form",
+  "crate": "crewcraft-accounts",
+  "files": [
+    "crates/accounts/src/password.rs"
+  ],
+  "test_path": "crates/accounts/tests/t007_password_hash.rs",
+  "test_cmd": "cargo test -p crewcraft-accounts --test t007_password_hash",
+  "depends_on": [],
+  "spec": "Implement crates/accounts/src/password.rs as its doc comments say, with the argon2 crate (already a dependency): Argon2id, version 0x13, Params::new(MEMORY_KIB, ITERATIONS, LANES, Some(32)), PHC string output. check_policy counts chars() for the minimum and len() bytes for the maximum. hash_with_salt checks the policy, then encodes the salt with password_hash::SaltString::encode_b64 (Error::Hashing if refused). hash draws the salt with rand_core::OsRng. verify parses with PasswordHash::new and returns Err(BadHash) unless the algorithm is argon2id; verification uses the parameters stored in the hash. needs_rehash is true when the hash does not parse, is not argon2id, or m, t or p is below the constants. No new dependencies.",
+  "status": "done"
+}

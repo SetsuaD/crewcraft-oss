@@ -1,0 +1,13 @@
+{
+  "id": "T112-search-index",
+  "title": "Tokenizer and AND/prefix search index",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/search.rs"
+  ],
+  "test_path": "crates/server-core/tests/t112_search.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t112_search",
+  "depends_on": [],
+  "spec": "Implement terms() and Index as their doc comments say. Keep each cursor's terms so insert can replace and remove can forget. Results are cursors, highest first, truncated to limit. Replace the `_todo` field. No new dependencies.",
+  "status": "done"
+}

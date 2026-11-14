@@ -1,0 +1,13 @@
+{
+  "id": "T101-cursor-log",
+  "title": "Bounded event log with cursors and gap detection",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/cursor_log.rs"
+  ],
+  "test_path": "crates/server-core/tests/t101_cursor_log.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t101_cursor_log",
+  "depends_on": [],
+  "spec": "Implement EventLog as its doc comments say (std::collections::VecDeque is a good fit). since(cursor) is Gap { oldest } exactly when cursor < head and the event at cursor + 1 has already been dropped. Replace the `_todo` field. No new dependencies.",
+  "status": "done"
+}

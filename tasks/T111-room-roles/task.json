@@ -1,0 +1,13 @@
+{
+  "id": "T111-room-roles",
+  "title": "Room membership and role rules",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/room.rs"
+  ],
+  "test_path": "crates/server-core/tests/t111_room.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t111_room",
+  "depends_on": [],
+  "spec": "Implement Room as its doc comments say; the order of the checks matters (each method lists it). Role derives Ord, so 'outranks' is >. Replace the `_todo` field (a BTreeMap<String, Role> keeps members sorted). No new dependencies.",
+  "status": "done"
+}

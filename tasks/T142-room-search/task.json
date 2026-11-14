@@ -1,0 +1,21 @@
+{
+  "id": "T142-room-search",
+  "title": "Search across the rooms a user is in, kept current from room events",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/room_search.rs"
+  ],
+  "test_path": "crates/server-core/tests/t142_room_search.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t142_room_search",
+  "depends_on": [
+    "T141-html-text"
+  ],
+  "spec": "Implement RoomSearch as its doc comments say, composing search::Index (one per room), html_text::html_text and server::Server (shown for reference). Replace the `_todo` field. No new dependencies. html_text (T141) may still be a todo!() stub when you write tests; build expected values from plain text with no markup.",
+  "status": "done",
+  "context": [
+    "crates/server-core/src/search.rs",
+    "crates/server-core/src/html_text.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/server.rs"
+  ]
+}

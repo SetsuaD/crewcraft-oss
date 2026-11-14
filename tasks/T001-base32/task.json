@@ -1,0 +1,13 @@
+{
+  "id": "T001-base32",
+  "title": "RFC 4648 base32 encode/decode for TOTP secrets",
+  "crate": "crewcraft-totp",
+  "files": [
+    "crates/totp/src/base32.rs"
+  ],
+  "test_path": "crates/totp/tests/t001_base32.rs",
+  "test_cmd": "cargo test -p crewcraft-totp --test t001_base32",
+  "depends_on": [],
+  "spec": "Implement base32::encode (standard alphabet A-Z2-7, '=' padding to a multiple of 8) and base32::decode (case-insensitive, padding optional, spaces and hyphens ignored; any other character, data after padding, or an unpadded length of 1, 3 or 6 mod 8 is Error::BadBase32). No new dependencies.",
+  "status": "done"
+}

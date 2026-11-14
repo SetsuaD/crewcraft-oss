@@ -1,0 +1,13 @@
+{
+  "id": "T110-message-codec",
+  "title": "Binary message codec",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/message.rs"
+  ],
+  "test_path": "crates/proto/tests/t110_message.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t110_message",
+  "depends_on": [],
+  "spec": "Implement message::encode and message::decode exactly as the module and function docs say (layout, ranges, the order errors are reported in). Use u16::from_be_bytes/u64::from_be_bytes and str::from_utf8; never index past the end of the input. No new dependencies.",
+  "status": "done"
+}

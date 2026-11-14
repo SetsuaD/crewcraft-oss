@@ -1,0 +1,21 @@
+{
+  "id": "T144-durable-server",
+  "title": "Durable server: journal every accepted change, replay on open",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/durable.rs"
+  ],
+  "test_path": "crates/server-core/tests/t144_durable_server.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t144_durable_server",
+  "depends_on": [
+    "T143-op-codec"
+  ],
+  "spec": "Implement DurableServer as its doc comments say, composing server::Server, journal::Journal and op::{encode_op, decode_op} (shown for reference). Replace the `_todo` field. Tests write their journals under std::env::temp_dir(), one fresh file per test, and prove durability by reopening. No new dependencies.",
+  "status": "open",
+  "context": [
+    "crates/server-core/src/server.rs",
+    "crates/server-core/src/journal.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/room.rs"
+  ]
+}

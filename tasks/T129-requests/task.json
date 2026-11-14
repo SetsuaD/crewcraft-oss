@@ -1,0 +1,16 @@
+{
+  "id": "T129-requests",
+  "title": "Client requests in flight: ids, timeouts, reply matching",
+  "crate": "crewcraft-client-core",
+  "files": [
+    "crates/client-core/src/requests.rs"
+  ],
+  "test_path": "crates/client-core/tests/t129_requests.rs",
+  "test_cmd": "cargo test -p crewcraft-client-core --test t129_requests",
+  "depends_on": [],
+  "spec": "Implement Requests as the doc comments say, over proto::request (shown for reference). Replace the `_todo` field. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/proto/src/request.rs"
+  ]
+}

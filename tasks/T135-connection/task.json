@@ -1,0 +1,21 @@
+{
+  "id": "T135-connection",
+  "title": "Server connection: frames in, requests dispatched, responses and pushes out",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/connection.rs"
+  ],
+  "test_path": "crates/server-core/tests/t135_connection.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t135_connection",
+  "depends_on": [],
+  "spec": "Implement to_push and Connection as the doc comments say, composing proto::frame::{encode, Decoder}, proto::request, proto::push::encode_push, dispatch::handle and RoomService::sync (shown for reference). Replace the `_todo` field. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/proto/src/frame.rs",
+    "crates/proto/src/request.rs",
+    "crates/proto/src/push.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/cursor_log.rs"
+  ]
+}

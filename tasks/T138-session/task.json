@@ -1,0 +1,19 @@
+{
+  "id": "T138-session",
+  "title": "Session: handshake first, then the connection",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/session.rs"
+  ],
+  "test_path": "crates/server-core/tests/t138_session.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t138_session",
+  "depends_on": [],
+  "spec": "Implement Session as its doc comments say, composing proto::frame::{encode, Decoder}, proto::handshake::{decode_hello, negotiate, encode_reply} and connection::Connection (shown for reference). Replace the `_todo` field. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/proto/src/frame.rs",
+    "crates/proto/src/handshake.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/proto/src/request.rs"
+  ]
+}

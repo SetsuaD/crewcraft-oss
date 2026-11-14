@@ -1,0 +1,13 @@
+{
+  "id": "T100-frame-codec",
+  "title": "Length-prefixed frame codec",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/frame.rs"
+  ],
+  "test_path": "crates/proto/tests/t100_frame.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t100_frame",
+  "depends_on": [],
+  "spec": "Implement frame::encode and frame::Decoder as their doc comments say: a frame is a 4-byte big-endian payload length then the payload; payloads over MAX_FRAME are TooLarge, and the decoder refuses an oversize header as soon as the 4 header bytes are in, without waiting for the body. Replace the `_todo` field with whatever state you need. No new dependencies.",
+  "status": "done"
+}

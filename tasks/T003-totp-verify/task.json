@@ -1,0 +1,15 @@
+{
+  "id": "T003-totp-verify",
+  "title": "TOTP verification with skew window and replay protection",
+  "crate": "crewcraft-totp",
+  "files": [
+    "crates/totp/src/lib.rs"
+  ],
+  "test_path": "crates/totp/tests/t003_totp_verify.rs",
+  "test_cmd": "cargo test -p crewcraft-totp --test t003_totp_verify",
+  "depends_on": [
+    "T002-totp-generate"
+  ],
+  "spec": "Implement Totp::verify as its doc comment says. Reject codes that are not exactly `digits` ASCII digits. Check counters from counter(now)-skew (saturating at 0) to counter(now)+skew; skip counters <= last_used; compare with subtle::ConstantTimeEq; return the first matching counter.",
+  "status": "done"
+}

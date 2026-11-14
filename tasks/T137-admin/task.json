@@ -1,0 +1,19 @@
+{
+  "id": "T137-admin",
+  "title": "Audited admin actions: rooms, members, device revocation",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/admin.rs"
+  ],
+  "test_path": "crates/server-core/tests/t137_admin.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t137_admin",
+  "depends_on": [],
+  "spec": "Implement action_text and Admin as the doc comments say, composing server::Server, devices::Devices and audit::AuditLog (shown for reference). Replace the `_todo` field. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/server-core/src/server.rs",
+    "crates/server-core/src/devices.rs",
+    "crates/server-core/src/audit.rs",
+    "crates/server-core/src/room.rs"
+  ]
+}

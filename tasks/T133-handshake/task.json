@@ -1,0 +1,16 @@
+{
+  "id": "T133-handshake",
+  "title": "Protocol handshake: version and feature negotiation",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/handshake.rs"
+  ],
+  "test_path": "crates/proto/tests/t133_handshake.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t133_handshake",
+  "depends_on": [],
+  "spec": "Implement negotiate and the four codec functions as the module and doc comments say, reusing message::CodecError. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/proto/src/request.rs"
+  ]
+}

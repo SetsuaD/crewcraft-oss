@@ -1,0 +1,20 @@
+{
+  "id": "T122-server",
+  "title": "Server: many rooms, unique slugs, one rate limit per user, online members",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/server.rs"
+  ],
+  "test_path": "crates/server-core/tests/t122_server.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t122_server",
+  "depends_on": [],
+  "spec": "Implement Server as its doc comments say, by composing room_service::RoomService, room_name::{validate, slug}, rate_limit::Limiter<String> and presence::Presence (shown for reference). Replace the `_todo` field. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/room_name.rs",
+    "crates/server-core/src/rate_limit.rs",
+    "crates/server-core/src/presence.rs",
+    "crates/server-core/src/room.rs"
+  ]
+}

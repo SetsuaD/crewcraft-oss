@@ -1,0 +1,19 @@
+{
+  "id": "T139-client-session",
+  "title": "Client session: handshake first, then the client",
+  "crate": "crewcraft-client-core",
+  "files": [
+    "crates/client-core/src/session.rs"
+  ],
+  "test_path": "crates/client-core/tests/t139_client_session.rs",
+  "test_cmd": "cargo test -p crewcraft-client-core --test t139_client_session",
+  "depends_on": [],
+  "spec": "Implement ClientSession as its doc comments say, composing proto::frame::{encode, Decoder}, proto::handshake::{encode_hello, decode_reply} and client::Client (shown for reference). Replace the `_todo` field. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/proto/src/frame.rs",
+    "crates/proto/src/handshake.rs",
+    "crates/client-core/src/client.rs",
+    "crates/proto/src/push.rs"
+  ]
+}

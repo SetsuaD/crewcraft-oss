@@ -1,0 +1,13 @@
+{
+  "id": "T008-email-identity",
+  "title": "Normalised email identity shared with the companion mail app",
+  "crate": "crewcraft-accounts",
+  "files": [
+    "crates/accounts/src/identity.rs"
+  ],
+  "test_path": "crates/accounts/tests/t008_email_identity.rs",
+  "test_cmd": "cargo test -p crewcraft-accounts --test t008_email_identity",
+  "depends_on": [],
+  "spec": "Implement identity::normalize_email exactly as its doc comment says, by hand over ASCII bytes (no regex, no new dependencies). Trim with str::trim, then refuse any byte that is not ASCII graphic; split on '@' (exactly one); check the local part's allowed characters and dot rules and the MAX_LOCAL length; check the domain's MAX_DOMAIN length, at least two labels, each 1 to 63 characters of letters, digits and '-' not at either end; return the whole address lowercased with to_ascii_lowercase.",
+  "status": "done"
+}

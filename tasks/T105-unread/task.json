@@ -1,0 +1,13 @@
+{
+  "id": "T105-unread",
+  "title": "Read markers and unread counts",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/unread.rs"
+  ],
+  "test_path": "crates/server-core/tests/t105_unread.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t105_unread",
+  "depends_on": [],
+  "spec": "Implement ReadMarkers as its doc comments say. Key the markers by the (user, room) pair itself, never by a joined string. Replace the `_todo` field. No new dependencies.",
+  "status": "done"
+}

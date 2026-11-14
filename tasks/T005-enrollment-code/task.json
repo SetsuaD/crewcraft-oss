@@ -1,0 +1,13 @@
+{
+  "id": "T005-enrollment-code",
+  "title": "Enrollment code display, Crockford check symbol, parsing",
+  "crate": "crewcraft-enroll",
+  "files": [
+    "crates/enroll/src/lib.rs"
+  ],
+  "test_path": "crates/enroll/tests/t005_enrollment_code.rs",
+  "test_cmd": "cargo test -p crewcraft-enroll --test t005_enrollment_code",
+  "depends_on": [],
+  "spec": "Implement EnrollmentCode::check_symbol, to_display and parse as the module and method docs say. The 160-bit secret is 32 Crockford characters (5 bits each, most significant first). Parse order: strip hyphens and whitespace, uppercase, require prefix CC1 (else BadPrefix), map O->0 and I/L->1, require exactly 33 characters (else BadLength), reject characters outside the alphabet in the 32 data characters (BadCharacter; U is never data), then the check symbol must equal the computed one (BadChecksum). No new dependencies.",
+  "status": "done"
+}

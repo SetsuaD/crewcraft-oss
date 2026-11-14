@@ -1,0 +1,13 @@
+{
+  "id": "T125-audit-log",
+  "title": "Hash-chained, tamper-evident audit log",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/audit.rs"
+  ],
+  "test_path": "crates/server-core/tests/t125_audit_log.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t125_audit_log",
+  "depends_on": [],
+  "spec": "Implement entry_hash with sha2::Sha256 (already a dependency), verify, and AuditLog as the doc comments say. Replace the `_todo` field. No new dependencies.",
+  "status": "done"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "T126-notify",
+  "title": "Notification decisions: room levels, quiet hours, do-not-disturb",
+  "crate": "crewcraft-client-core",
+  "files": [
+    "crates/client-core/src/notify.rs"
+  ],
+  "test_path": "crates/client-core/tests/t126_notify.rs",
+  "test_cmd": "cargo test -p crewcraft-client-core --test t126_notify",
+  "depends_on": [],
+  "spec": "Implement Quiet and Settings as the doc comments say. Replace the `_todo` field. No new dependencies.",
+  "status": "done"
+}

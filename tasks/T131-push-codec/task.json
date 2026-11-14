@@ -1,0 +1,16 @@
+{
+  "id": "T131-push-codec",
+  "title": "Push codec: server-to-client events over frames",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/push.rs"
+  ],
+  "test_path": "crates/proto/tests/t131_push_codec.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t131_push_codec",
+  "depends_on": [],
+  "spec": "Implement encode_push and decode_push as the module and doc comments say, reusing message::CodecError. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/proto/src/request.rs"
+  ]
+}

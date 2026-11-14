@@ -1,0 +1,13 @@
+{
+  "id": "T104-mentions",
+  "title": "@mention extraction",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/mentions.rs"
+  ],
+  "test_path": "crates/server-core/tests/t104_mentions.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t104_mentions",
+  "depends_on": [],
+  "spec": "Implement mentions() exactly as its doc comment lists. No regex, no new dependencies.",
+  "status": "done"
+}

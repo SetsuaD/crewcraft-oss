@@ -1,0 +1,13 @@
+{
+  "id": "T114-sessions",
+  "title": "Server-side sessions stored by token hash",
+  "crate": "crewcraft-accounts",
+  "files": [
+    "crates/accounts/src/sessions.rs"
+  ],
+  "test_path": "crates/accounts/tests/t114_sessions.rs",
+  "test_cmd": "cargo test -p crewcraft-accounts --test t114_sessions",
+  "depends_on": [],
+  "spec": "Implement Sessions as its doc comments say. Token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random). Key every session by the lowercase hex of sha2::Sha256 over the token string; never store the token. Replace the `_todo` field. No new dependencies.",
+  "status": "done"
+}

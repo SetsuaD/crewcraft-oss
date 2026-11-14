@@ -1,0 +1,20 @@
+{
+  "id": "T136-client",
+  "title": "Client connection: framed requests out, replies and pushes routed in",
+  "crate": "crewcraft-client-core",
+  "files": [
+    "crates/client-core/src/client.rs"
+  ],
+  "test_path": "crates/client-core/tests/t136_client.rs",
+  "test_cmd": "cargo test -p crewcraft-client-core --test t136_client",
+  "depends_on": [],
+  "spec": "Implement Client as its doc comments say, composing proto::frame::{encode, Decoder}, proto::push::decode_push, requests::Requests and inbox::Inbox (shown for reference). Replace the `_todo` field. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/proto/src/frame.rs",
+    "crates/proto/src/push.rs",
+    "crates/proto/src/request.rs",
+    "crates/client-core/src/requests.rs",
+    "crates/client-core/src/inbox.rs"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "T107-upload-assembler",
+  "title": "Chunked upload reassembly",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/upload.rs"
+  ],
+  "test_path": "crates/server-core/tests/t107_upload.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t107_upload",
+  "depends_on": [],
+  "spec": "Implement Assembler as its doc comments say: chunks = ceil(total_len / chunk_size); only the last chunk may be shorter (and is total_len - (chunks - 1) * chunk_size bytes). Replace the `_todo` field. No new dependencies.",
+  "status": "done"
+}

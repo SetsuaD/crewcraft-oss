@@ -1,0 +1,13 @@
+{
+  "id": "T121-timeline",
+  "title": "Client timeline from cursor-ordered events",
+  "crate": "crewcraft-client-core",
+  "files": [
+    "crates/client-core/src/timeline.rs"
+  ],
+  "test_path": "crates/client-core/tests/t121_timeline.rs",
+  "test_cmd": "cargo test -p crewcraft-client-core --test t121_timeline",
+  "depends_on": [],
+  "spec": "Implement Timeline as its doc comments say. Replace the `_todo` field. No new dependencies.",
+  "status": "done"
+}

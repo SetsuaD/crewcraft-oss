@@ -1,0 +1,15 @@
+{
+  "id": "T004-otpauth-uri",
+  "title": "otpauth:// Key URI for authenticator apps",
+  "crate": "crewcraft-totp",
+  "files": [
+    "crates/totp/src/lib.rs"
+  ],
+  "test_path": "crates/totp/tests/t004_otpauth_uri.rs",
+  "test_cmd": "cargo test -p crewcraft-totp --test t004_otpauth_uri",
+  "depends_on": [
+    "T001-base32"
+  ],
+  "spec": "Implement Totp::otpauth_uri as its doc comment says. Percent-encode issuer and account by keeping only ASCII letters, digits and -._~ and writing every other byte as %XX uppercase. No new dependencies.",
+  "status": "done"
+}

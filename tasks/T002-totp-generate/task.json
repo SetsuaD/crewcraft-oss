@@ -1,0 +1,13 @@
+{
+  "id": "T002-totp-generate",
+  "title": "HOTP/TOTP code generation (RFC 4226 / RFC 6238)",
+  "crate": "crewcraft-totp",
+  "files": [
+    "crates/totp/src/lib.rs"
+  ],
+  "test_path": "crates/totp/tests/t002_totp_generate.rs",
+  "test_cmd": "cargo test -p crewcraft-totp --test t002_totp_generate",
+  "depends_on": [],
+  "spec": "Implement Totp::generate_at_counter: HMAC of the 8-byte big-endian counter with the configured algorithm (hmac + sha1/sha2 crates, already dependencies), RFC 4226 dynamic truncation, modulo 10^digits, zero-padded to digits.",
+  "status": "done"
+}

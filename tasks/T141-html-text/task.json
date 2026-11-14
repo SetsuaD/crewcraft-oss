@@ -1,0 +1,16 @@
+{
+  "id": "T141-html-text",
+  "title": "Plain text from rendered message HTML",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/html_text.rs"
+  ],
+  "test_path": "crates/server-core/tests/t141_html_text.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t141_html_text",
+  "depends_on": [],
+  "spec": "Implement html_text as its doc comment says. Its input is what render::render writes (shown for reference). No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/server-core/src/render.rs"
+  ]
+}

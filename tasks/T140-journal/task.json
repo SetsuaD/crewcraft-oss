@@ -1,0 +1,13 @@
+{
+  "id": "T140-journal",
+  "title": "Crash-safe append-only journal with torn-write recovery",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/journal.rs"
+  ],
+  "test_path": "crates/server-core/tests/t140_journal.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t140_journal",
+  "depends_on": [],
+  "spec": "Implement Journal as its doc comments say, with std::fs and sha2::Sha256 (already a dependency). Replace the `_todo` field. Tests write their files under std::env::temp_dir(), one fresh file per test. No new dependencies.",
+  "status": "done"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "T130-enrollment",
+  "title": "Enrollment: redeem an emailed invitation and register the device, rate limited per source",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/enrollment.rs"
+  ],
+  "test_path": "crates/server-core/tests/t130_enrollment.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t130_enrollment",
+  "depends_on": [],
+  "spec": "Implement Enrollment as its doc comments say, by composing invites::InviteBook, devices::Devices and rate_limit::Limiter<String> (shown for reference). Replace the `_todo` field. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/server-core/src/invites.rs",
+    "crates/server-core/src/devices.rs",
+    "crates/server-core/src/rate_limit.rs"
+  ]
+}

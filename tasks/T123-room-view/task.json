@@ -1,0 +1,17 @@
+{
+  "id": "T123-room-view",
+  "title": "Client room view: timeline plus the user's messages on their way",
+  "crate": "crewcraft-client-core",
+  "files": [
+    "crates/client-core/src/room_view.rs"
+  ],
+  "test_path": "crates/client-core/tests/t123_room_view.rs",
+  "test_cmd": "cargo test -p crewcraft-client-core --test t123_room_view",
+  "depends_on": [],
+  "spec": "Implement RoomView as its doc comments say, by composing timeline::Timeline and outbox::Outbox (shown for reference). Replace the `_todo` field. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/client-core/src/timeline.rs",
+    "crates/client-core/src/outbox.rs"
+  ]
+}

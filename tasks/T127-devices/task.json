@@ -1,0 +1,13 @@
+{
+  "id": "T127-devices",
+  "title": "Device registry keyed by certificate fingerprint, with permanent revocation",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/devices.rs"
+  ],
+  "test_path": "crates/server-core/tests/t127_devices.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t127_devices",
+  "depends_on": [],
+  "spec": "Implement Devices as the doc comments say. Replace the `_todo` field. No new dependencies.",
+  "status": "done"
+}

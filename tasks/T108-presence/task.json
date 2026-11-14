@@ -1,0 +1,13 @@
+{
+  "id": "T108-presence",
+  "title": "Presence from heartbeats",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/presence.rs"
+  ],
+  "test_path": "crates/server-core/tests/t108_presence.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t108_presence",
+  "depends_on": [],
+  "spec": "Implement Presence as its doc comments say, using ONLINE_MS and AWAY_MS (age < ONLINE_MS is Online, age < AWAY_MS is Away). Replace the `_todo` field. No new dependencies.",
+  "status": "done"
+}

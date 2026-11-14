@@ -1,0 +1,19 @@
+{
+  "id": "T128-dispatch",
+  "title": "Dispatch: apply a client request to the server, with non-leaking error codes",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/dispatch.rs"
+  ],
+  "test_path": "crates/server-core/tests/t128_dispatch.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t128_dispatch",
+  "depends_on": [],
+  "spec": "Implement error_code and handle as the doc comments say, over server::Server (shown for reference) and the proto request types. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/server-core/src/server.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/room.rs",
+    "crates/proto/src/request.rs"
+  ]
+}

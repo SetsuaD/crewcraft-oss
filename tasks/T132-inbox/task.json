@@ -1,0 +1,19 @@
+{
+  "id": "T132-inbox",
+  "title": "Client inbox: route pushes to room views and decide notifications",
+  "crate": "crewcraft-client-core",
+  "files": [
+    "crates/client-core/src/inbox.rs"
+  ],
+  "test_path": "crates/client-core/tests/t132_inbox.rs",
+  "test_cmd": "cargo test -p crewcraft-client-core --test t132_inbox",
+  "depends_on": [],
+  "spec": "Implement Inbox as its doc comments say, by composing room_view::RoomView and notify::Settings over the proto::push::Push type (shown for reference). Replace the `_todo` field. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/client-core/src/room_view.rs",
+    "crates/client-core/src/notify.rs",
+    "crates/client-core/src/timeline.rs",
+    "crates/proto/src/push.rs"
+  ]
+}

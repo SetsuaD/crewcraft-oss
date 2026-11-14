@@ -1,0 +1,13 @@
+{
+  "id": "T115-safe-render",
+  "title": "Message text to safe HTML",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/render.rs"
+  ],
+  "test_path": "crates/server-core/tests/t115_render.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t115_render",
+  "depends_on": [],
+  "spec": "Implement render() exactly as its doc comment lists. Security matters more than features: every character of the input must reach the output escaped unless it is consumed as markup, and only http/https links may become anchors. No regex, no new dependencies.",
+  "status": "done"
+}

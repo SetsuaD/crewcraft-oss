@@ -1,0 +1,20 @@
+{
+  "id": "T120-room-service",
+  "title": "Room service: posts, edits, deletes, sync and unread over the room modules",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/room_service.rs"
+  ],
+  "test_path": "crates/server-core/tests/t120_room_service.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t120_room_service",
+  "depends_on": [],
+  "spec": "Implement RoomService as its doc comments say, by composing room::Room, cursor_log::EventLog<Event>, unread::ReadMarkers, mentions::mentions and render::render (shown for reference). Keep the set of deleted targets yourself. Replace the `_todo` field. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/server-core/src/room.rs",
+    "crates/server-core/src/cursor_log.rs",
+    "crates/server-core/src/unread.rs",
+    "crates/server-core/src/mentions.rs",
+    "crates/server-core/src/render.rs"
+  ]
+}

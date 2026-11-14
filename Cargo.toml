@@ -1,0 +1,37 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.95"
+publish = false
+
+[workspace.dependencies]
+# internal
+crewcraft-proto = { path = "crates/proto" }
+crewcraft-totp = { path = "crates/totp" }
+crewcraft-enroll = { path = "crates/enroll" }
+crewcraft-accounts = { path = "crates/accounts" }
+crewcraft-server-core = { path = "crates/server-core" }
+crewcraft-client-core = { path = "crates/client-core" }
+
+# crypto: audited RustCrypto crates only, never hand-rolled primitives (docs/SECURITY-DESIGN.md)
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+hkdf = "0.12"
+subtle = "2"
+argon2 = { version = "0.5", features = ["std"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+base64 = "0.22"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"

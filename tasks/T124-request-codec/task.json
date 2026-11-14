@@ -1,0 +1,16 @@
+{
+  "id": "T124-request-codec",
+  "title": "Request and response codec over frames",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/request.rs"
+  ],
+  "test_path": "crates/proto/tests/t124_request_codec.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t124_request_codec",
+  "depends_on": [],
+  "spec": "Implement the four functions as the module and doc comments say, reusing message::CodecError. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/proto/src/message.rs"
+  ]
+}

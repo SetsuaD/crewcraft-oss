@@ -1,0 +1,13 @@
+{
+  "id": "T134-retention",
+  "title": "Message retention: server and room policies, pins, legal hold",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/retention.rs"
+  ],
+  "test_path": "crates/server-core/tests/t134_retention.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t134_retention",
+  "depends_on": [],
+  "spec": "Implement removed_by and to_remove as the doc comments say. No new dependencies.",
+  "status": "done"
+}

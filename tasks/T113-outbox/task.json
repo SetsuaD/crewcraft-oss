@@ -1,0 +1,13 @@
+{
+  "id": "T113-outbox",
+  "title": "Offline outbox with retry backoff",
+  "crate": "crewcraft-client-core",
+  "files": [
+    "crates/client-core/src/outbox.rs"
+  ],
+  "test_path": "crates/client-core/tests/t113_outbox.rs",
+  "test_cmd": "cargo test -p crewcraft-client-core --test t113_outbox",
+  "depends_on": [],
+  "spec": "Implement Outbox as its doc comments say. After the n-th failure (n < MAX_ATTEMPTS) the next try is now + min(BASE_DELAY_MS * 2^(n-1), MAX_DELAY_MS); use saturating or checked arithmetic. Replace the `_todo` field (a BTreeMap keeps ids ordered). No new dependencies.",
+  "status": "done"
+}

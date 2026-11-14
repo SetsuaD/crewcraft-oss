@@ -1,0 +1,13 @@
+{
+  "id": "T006-bootstrap-seed",
+  "title": "HKDF-SHA256 bootstrap seed from an enrollment code",
+  "crate": "crewcraft-enroll",
+  "files": [
+    "crates/enroll/src/lib.rs"
+  ],
+  "test_path": "crates/enroll/tests/t006_bootstrap_seed.rs",
+  "test_cmd": "cargo test -p crewcraft-enroll --test t006_bootstrap_seed",
+  "depends_on": [],
+  "spec": "Implement EnrollmentCode::bootstrap_seed with the hkdf crate (already a dependency): Hkdf::<Sha256>::new(Some(b\"crewcraft-enroll-v1\"), &secret).expand(b\"bootstrap-ed25519\", &mut [0u8;32]).",
+  "status": "done"
+}

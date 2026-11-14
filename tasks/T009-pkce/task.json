@@ -1,0 +1,13 @@
+{
+  "id": "T009-pkce",
+  "title": "PKCE S256 check for the companion-app sign-in",
+  "crate": "crewcraft-accounts",
+  "files": [
+    "crates/accounts/src/oidc.rs"
+  ],
+  "test_path": "crates/accounts/tests/t009_pkce.rs",
+  "test_cmd": "cargo test -p crewcraft-accounts --test t009_pkce",
+  "depends_on": [],
+  "spec": "Implement oidc::pkce_challenge and oidc::verify_pkce as their doc comments say. Validate the verifier (VERIFIER_MIN..=VERIFIER_MAX bytes, each in A-Z a-z 0-9 - . _ ~) else Err(BadVerifier); hash with sha2::Sha256; encode with base64::engine::general_purpose::URL_SAFE_NO_PAD. verify_pkce returns false for an invalid verifier and otherwise compares the computed and given challenge bytes with subtle::ConstantTimeEq (different lengths are simply false). No new dependencies.",
+  "status": "done"
+}

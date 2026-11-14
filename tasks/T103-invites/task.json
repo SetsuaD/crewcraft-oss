@@ -1,0 +1,13 @@
+{
+  "id": "T103-invites",
+  "title": "Single-use expiring enrollment invitations",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/invites.rs"
+  ],
+  "test_path": "crates/server-core/tests/t103_invites.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t103_invites",
+  "depends_on": [],
+  "spec": "Implement InviteBook as its doc comments say. Emails compare ASCII-case-insensitively; a refused issue changes nothing. Replace the `_todo` field. No new dependencies.",
+  "status": "done"
+}

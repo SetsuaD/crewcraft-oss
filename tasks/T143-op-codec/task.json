@@ -1,0 +1,17 @@
+{
+  "id": "T143-op-codec",
+  "title": "Op codec: the server's changes as journal records",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/op.rs"
+  ],
+  "test_path": "crates/server-core/tests/t143_op_codec.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t143_op_codec",
+  "depends_on": [],
+  "spec": "Implement encode_op and decode_op as the module and doc comments say, reusing crewcraft_proto::message::CodecError. No new dependencies.",
+  "status": "done",
+  "context": [
+    "crates/server-core/src/room.rs",
+    "crates/proto/src/message.rs"
+  ]
+}

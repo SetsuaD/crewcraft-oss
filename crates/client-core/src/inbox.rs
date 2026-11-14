@@ -1,0 +1,104 @@
+//! Every room the client follows: each server push goes to its room's view, and a new message from someone else may
+//! notify. Composed from `room_view` (T123), `notify` (T126) and the `proto::push` types (T131). Task T132.
+
+use std::collections::BTreeMap;
+
+use crewcraft_proto::push::Push;
+
+use crate::notify::{Incoming, Notify, Settings};
+use crate::room_view::RoomView;
+use crate::timeline::{Apply, Change};
+
+pub struct Inbox {
+    me: String,
+    settings: Settings,
+    views: BTreeMap<String, RoomView>,
+    direct: BTreeMap<String, bool>,
+}
+
+impl Inbox {
+    /// An inbox for `me`, following no rooms, deciding notifications with `settings`.
+    pub fn new(me: &str, settings: Settings) -> Self {
+        Self { me: me.to_owned(), settings, views: BTreeMap::new(), direct: BTreeMap::new() }
+    }
+
+    /// Start following `room` with an empty view; `direct` marks a direct conversation. False (and nothing changes) if
+    /// it is already followed.
+    pub fn follow(&mut self, room: &str, direct: bool) -> bool {
+        if self.views.contains_key(room) {
+            return false;
+        }
+        self.views.insert(room.to_owned(), RoomView::new());
+        self.direct.insert(room.to_owned(), direct);
+        true
+    }
+
+    /// Stop following `room` and drop its view. False if it was not followed.
+    pub fn unfollow(&mut self, room: &str) -> bool {
+        if self.views.remove(room).is_some() {
+            self.direct.remove(room);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Apply a push to its room's view with `RoomView::event` at the push's cursor, as the matching `timeline::Change`
+    /// (`Posted { author, html }`, `Edited { target, html }`, `Deleted { target }`, `Other`).
+    ///
+    /// Returns `None` for a room not followed (nothing changes). Otherwise the `Apply` result and a notification
+    /// decision: only a `Posted` push that was `Applied` is decided, with `Settings::decide` on an `Incoming` whose
+    /// `mentioned` is whether the push's mentions contain `me` (ASCII case-insensitively) and whose `direct` is the room's
+    /// flag; every other push is `Notify::None`.
+    pub fn on_push(&mut self, push: Push, now_ms: u64, local_minute: u16) -> Option<(Apply, Notify)> {
+        let (room, cursor, change, is_posted, author, mentions) = match &push {
+            Push::Posted { room, cursor, author, html, mentions } => (
+                room.as_str(),
+                *cursor,
+                Change::Posted { author: author.clone(), html: html.clone() },
+                true,
+                Some(author.as_str()),
+                Some(mentions.as_slice()),
+            ),
+            Push::Edited { room, cursor, target, html, .. } => {
+                (room.as_str(), *cursor, Change::Edited { target: *target, html: html.clone() }, false, None, None)
+            }
+            Push::Deleted { room, cursor, target } => (room.as_str(), *cursor, Change::Deleted { target: *target }, false, None, None),
+            Push::Other { room, cursor } => (room.as_str(), *cursor, Change::Other, false, None, None),
+        };
+
+        let is_direct = self.direct.get(room).copied().unwrap_or(false);
+
+        let apply = self.views.get_mut(room)?.event(cursor, change);
+
+        let notify = if is_posted && apply == Apply::Applied {
+            let mentioned = mentions.map(|m| m.iter().any(|name| name.eq_ignore_ascii_case(&self.me))).unwrap_or(false);
+            let incoming = Incoming { room, author: author.unwrap_or(""), mentioned, direct: is_direct };
+            self.settings.decide(&incoming, now_ms, local_minute)
+        } else {
+            Notify::None
+        };
+
+        Some((apply, notify))
+    }
+
+    /// A followed room's view.
+    pub fn view(&self, room: &str) -> Option<&RoomView> {
+        self.views.get(room)
+    }
+
+    /// A followed room's view, to send, acknowledge or apply a snapshot.
+    pub fn view_mut(&mut self, room: &str) -> Option<&mut RoomView> {
+        self.views.get_mut(room)
+    }
+
+    /// The followed rooms whose view needs a resync (`RoomView::needs_resync`), sorted.
+    pub fn needs_resync(&self) -> Vec<String> {
+        self.views.iter().filter(|(_, v)| v.needs_resync()).map(|(room, _)| room.clone()).collect()
+    }
+
+    /// The followed rooms, sorted.
+    pub fn rooms(&self) -> Vec<String> {
+        self.views.keys().cloned().collect()
+    }
+}

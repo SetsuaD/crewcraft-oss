@@ -1,0 +1,13 @@
+{
+  "id": "T106-room-names",
+  "title": "Room name validation and slugs",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/room_name.rs"
+  ],
+  "test_path": "crates/server-core/tests/t106_room_names.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t106_room_names",
+  "depends_on": [],
+  "spec": "Implement validate() and slug() exactly as their doc comments say. Lengths count chars, not bytes. No new dependencies.",
+  "status": "done"
+}
