@@ -11,11 +11,13 @@ use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crewcraft_accounts::identity::normalize_email;
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_proto::handshake::ServerSide;
-use crewcraft_server::lab_admin::{self, AdminError, DisplayFailed, IssuedCode, ProtectedDisplay};
+use crewcraft_server::lab_admin::{self, DisplayFailed, IssuedCode, ProtectedDisplay};
 use crewcraft_server::lab_runtime::LabRuntime;
 use crewcraft_server::lab_server::{LabOptions, Timeouts};
+use crewcraft_server_core::room::Role;
 use sha2::{Digest, Sha256};
 
 const MAX_ROOT_DER: u64 = 16 * 1024;
@@ -46,10 +48,26 @@ fn run(args: &[OsString]) -> io::Result<()> {
             let port = port.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid lab port"))?;
             serve_lab(Path::new(state), Path::new(root), port)?;
         }
+        [lab, room, state, root, owner, name] if lab == "lab" && room == "room" => {
+            let mut lab = lab_admin::reopen(Path::new(state), root_fingerprint(Path::new(root))?, now_ms()).map_err(lab_error)?;
+            let owner = enrolled_email(&lab.accounts, owner)?;
+            let name = text_arg(name)?;
+            let slug = lab.rooms.create_room(&owner, name).map_err(lab_error)?;
+            println!("Room {slug}");
+        }
+        [lab, add, state, root, room, owner, member] if lab == "lab" && add == "add-member" => {
+            let mut lab = lab_admin::reopen(Path::new(state), root_fingerprint(Path::new(root))?, now_ms()).map_err(lab_error)?;
+            let owner = enrolled_email(&lab.accounts, owner)?;
+            let member = enrolled_email(&lab.accounts, member)?;
+            lab.rooms.add_member(text_arg(room)?, &owner, &member, Role::Member).map_err(lab_error)?;
+            println!("Member added.");
+        }
         _ => {
             eprintln!("crewcraft-server lab init <new-state-directory>");
             eprintln!("crewcraft-server lab invite <state-directory> <trusted-root.der> <email>");
             eprintln!("crewcraft-server lab serve <state-directory> <trusted-root.der> <port>");
+            eprintln!("crewcraft-server lab room <state-directory> <trusted-root.der> <owner> <name>");
+            eprintln!("crewcraft-server lab add-member <state-directory> <trusted-root.der> <room> <owner> <member>");
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "unknown command"));
         }
     }
@@ -62,9 +80,13 @@ fn version() {
 }
 
 fn init_lab(state: &Path) -> io::Result<()> {
-    let (_installation, root) = lab_admin::init(state, now_ms()).map_err(admin_error)?;
+    let (_installation, root) = lab_admin::init(state, now_ms()).map_err(lab_error)?;
     let root_path = state.join(PUBLIC_ROOT);
-    fs::OpenOptions::new().write(true).create_new(true).open(&root_path)?.write_all(&root.certificate_der)?;
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&root_path)?;
+    file.write_all(&root.certificate_der)?;
+    file.sync_all()?;
+    #[cfg(unix)]
+    File::open(state)?.sync_all()?;
     println!("Trusted root {}", root_path.display());
     println!("SHA-256 {}", RootFingerprint::from_der(&root.certificate_der));
     Ok(())
@@ -84,14 +106,26 @@ fn invite_to_lab(state: &Path, trusted_root: &Path, email: &str) -> io::Result<(
     if !io::stdin().is_terminal() || !stdout.is_terminal() {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, "show invitations in a private interactive terminal"));
     }
-    let mut installation = lab_admin::reopen(state, root_fingerprint(trusted_root)?, now_ms()).map_err(admin_error)?;
+    let mut installation = lab_admin::reopen(state, root_fingerprint(trusted_root)?, now_ms()).map_err(lab_error)?;
     let mut display = OperatorTerminal(stdout);
-    lab_admin::invite(&mut installation.accounts, email, None, now_ms(), &mut display).map_err(admin_error)?;
+    lab_admin::invite(&mut installation.accounts, email, None, now_ms(), &mut display).map_err(lab_error)?;
     Ok(())
 }
 
-fn admin_error(error: AdminError) -> io::Error {
+fn lab_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("{error:?}"))
+}
+
+fn text_arg(value: &OsString) -> io::Result<&str> {
+    value.to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid text argument"))
+}
+
+fn enrolled_email(accounts: &crewcraft_server_core::account_store::AccountStore, input: &OsString) -> io::Result<String> {
+    let email = normalize_email(text_arg(input)?).map_err(lab_error)?;
+    if accounts.person(&email).is_none() {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "the lab account must be enrolled first"));
+    }
+    Ok(email)
 }
 
 fn root_fingerprint(path: &Path) -> io::Result<[u8; 32]> {
@@ -104,7 +138,7 @@ fn root_fingerprint(path: &Path) -> io::Result<[u8; 32]> {
 }
 
 fn serve_lab(state: &Path, trusted_root: &Path, port: u16) -> io::Result<()> {
-    let installation = lab_admin::reopen(state, root_fingerprint(trusted_root)?, now_ms()).map_err(admin_error)?;
+    let installation = lab_admin::reopen(state, root_fingerprint(trusted_root)?, now_ms()).map_err(lab_error)?;
     let options = LabOptions {
         address: SocketAddr::from(([127, 0, 0, 1], port)),
         capacity: NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),

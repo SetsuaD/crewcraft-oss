@@ -43,6 +43,10 @@ impl BootstrapEndpoint {
         Ok(Self { endpoint, root_der: root_der.to_vec() })
     }
 
+    pub(crate) fn lab_endpoint(&self) -> &LabEndpoint {
+        &self.endpoint
+    }
+
     /// Connect with only the invitation's temporary identity. The whole enrollment exchange,
     /// including authenticator setup, shares one absolute deadline after the TLS handshake.
     pub fn open(&self, code: &EnrollmentCode, confirmation_window: Duration) -> Result<BootstrapConnection<'_>, BootstrapTransportError> {
