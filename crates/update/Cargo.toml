@@ -1,0 +1,15 @@
+[package]
+name = "crewcraft-update"
+description = "Update rules shared by the server and clients: versions, signed release manifests, rollout and rollback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+crewcraft-strict-toml.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

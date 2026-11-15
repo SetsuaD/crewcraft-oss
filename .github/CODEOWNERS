@@ -5,6 +5,8 @@
 /crates/totp/          @SetsuaD
 /crates/accounts/      @SetsuaD
 /crates/server-core/   @SetsuaD
+/crates/update/        @SetsuaD
+/crates/strict-toml/   @SetsuaD
 /docs/SECURITY-DESIGN.md @SetsuaD
 /SECURITY.md           @SetsuaD
 /tools/sanitize-scan.sh @SetsuaD
