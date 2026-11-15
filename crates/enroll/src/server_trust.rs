@@ -20,9 +20,10 @@ impl RootFingerprint {
             return None;
         }
         let mut fingerprint = [0; 32];
-        for (byte, pair) in fingerprint.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
-            let high = (pair[0] as char).to_digit(16)?;
-            let low = (pair[1] as char).to_digit(16)?;
+        let (pairs, _) = text.as_bytes().as_chunks::<2>();
+        for (byte, &[high, low]) in fingerprint.iter_mut().zip(pairs) {
+            let high = (high as char).to_digit(16)?;
+            let low = (low as char).to_digit(16)?;
             *byte = (high * 16 + low) as u8;
         }
         Some(Self(fingerprint))
