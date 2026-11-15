@@ -1,48 +1,56 @@
 //! The authentication store that survives a restart (issue #35): people (password verifier, sealed TOTP secret, last
-//! accepted TOTP counter), their enrolled devices (`devices`, T127) and pending invitations (`invites`, T103), kept in
-//! their own journal file (`journal`, T140) of `account_op` records, separate from the room journal (`durable`).
+//! accepted TOTP counter), their enrolled devices (`devices`, T127), pending invitations (`invites`, T103) and sign-in
+//! sessions (`crewcraft_accounts::sessions`, by token hash only), kept in their own strict journal file
+//! (`account_journal`) of `account_op` records, separate from the room journal (`durable`).
 //!
 //! Owns: the single-writer rule (`&mut self` for every change), the order validate -> append -> apply (nothing reaches
-//! memory, and no success is returned, unless its record is on disk; T140 cuts a failed append back off the file), one
-//! record per activation (the invitation is consumed, the person created or extended, the device registered and the
-//! first counter saved together or not at all), a strictly increasing TOTP counter, and exact replay: a record that
-//! does not apply, a store written under another service key, or a sealed secret that fails authentication refuses
-//! the whole open (fail closed; no partially initialised store is ever returned).
-//! Does not own: verifying a TOTP code or a password (the caller does that with `crewcraft-totp` / `crewcraft-accounts`
-//! and passes the accepted counter), session tokens, or how the certificate reaches the client.
-//! Called by: the server's enrollment and sign-in paths.
+//! memory, and no success is returned, unless its record is on disk), one record per activation (the invitation is
+//! consumed, the person created or extended, the device registered with its exact leaf and SPKI, and the counter
+//! saved, together or not at all), a strictly increasing TOTP counter, canonical account identity (an email must
+//! already be in `crewcraft_accounts::identity::normalize_email` form, so one mailbox is one person with one counter),
+//! and exact replay: a store written under another service key, a sealed secret that fails authentication, or a record
+//! that does not apply refuses the whole open (fail closed; no partially initialised store is ever returned).
+//! Writer health: an append whose outcome on disk is unknown poisons the store until it is reopened; a poisoned store
+//! refuses every write, every device admission and every session check.
+//! Does not own: verifying a TOTP code or a password (the caller does that and passes the accepted counter), or how the
+//! certificate reaches the client.
+//! Called by: the server's enrollment, sign-in and connection paths.
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
+use crewcraft_accounts::identity::normalize_email;
+use crewcraft_accounts::sessions::{Session, Sessions, token_for, token_hash};
 use crewcraft_proto::message::CodecError;
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use sha2::{Digest, Sha256};
-
+use crate::account_journal::{AccountJournal, AppendError, OpenError};
 use crate::account_op::{AccountOp, FORMAT, MAX_CERT, MAX_STR, NewPerson, decode_account_op, encode_account_op};
 use crate::devices::{Device, DeviceError, Devices};
 use crate::invites::{Invite, InviteBook, InviteError};
-use crate::journal::{Journal, JournalError};
 use crate::seal::{SealError, Sealed, ServiceKey};
 
-/// Where records go. `Journal` in production; tests wrap it to force a write failure.
+/// Where records go. `AccountJournal` in production; tests wrap it to force write failures.
 pub trait AppendLog {
-    /// Append one record durably, or fail having written nothing that a later open would read.
-    fn append(&mut self, record: &[u8]) -> Result<(), JournalError>;
+    /// Append one record durably. `NotWritten` promises the file is exactly as before the call.
+    fn append(&mut self, record: &[u8]) -> Result<(), AppendError>;
 }
 
-impl AppendLog for Journal {
-    fn append(&mut self, record: &[u8]) -> Result<(), JournalError> {
-        Journal::append(self, record)
+impl AppendLog for AccountJournal {
+    fn append(&mut self, record: &[u8]) -> Result<(), AppendError> {
+        AccountJournal::append(self, record)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
-    Journal(JournalError),
+    Open(OpenError),
+    Append(AppendError),
     Codec(CodecError),
+    /// `open` found no store, or an empty file: a store is made only by `create`.
+    NotInitialized,
     /// The store was written under a different service key, or a sealed secret names another key.
     WrongKey,
     /// Record `record` (0-based) does not decode or does not apply to the state before it.
@@ -50,7 +58,7 @@ pub enum StoreError {
         record: usize,
         cause: Box<StoreError>,
     },
-    /// A record was appended but could not be applied in memory (a bug); the store refuses further changes.
+    /// An earlier write's outcome is unknown; nothing is written or admitted until the store is reopened.
     Poisoned,
     /// No live invitation has this bootstrap key (unknown, expired, consumed or revoked).
     NoInvite,
@@ -68,8 +76,12 @@ pub enum StoreError {
     Seal(SealError),
     /// An empty or overlong email, password or certificate.
     BadField,
+    /// The email is not in canonical form (`normalize_email(email) == email`).
+    NotCanonical,
     /// The device key (its SubjectPublicKeyInfo) is already registered, live or revoked: a revoked key never returns.
     KeyInUse,
+    /// A session with this token hash already exists, or none does (for a revocation).
+    Session,
 }
 
 impl fmt::Display for StoreError {
@@ -84,9 +96,9 @@ impl fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
-impl From<JournalError> for StoreError {
-    fn from(e: JournalError) -> Self {
-        StoreError::Journal(e)
+impl From<OpenError> for StoreError {
+    fn from(e: OpenError) -> Self {
+        StoreError::Open(e)
     }
 }
 
@@ -120,8 +132,8 @@ struct Person {
     last_counter: u64,
 }
 
-/// What a caller may read about a person. No secret is in it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What a caller may read about a person. Its `Debug` never prints the password verifier.
+#[derive(Clone, PartialEq, Eq)]
 pub struct PersonInfo {
     pub email: String,
     /// The PHC string with the `own` password source (for `crewcraft_accounts::password::verify`).
@@ -129,7 +141,17 @@ pub struct PersonInfo {
     pub last_totp_counter: u64,
 }
 
-pub struct AccountStore<L: AppendLog = Journal> {
+impl fmt::Debug for PersonInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PersonInfo")
+            .field("email", &self.email)
+            .field("own_password", &self.password_phc.is_some())
+            .field("last_totp_counter", &self.last_totp_counter)
+            .finish()
+    }
+}
+
+pub struct AccountStore<L: AppendLog = AccountJournal> {
     log: L,
     key: ServiceKey,
     people: BTreeMap<String, Person>,
@@ -139,29 +161,48 @@ pub struct AccountStore<L: AppendLog = Journal> {
     keys: BTreeMap<[u8; 32], u64>,
     /// The issued leaf certificate by device id.
     certificates: BTreeMap<u64, Vec<u8>>,
+    sessions: Sessions,
     poisoned: bool,
 }
 
 impl<L: AppendLog> fmt::Debug for AccountStore<L> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AccountStore").field("people", &self.people.len()).field("invites", &self.invites.len()).field("key", &self.key).finish()
+        f.debug_struct("AccountStore")
+            .field("people", &self.people.len())
+            .field("invites", &self.invites.len())
+            .field("sessions", &self.sessions.len())
+            .field("poisoned", &self.poisoned)
+            .field("key", &self.key)
+            .finish()
     }
 }
 
-impl AccountStore<Journal> {
-    /// Open (or create) the store at `path` with the service key. A new store's first record names the key; an
-    /// existing store opens only with that same key, and only if every record replays exactly.
+impl AccountStore<AccountJournal> {
+    /// Make a NEW store at `path` (setup only): the file must not exist; its first record pins the service key.
+    pub fn create(path: &Path, key: ServiceKey) -> Result<Self, StoreError> {
+        let journal = AccountJournal::create(path)?;
+        let mut store = Self::empty(journal, key);
+        let created = AccountOp::Created { format: FORMAT, key_id: store.key.id() };
+        store.log.append(&encode_account_op(&created).map_err(StoreError::Codec)?).map_err(StoreError::Append)?;
+        Ok(store)
+    }
+
+    /// Open an existing store. A missing or empty file is `NotInitialized` (ordinary start never creates one). Nothing on
+    /// disk changes unless the key matches and every record replays; then an incomplete final frame is cut off.
     pub fn open(path: &Path, key: ServiceKey) -> Result<Self, StoreError> {
-        let (journal, records) = Journal::open(path)?;
-        Self::from_records(journal, key, records)
+        let (journal, records) = match AccountJournal::open(path) {
+            Err(OpenError::Missing) => return Err(StoreError::NotInitialized),
+            other => other?,
+        };
+        let mut store = Self::from_records(journal, key, records)?;
+        store.log.recover_tail()?;
+        Ok(store)
     }
 }
 
 impl<L: AppendLog> AccountStore<L> {
-    /// Replay `records` (as `Journal::open` returned them) over an empty store; for an empty list, write the `Created`
-    /// record through `log` first.
-    pub fn from_records(log: L, key: ServiceKey, records: Vec<Vec<u8>>) -> Result<Self, StoreError> {
-        let mut store = AccountStore {
+    fn empty(log: L, key: ServiceKey) -> Self {
+        AccountStore {
             log,
             key,
             people: BTreeMap::new(),
@@ -169,13 +210,17 @@ impl<L: AppendLog> AccountStore<L> {
             devices: Devices::new(),
             keys: BTreeMap::new(),
             certificates: BTreeMap::new(),
+            sessions: Sessions::new(),
             poisoned: false,
-        };
-        if records.is_empty() {
-            let created = AccountOp::Created { format: FORMAT, key_id: store.key.id() };
-            store.log.append(&encode_account_op(&created).map_err(StoreError::Codec)?)?;
-            return Ok(store);
         }
+    }
+
+    /// Replay `records` (as the journal returned them). The first must be the `Created` record for this key.
+    pub fn from_records(log: L, key: ServiceKey, records: Vec<Vec<u8>>) -> Result<Self, StoreError> {
+        if records.is_empty() {
+            return Err(StoreError::NotInitialized);
+        }
+        let mut store = Self::empty(log, key);
         for (index, bytes) in records.iter().enumerate() {
             let op = decode_account_op(bytes).map_err(|e| StoreError::Corrupt { record: index, cause: Box::new(StoreError::Codec(e)) })?;
             if index == 0 {
@@ -198,6 +243,11 @@ impl<L: AppendLog> AccountStore<L> {
         Ok(store)
     }
 
+    /// False once a write's outcome on disk became unknown. Device admission and every established frame check this.
+    pub fn healthy(&self) -> bool {
+        !self.poisoned
+    }
+
     /// Validate, append, apply. The caller gets `Ok` only once the record is durable and applied.
     fn commit(&mut self, op: AccountOp) -> Result<(), StoreError> {
         if self.poisoned {
@@ -205,7 +255,12 @@ impl<L: AppendLog> AccountStore<L> {
         }
         self.check(&op)?;
         let bytes = encode_account_op(&op).map_err(StoreError::Codec)?;
-        self.log.append(&bytes)?;
+        if let Err(e) = self.log.append(&bytes) {
+            if matches!(e, AppendError::Ambiguous(_)) {
+                self.poisoned = true;
+            }
+            return Err(StoreError::Append(e));
+        }
         if self.apply(&op).is_err() {
             self.poisoned = true;
             return Err(StoreError::Poisoned);
@@ -218,7 +273,7 @@ impl<L: AppendLog> AccountStore<L> {
         match op {
             AccountOp::Created { .. } => Err(StoreError::Codec(CodecError::BadKind(1))),
             AccountOp::InviteIssued { email, bootstrap_pub, expires_ms, now_ms } => {
-                field(email)?;
+                canonical(email)?;
                 let invite = Invite { email: email.clone(), bootstrap_pub: *bootstrap_pub, expires_ms: *expires_ms };
                 self.invites.check_issue(&invite, *now_ms).map_err(StoreError::Invite)
             }
@@ -234,6 +289,7 @@ impl<L: AppendLog> AccountStore<L> {
                     return Err(StoreError::KeyInUse);
                 }
                 let email = &self.invites.pending(bootstrap_pub, *now_ms).ok_or(StoreError::NoInvite)?.email;
+                canonical(email)?;
                 match (new_person, self.people.get(email)) {
                     (Some(_), Some(_)) => return Err(StoreError::PersonExists),
                     (None, None) => return Err(StoreError::NoSuchPerson),
@@ -268,11 +324,24 @@ impl<L: AppendLog> AccountStore<L> {
                     Some(_) => Ok(()),
                 }
             }
-            AccountOp::DeviceRevoked { email, device_id } => match self.devices.list(email).iter().find(|d| d.id == *device_id) {
-                Some(device) if !device.revoked => Ok(()),
-                Some(_) => Err(StoreError::Device(DeviceError::Revoked)),
-                None => Err(StoreError::Device(DeviceError::NoSuchDevice)),
-            },
+            AccountOp::DeviceRevoked { email, device_id } => self.live_device(email, *device_id).map(|_| ()),
+            AccountOp::SessionCreated { token_sha256, email, device_id, .. } => {
+                if !self.people.contains_key(email) {
+                    return Err(StoreError::NoSuchPerson);
+                }
+                self.live_device(email, *device_id)?;
+                if self.sessions.contains_hash(token_sha256) {
+                    return Err(StoreError::Session);
+                }
+                Ok(())
+            }
+            AccountOp::SessionRevoked { token_sha256 } => {
+                if self.sessions.contains_hash(token_sha256) {
+                    Ok(())
+                } else {
+                    Err(StoreError::Session)
+                }
+            }
         }
     }
 
@@ -312,31 +381,60 @@ impl<L: AppendLog> AccountStore<L> {
                 self.people.get_mut(email).ok_or(StoreError::NoSuchPerson)?.password_phc = Some(phc.clone());
                 Ok(())
             }
-            AccountOp::DeviceRevoked { email, device_id } => self.devices.revoke(email, *device_id).map(|_| ()).map_err(StoreError::Device),
+            AccountOp::DeviceRevoked { email, device_id } => {
+                self.devices.revoke(email, *device_id).map_err(StoreError::Device)?;
+                // The device's sessions end with it, in the same record.
+                self.sessions.revoke_device(email, &device_id.to_string());
+                Ok(())
+            }
+            AccountOp::SessionCreated { token_sha256, email, device_id, created_ms } => {
+                let session = Session { user: email.clone(), device: device_id.to_string(), created_ms: *created_ms, last_seen_ms: *created_ms };
+                self.sessions.restore(*token_sha256, session);
+                Ok(())
+            }
+            AccountOp::SessionRevoked { token_sha256 } => {
+                self.sessions.revoke_hash(token_sha256);
+                Ok(())
+            }
         }
     }
 
-    /// Record an invitation (only its bootstrap public key; `crewcraft_enroll` derives it from the code).
+    fn live_device(&self, email: &str, device_id: u64) -> Result<Device, StoreError> {
+        match self.devices.list(email).into_iter().find(|d| d.id == device_id) {
+            Some(device) if !device.revoked => Ok(device),
+            Some(_) => Err(StoreError::Device(DeviceError::Revoked)),
+            None => Err(StoreError::Device(DeviceError::NoSuchDevice)),
+        }
+    }
+
+    /// Record an invitation (only its bootstrap public key; `crewcraft_enroll` derives it from the code). The email must
+    /// already be canonical.
     pub fn issue_invite(&mut self, invite: Invite, now_ms: u64) -> Result<(), StoreError> {
         self.commit(AccountOp::InviteIssued { email: invite.email, bootstrap_pub: invite.bootstrap_pub, expires_ms: invite.expires_ms, now_ms })
     }
 
     /// Withdraw an invitation; `Ok(false)` (and nothing written) when there is none.
     pub fn revoke_invite(&mut self, bootstrap_pub: &[u8; 32]) -> Result<bool, StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
         if self.invites.pending(bootstrap_pub, 0).is_none() {
             return Ok(false);
         }
         self.commit(AccountOp::InviteRevoked { bootstrap_pub: *bootstrap_pub }).map(|()| true)
     }
 
-    /// Whether a live invitation has this bootstrap key (the bootstrap TLS verifier asks this).
+    /// Whether a live invitation has this bootstrap key (the bootstrap TLS verifier asks this). False when poisoned.
     pub fn is_invite_pending(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> bool {
-        self.invites.is_pending(bootstrap_pub, now_ms)
+        !self.poisoned && self.invites.is_pending(bootstrap_pub, now_ms)
     }
 
     /// Commit an activation as ONE record and return the new device id. The person is the invitation's email: the
     /// client cannot choose it. Only after `Ok` may the server answer the client with success (or its certificate).
     pub fn activate(&mut self, activation: Activation<'_>, now_ms: u64) -> Result<u64, StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
         let email = self.invites.pending(&activation.bootstrap_pub, now_ms).ok_or(StoreError::NoInvite)?.email.clone();
         let new_person = match activation.first_device {
             None => None,
@@ -371,16 +469,59 @@ impl<L: AppendLog> AccountStore<L> {
         self.commit(AccountOp::PasswordChanged { email: email.to_string(), phc: phc.to_string() })
     }
 
-    /// Revoke one of `email`'s devices; `Ok(false)` (and nothing written) when it was already revoked. A revoked
-    /// fingerprint stays banned after a restart.
+    /// Revoke one of `email`'s devices and every session on it, in one record; `Ok(false)` (and nothing written) when
+    /// it was already revoked. A revoked device stays revoked, and its key and certificate banned, after a restart.
     pub fn revoke_device(&mut self, email: &str, device_id: u64) -> Result<bool, StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
         match self.devices.list(email).iter().find(|d| d.id == device_id) {
             Some(device) if device.revoked => Ok(false),
             _ => self.commit(AccountOp::DeviceRevoked { email: email.to_string(), device_id }).map(|()| true),
         }
     }
 
+    /// Start a session for `email` on its live device `device_id` from 32 bytes the caller drew from the OS RNG; returns
+    /// the token for the client. Only the token's SHA-256 is journaled and kept. Call after `accept_totp`.
+    pub fn create_session(&mut self, random: [u8; 32], email: &str, device_id: u64, now_ms: u64) -> Result<String, StoreError> {
+        let token = token_for(random);
+        self.commit(AccountOp::SessionCreated { token_sha256: token_hash(&token), email: email.to_string(), device_id, created_ms: now_ms })?;
+        Ok(token)
+    }
+
+    /// Continue a session on a connection whose verified client certificate has `fingerprint`: the device must be live
+    /// and the session must belong to that same device and account (T148). `None` when poisoned, when the device is
+    /// revoked or unknown, or when the session is unknown, expired or someone else's. Restored sessions count their idle
+    /// time from creation, so a restart ends sessions idle since then.
+    pub fn continue_session(&mut self, token: &str, fingerprint: &[u8; 32], now_ms: u64) -> Option<Session> {
+        if self.poisoned {
+            return None;
+        }
+        let device = self.devices.authenticate(fingerprint, now_ms).ok()?;
+        self.sessions.validate_for(token, &device.user, &device.id.to_string(), now_ms)
+    }
+
+    /// End one session; `Ok(false)` (and nothing written) when the token is unknown.
+    pub fn revoke_session(&mut self, token: &str) -> Result<bool, StoreError> {
+        let hash = token_hash(token);
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
+        if !self.sessions.contains_hash(&hash) {
+            return Ok(false);
+        }
+        self.commit(AccountOp::SessionRevoked { token_sha256: hash }).map(|()| true)
+    }
+
+    /// The hex SHA-256 of every session token held (lets a test prove no raw token is kept).
+    pub fn session_hashes(&self) -> Vec<String> {
+        self.sessions.stored_keys()
+    }
+
     pub fn person(&self, email: &str) -> Option<PersonInfo> {
+        if self.poisoned {
+            return None;
+        }
         self.people.get(email).map(|p| PersonInfo {
             email: email.to_string(),
             password_phc: p.password_phc.clone(),
@@ -390,13 +531,19 @@ impl<L: AppendLog> AccountStore<L> {
 
     /// The person's TOTP secret, opened with the service key, for verifying a code.
     pub fn totp_secret(&self, email: &str) -> Result<Zeroizing<Vec<u8>>, StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
         let person = self.people.get(email).ok_or(StoreError::NoSuchPerson)?;
         self.key.open(&person.totp, email.as_bytes()).map_err(StoreError::Seal)
     }
 
-    /// The live device for a certificate fingerprint (its last-seen time is kept in memory only).
-    pub fn authenticate(&mut self, fingerprint: &[u8; 32], now_ms: u64) -> Result<Device, DeviceError> {
-        self.devices.authenticate(fingerprint, now_ms)
+    /// Device admission: the live device for a certificate fingerprint (its last-seen time is kept in memory only).
+    pub fn authenticate(&mut self, fingerprint: &[u8; 32], now_ms: u64) -> Result<Device, StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
+        self.devices.authenticate(fingerprint, now_ms).map_err(StoreError::Device)
     }
 
     /// The exact leaf certificate issued to a device (to hand out after `activate`, or to compare on reconnect).
@@ -422,4 +569,13 @@ pub fn fingerprint(certificate: &[u8]) -> [u8; 32] {
 
 fn field(s: &str) -> Result<(), StoreError> {
     if s.is_empty() || s.len() > MAX_STR { Err(StoreError::BadField) } else { Ok(()) }
+}
+
+/// The store's account identity: exactly the `normalize_email` form, never a variant of it.
+fn canonical(email: &str) -> Result<(), StoreError> {
+    field(email)?;
+    match normalize_email(email) {
+        Ok(normal) if normal == email => Ok(()),
+        _ => Err(StoreError::NotCanonical),
+    }
 }

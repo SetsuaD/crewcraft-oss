@@ -32,7 +32,7 @@ impl Sessions {
     /// Start a session from 32 bytes the caller drew from the operating system's RNG. Returns the token the client keeps:
     /// those bytes in base64url without padding (43 characters). Only SHA-256 of the token string is stored.
     pub fn create(&mut self, random: [u8; 32], user: &str, device: &str, now_ms: u64) -> String {
-        let token = URL_SAFE_NO_PAD.encode(random.as_slice());
+        let token = token_for(random);
         let key = token_key(&token);
         self.sessions.insert(key, Session { user: user.to_string(), device: device.to_string(), created_ms: now_ms, last_seen_ms: now_ms });
         token
@@ -63,6 +63,22 @@ impl Sessions {
         }
         self.sessions.remove(&key);
         None
+    }
+
+    /// Put back a session by the SHA-256 of its token (a durable store replaying its records). The token itself is
+    /// never needed or kept.
+    pub fn restore(&mut self, token_sha256: [u8; 32], session: Session) {
+        self.sessions.insert(hex(&token_sha256), session);
+    }
+
+    /// Whether a session (live or not yet expired out) has this token hash.
+    pub fn contains_hash(&self, token_sha256: &[u8; 32]) -> bool {
+        self.sessions.contains_key(&hex(token_sha256))
+    }
+
+    /// End a session by the SHA-256 of its token; false if unknown.
+    pub fn revoke_hash(&mut self, token_sha256: &[u8; 32]) -> bool {
+        self.sessions.remove(&hex(token_sha256)).is_some()
     }
 
     /// End one session; false if the token is unknown.
@@ -109,9 +125,21 @@ impl Sessions {
     }
 }
 
+/// The token a client keeps for 32 random bytes: base64url without padding (43 characters).
+pub fn token_for(random: [u8; 32]) -> String {
+    URL_SAFE_NO_PAD.encode(random.as_slice())
+}
+
+/// The SHA-256 of a token string: the only form of a token that is stored or journaled.
+pub fn token_hash(token: &str) -> [u8; 32] {
+    Sha256::digest(token.as_bytes()).into()
+}
+
 fn token_key(token: &str) -> String {
-    let digest = Sha256::digest(token.as_bytes());
-    let bytes: &[u8] = digest.as_ref();
+    hex(&token_hash(token))
+}
+
+fn hex(bytes: &[u8; 32]) -> String {
     let mut key = String::with_capacity(64);
     for byte in bytes {
         key.push_str(&format!("{:02x}", *byte));

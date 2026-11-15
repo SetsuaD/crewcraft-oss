@@ -5,6 +5,7 @@
 
 pub use crewcraft_proto::PROTOCOL_VERSION;
 
+pub mod account_journal;
 pub mod account_op;
 pub mod account_store;
 pub mod activation;
