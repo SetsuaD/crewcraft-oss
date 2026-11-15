@@ -17,6 +17,9 @@
 //! - tag 7 `DeviceRevoked`: `str email | u64 device id` (also ends every session on that device)
 //! - tag 8 `SessionCreated`: `32 SHA-256 of the session token | str email | u64 device id | u64 created_ms`
 //! - tag 9 `SessionRevoked`: `32 SHA-256 of the session token`
+//! - tag 10 `SignedIn`: `str email | u64 device id | u64 accepted TOTP counter | 32 SHA-256 of the session token |
+//!   u64 created_ms`: a sign-in's counter and its session in ONE record, so issuance and replay defence agree after a
+//!   crash.
 //!
 //! A raw session token is never in a record: only its SHA-256.
 //!
@@ -98,6 +101,13 @@ pub enum AccountOp {
     SessionRevoked {
         token_sha256: [u8; 32],
     },
+    SignedIn {
+        email: String,
+        device_id: u64,
+        counter: u64,
+        token_sha256: [u8; 32],
+        created_ms: u64,
+    },
 }
 
 impl fmt::Debug for AccountOp {
@@ -114,6 +124,9 @@ impl fmt::Debug for AccountOp {
             AccountOp::DeviceRevoked { email, device_id } => write!(f, "DeviceRevoked {{ email: {email:?}, device_id: {device_id} }}"),
             AccountOp::SessionCreated { email, device_id, .. } => write!(f, "SessionCreated {{ email: {email:?}, device_id: {device_id}, .. }}"),
             AccountOp::SessionRevoked { .. } => f.write_str("SessionRevoked { .. }"),
+            AccountOp::SignedIn { email, device_id, counter, .. } => {
+                write!(f, "SignedIn {{ email: {email:?}, device_id: {device_id}, counter: {counter}, .. }}")
+            }
         }
     }
 }
@@ -191,6 +204,14 @@ pub fn encode_account_op(op: &AccountOp) -> Result<Vec<u8>, CodecError> {
             out.push(9);
             out.extend_from_slice(token_sha256);
         }
+        AccountOp::SignedIn { email, device_id, counter, token_sha256, created_ms } => {
+            out.push(10);
+            put_str(&mut out, email)?;
+            out.extend_from_slice(&device_id.to_be_bytes());
+            out.extend_from_slice(&counter.to_be_bytes());
+            out.extend_from_slice(token_sha256);
+            out.extend_from_slice(&created_ms.to_be_bytes());
+        }
     }
     Ok(out)
 }
@@ -232,6 +253,7 @@ pub fn decode_account_op(bytes: &[u8]) -> Result<AccountOp, CodecError> {
         7 => AccountOp::DeviceRevoked { email: r.str()?, device_id: r.u64()? },
         8 => AccountOp::SessionCreated { token_sha256: r.array()?, email: r.str()?, device_id: r.u64()?, created_ms: r.u64()? },
         9 => AccountOp::SessionRevoked { token_sha256: r.array()? },
+        10 => AccountOp::SignedIn { email: r.str()?, device_id: r.u64()?, counter: r.u64()?, token_sha256: r.array()?, created_ms: r.u64()? },
         other => return Err(CodecError::BadKind(other)),
     };
     if r.pos != bytes.len() {

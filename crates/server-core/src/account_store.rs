@@ -80,6 +80,14 @@ pub enum StoreError {
     NotCanonical,
     /// The device key (its SubjectPublicKeyInfo) is already registered, live or revoked: a revoked key never returns.
     KeyInUse,
+    /// The device id the caller expected (from `preview_activation`, already written into the certificate) is no
+    /// longer the one the commit would assign.
+    DeviceIdMoved {
+        expected: u64,
+        next: u64,
+    },
+    /// The presented leaf is not the device's exact active certificate.
+    NotActiveLeaf,
     /// A session with this token hash already exists, or none does (for a revocation).
     Session,
 }
@@ -124,6 +132,9 @@ pub struct Activation<'a> {
     /// `Some` for the person's first device; `None` adds a device to the existing person the invitation names, whose
     /// counter must then be newer than the last one accepted.
     pub first_device: Option<FirstDevice<'a>>,
+    /// The device id written into the certificate (from `preview_activation`). Checked again inside the commit, so
+    /// the certificate's claims and the durable id cannot disagree. `None` skips the check.
+    pub expected_device_id: Option<u64>,
 }
 
 struct Person {
@@ -335,6 +346,17 @@ impl<L: AppendLog> AccountStore<L> {
                 }
                 Ok(())
             }
+            AccountOp::SignedIn { email, device_id, counter, token_sha256, .. } => {
+                let person = self.people.get(email).ok_or(StoreError::NoSuchPerson)?;
+                if *counter <= person.last_counter {
+                    return Err(StoreError::StaleCounter { last: person.last_counter });
+                }
+                self.live_device(email, *device_id)?;
+                if self.sessions.contains_hash(token_sha256) {
+                    return Err(StoreError::Session);
+                }
+                Ok(())
+            }
             AccountOp::SessionRevoked { token_sha256 } => {
                 if self.sessions.contains_hash(token_sha256) {
                     Ok(())
@@ -396,6 +418,12 @@ impl<L: AppendLog> AccountStore<L> {
                 self.sessions.revoke_hash(token_sha256);
                 Ok(())
             }
+            AccountOp::SignedIn { email, device_id, counter, token_sha256, created_ms } => {
+                self.people.get_mut(email).ok_or(StoreError::NoSuchPerson)?.last_counter = *counter;
+                let session = Session { user: email.clone(), device: device_id.to_string(), created_ms: *created_ms, last_seen_ms: *created_ms };
+                self.sessions.restore(*token_sha256, session);
+                Ok(())
+            }
         }
     }
 
@@ -445,6 +473,11 @@ impl<L: AppendLog> AccountStore<L> {
         };
         let device_id =
             self.devices.check_enroll(&email, activation.device_name, &fingerprint(activation.certificate)).map_err(StoreError::Device)?;
+        if let Some(expected) = activation.expected_device_id
+            && expected != device_id
+        {
+            return Err(StoreError::DeviceIdMoved { expected, next: device_id });
+        }
         self.commit(AccountOp::Activated {
             bootstrap_pub: activation.bootstrap_pub,
             new_person,
@@ -479,6 +512,25 @@ impl<L: AppendLog> AccountStore<L> {
             Some(device) if device.revoked => Ok(false),
             _ => self.commit(AccountOp::DeviceRevoked { email: email.to_string(), device_id }).map(|()| true),
         }
+    }
+
+    /// What an activation of this invitation would assign: the canonical email from the STORED invitation and the next
+    /// device id. Issue the certificate with exactly these claims, then pass the id as `expected_device_id`.
+    pub fn preview_activation(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> Result<(String, u64), StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
+        let email = self.invites.pending(bootstrap_pub, now_ms).ok_or(StoreError::NoInvite)?.email.clone();
+        Ok((email, self.devices.next_id()))
+    }
+
+    /// A normal sign-in, after the password and code verified: saves the code's counter AND starts the session in ONE
+    /// record, and returns the token. The counter must be newer than the last accepted one, which after activation is
+    /// the setup code's, so the first sign-in needs a fresh time step. Only the token's SHA-256 is journaled.
+    pub fn sign_in(&mut self, random: [u8; 32], email: &str, device_id: u64, counter: u64, now_ms: u64) -> Result<String, StoreError> {
+        let token = token_for(random);
+        self.commit(AccountOp::SignedIn { email: email.to_string(), device_id, counter, token_sha256: token_hash(&token), created_ms: now_ms })?;
+        Ok(token)
     }
 
     /// Start a session for `email` on its live device `device_id` from 32 bytes the caller drew from the OS RNG; returns
@@ -536,6 +588,17 @@ impl<L: AppendLog> AccountStore<L> {
         }
         let person = self.people.get(email).ok_or(StoreError::NoSuchPerson)?;
         self.key.open(&person.totp, email.as_bytes()).map_err(StoreError::Seal)
+    }
+
+    /// Device admission by the presented leaf: the device must be live and `leaf_der` byte-equal to its stored active
+    /// certificate. Use this on every admission; `device.user` is the canonical person (for throttling and session
+    /// frames).
+    pub fn admit(&mut self, leaf_der: &[u8], now_ms: u64) -> Result<Device, StoreError> {
+        let device = self.authenticate(&fingerprint(leaf_der), now_ms)?;
+        match self.certificates.get(&device.id) {
+            Some(active) if active.as_slice() == leaf_der => Ok(device),
+            _ => Err(StoreError::NotActiveLeaf),
+        }
     }
 
     /// Device admission: the live device for a certificate fingerprint (its last-seen time is kept in memory only).
