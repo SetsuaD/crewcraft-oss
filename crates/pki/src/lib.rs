@@ -27,6 +27,7 @@ use rustls_pki_types::CertificateSigningRequestDer;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use x509_parser::parse_x509_certificate;
+use x509_parser::prelude::{FromDer, X509CertificationRequest};
 
 /// A device certificate's life: 90 days exactly (docs/SECURITY-DESIGN.md section 2). Renewal issues a new one.
 pub const DEVICE_LIFETIME_SECS: i64 = 90 * 86_400;
@@ -175,6 +176,18 @@ pub fn key_id_of_certificate(certificate_der: &[u8]) -> Result<[u8; 32], PkiErro
     Ok(Sha256::digest(cert.public_key().raw).into())
 }
 
+/// The stable key identifier a signing request will produce: SHA-256 of its SubjectPublicKeyInfo, after the request's
+/// signature proved possession and the key was checked to be ECDSA P-256. It equals the `key_id` of any certificate
+/// issued for that request, so it can be staged before the certificate exists.
+pub fn csr_key_id(csr_der: &[u8]) -> Result<[u8; 32], PkiError> {
+    let request = CertificateSigningRequestParams::from_der(&CertificateSigningRequestDer::from(csr_der)).map_err(PkiError::Csr)?;
+    if request.public_key.algorithm() != &PKCS_ECDSA_P256_SHA256 {
+        return Err(PkiError::NotP256);
+    }
+    let (_, csr) = X509CertificationRequest::from_der(csr_der).map_err(|_| PkiError::Parse)?;
+    Ok(Sha256::digest(csr.certification_request_info.subject_pki.raw).into())
+}
+
 /// The serial number of a certificate.
 pub fn serial_of_certificate(certificate_der: &[u8]) -> Result<Vec<u8>, PkiError> {
     let (_, cert) = parse_x509_certificate(certificate_der).map_err(|_| PkiError::Parse)?;
@@ -237,8 +250,10 @@ impl Authority {
         Ok(ServerIdentity { chain: vec![certificate.der().to_vec(), self.certificate.clone()], key_pkcs8: key.serialize_der() })
     }
 
-    /// Build a device certificate for the key in `csr_der` without recording it.
-    fn build_device(&self, csr_der: &[u8], claims: &Claims<'_>, now_ms: u64) -> Result<Issued, PkiError> {
+    /// Build a device certificate for the key in `csr_der` WITHOUT recording it: nothing is added to the ledger, so a
+    /// caller that must commit durable state first can build, commit, and only then `record_issued`. The result is not
+    /// a valid device until recorded (`status` says `Unknown`).
+    pub fn prepare_device(&self, csr_der: &[u8], claims: &Claims<'_>, now_ms: u64) -> Result<Issued, PkiError> {
         if !valid_claims(claims) {
             return Err(PkiError::BadClaims);
         }
@@ -266,7 +281,9 @@ impl Authority {
         Ok(Issued { chain: vec![certificate.clone(), self.certificate.clone()], certificate, serial, key_id, not_before: from, not_after: until })
     }
 
-    fn record(&mut self, issued: &Issued, claims: &Claims<'_>) {
+    /// Record a certificate from `prepare_device` in the ledger, making it good. Call it only after whatever must be
+    /// durable before the device holds the certificate has been committed.
+    pub fn record_issued(&mut self, issued: &Issued, claims: &Claims<'_>) {
         let info = LeafInfo { person: claims.person.to_string(), device_id: claims.device_id, key_id: issued.key_id };
         self.ledger
             .insert(issued.serial.clone(), Leaf { certificate: issued.certificate.clone(), info, not_after: issued.not_after, revoked: false });
@@ -274,8 +291,8 @@ impl Authority {
 
     /// Issue a device certificate for the key in `csr_der` (a DER PKCS#10 request), with the identity in `claims`.
     pub fn issue_device(&mut self, csr_der: &[u8], claims: &Claims<'_>, now_ms: u64) -> Result<Issued, PkiError> {
-        let issued = self.build_device(csr_der, claims, now_ms)?;
-        self.record(&issued, claims);
+        let issued = self.prepare_device(csr_der, claims, now_ms)?;
+        self.record_issued(&issued, claims);
         Ok(issued)
     }
 
@@ -290,11 +307,11 @@ impl Authority {
             Status::Unknown => return Err(PkiError::NotIssuedHere),
         };
         let claims = Claims { person: &info.person, device_id: info.device_id };
-        let issued = self.build_device(csr_der, &claims, now_ms)?;
+        let issued = self.prepare_device(csr_der, &claims, now_ms)?;
         if issued.key_id != info.key_id {
             return Err(PkiError::KeyMismatch);
         }
-        self.record(&issued, &claims);
+        self.record_issued(&issued, &claims);
         Ok(issued)
     }
 
