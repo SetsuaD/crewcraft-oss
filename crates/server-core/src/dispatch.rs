@@ -3,6 +3,7 @@
 
 use crewcraft_proto::request::{Request, Response};
 
+use crate::durable::{DurableError, DurableServer};
 use crate::room::RoomError;
 use crate::room_service::ServiceError;
 use crate::server::{Server, ServerError};
@@ -50,30 +51,59 @@ pub fn error_code(error: ServerError) -> u16 {
 ///
 /// Any error is `Error { code: error_code(e), detail: "" }`.
 pub fn handle(server: &mut Server, user: &str, request: &Request, now_ms: u64) -> Response {
-    match request {
-        Request::Ping => Response::Ok { cursor: 0 },
-        Request::Post { room, text } => match server.post(room, user, text, now_ms) {
-            Ok(cursor) => Response::Ok { cursor },
-            Err(e) => Response::Error { code: error_code(e), detail: String::new() },
-        },
-        Request::Edit { room, target, text } => match server.edit(room, user, *target, text, now_ms) {
-            Ok(cursor) => Response::Ok { cursor },
-            Err(e) => Response::Error { code: error_code(e), detail: String::new() },
-        },
-        Request::Delete { room, target } => match server.delete(room, user, *target) {
-            Ok(cursor) => Response::Ok { cursor },
-            Err(e) => Response::Error { code: error_code(e), detail: String::new() },
-        },
-        Request::Sync { room, cursor: _ } => match server.room(room) {
-            Ok(service) if service.role(user).is_some() => Response::Ok { cursor: service.head() },
-            _ => Response::Error { code: E_NO_SUCH_ROOM, detail: String::new() },
-        },
-        Request::MarkRead { room, cursor } => match server.mark_read(room, user, *cursor) {
-            Ok(_) => match server.room(room) {
-                Ok(service) => Response::Ok { cursor: service.head() },
-                Err(_) => Response::Error { code: E_NO_SUCH_ROOM, detail: String::new() },
-            },
-            Err(e) => Response::Error { code: error_code(e), detail: String::new() },
-        },
+    handle_backend(&mut Backend::Memory(server), user, request, now_ms).unwrap_or_else(|_| refusal(E_OTHER))
+}
+
+pub(crate) enum Backend<'a> {
+    Memory(&'a mut Server),
+    Durable(&'a mut DurableServer),
+}
+
+impl Backend<'_> {
+    pub(crate) fn server(&self) -> &Server {
+        match self {
+            Self::Memory(server) => server,
+            Self::Durable(server) => server.server(),
+        }
+    }
+
+    fn change<T>(
+        &mut self,
+        memory: impl FnOnce(&mut Server) -> Result<T, ServerError>,
+        durable: impl FnOnce(&mut DurableServer) -> Result<T, DurableError>,
+    ) -> Result<T, DurableError> {
+        match self {
+            Self::Memory(server) => memory(server).map_err(DurableError::Server),
+            Self::Durable(server) => durable(server),
+        }
+    }
+}
+
+fn refusal(code: u16) -> Response {
+    Response::Error { code, detail: String::new() }
+}
+
+pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Request, now_ms: u64) -> Result<Response, DurableError> {
+    let result = match request {
+        Request::Ping => return Ok(Response::Ok { cursor: 0 }),
+        Request::Post { room, text } => backend.change(|s| s.post(room, user, text, now_ms), |s| s.post(room, user, text, now_ms)),
+        Request::Edit { room, target, text } => {
+            backend.change(|s| s.edit(room, user, *target, text, now_ms), |s| s.edit(room, user, *target, text, now_ms))
+        }
+        Request::Delete { room, target } => backend.change(|s| s.delete(room, user, *target), |s| s.delete(room, user, *target)),
+        Request::Sync { room, .. } => {
+            return Ok(match backend.server().room(room) {
+                Ok(service) if service.role(user).is_some() => Response::Ok { cursor: service.head() },
+                _ => refusal(E_NO_SUCH_ROOM),
+            });
+        }
+        Request::MarkRead { room, cursor } => backend
+            .change(|s| s.mark_read(room, user, *cursor), |s| s.mark_read(room, user, *cursor))
+            .and_then(|_| backend.server().room(room).map(|service| service.head()).map_err(|_| DurableError::Server(ServerError::NoSuchRoom))),
+    };
+    match result {
+        Ok(cursor) => Ok(Response::Ok { cursor }),
+        Err(DurableError::Server(error)) => Ok(refusal(error_code(error))),
+        Err(error) => Err(error),
     }
 }

@@ -104,7 +104,7 @@ impl DurableServer {
         Ok(moved)
     }
 
-    fn check_alive(&self) -> Result<(), DurableError> {
+    pub(crate) fn check_alive(&self) -> Result<(), DurableError> {
         if self.poisoned { Err(DurableError::Poisoned) } else { Ok(()) }
     }
 
