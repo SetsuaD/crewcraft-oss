@@ -8,11 +8,13 @@ use std::sync::{Arc, Mutex};
 
 use crewcraft_accounts::throttle::Throttle;
 use crewcraft_admission::Admission;
+use crewcraft_bootstrap::SystemEnvironment;
 use crewcraft_pki::{Authority, ServerIdentity};
 use crewcraft_server_core::account_store::AccountStore;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
+use crate::lab_bootstrap::bootstrap_handler;
 use crate::lab_installation::LabInstallation;
 use crate::lab_server::{BootstrapStream, LabOptions, LabServer};
 use crate::lab_state::LabState;
@@ -49,6 +51,11 @@ impl LabRuntime {
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.server.local_addr()
+    }
+
+    /// Serve normal device sign-in and the explicitly admitted invitation flow.
+    pub fn serve_enrolled(self, shutdown: &AtomicBool) -> io::Result<()> {
+        self.serve(shutdown, |accounts, issuer| Ok(bootstrap_handler(accounts, issuer, SystemEnvironment)))
     }
 
     /// Build the handler with the same account store used by TLS admission and chat authentication.

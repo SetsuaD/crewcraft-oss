@@ -9,15 +9,15 @@ publish.workspace = true
 
 [dependencies]
 crewcraft-accounts.workspace = true
+crewcraft-admission.workspace = true
 crewcraft-pki.workspace = true
 crewcraft-proto.workspace = true
 crewcraft-server-core.workspace = true
+crewcraft-totp.workspace = true
 rand_core.workspace = true
 
 [dev-dependencies]
-crewcraft-admission.workspace = true
 crewcraft-tls.workspace = true
-crewcraft-totp.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 
