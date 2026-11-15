@@ -89,8 +89,40 @@ fn lab_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("{error:?}"))
 }
 
+#[cfg(unix)]
+fn terminal_password(prompt: &str) -> io::Result<String> {
+    use signal_hook::consts::SIGINT;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, OnceLock};
+
+    static DEFAULT_INTERRUPT: OnceLock<io::Result<Arc<AtomicBool>>> = OnceLock::new();
+    let enabled = DEFAULT_INTERRUPT
+        .get_or_init(|| {
+            let enabled = Arc::new(AtomicBool::new(true));
+            signal_hook::flag::register_conditional_default(SIGINT, Arc::clone(&enabled))?;
+            Ok(enabled)
+        })
+        .as_ref()
+        .map_err(|error| io::Error::new(error.kind(), "could not configure credential prompt cancellation"))?;
+
+    // rpassword raises SIGINT before dropping its Unix terminal guard. Let it return
+    // and restore the terminal before applying the normal interrupt action.
+    enabled.store(false, Ordering::SeqCst);
+    let result = rpassword::prompt_password(prompt);
+    enabled.store(true, Ordering::SeqCst);
+    if matches!(&result, Err(error) if error.kind() == io::ErrorKind::Interrupted) {
+        signal_hook::low_level::emulate_default_handler(SIGINT)?;
+    }
+    result
+}
+
+#[cfg(not(unix))]
+fn terminal_password(prompt: &str) -> io::Result<String> {
+    rpassword::prompt_password(prompt)
+}
+
 fn read_secret(prompt: &str, limit: usize) -> io::Result<Zeroizing<String>> {
-    let value = Zeroizing::new(rpassword::prompt_password(prompt)?);
+    let value = Zeroizing::new(terminal_password(prompt)?);
     if value.is_empty() || value.len() > limit || value.chars().any(|c| matches!(c, '\r' | '\n' | '\0')) {
         return Err(invalid("invalid credential length or characters"));
     }
