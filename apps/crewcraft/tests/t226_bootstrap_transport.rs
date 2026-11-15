@@ -138,7 +138,7 @@ fn derives_the_admitted_identity_and_enrolls_using_the_original_root() {
     let expected = fixture.code.bootstrap_public_key();
     let (address, handle) = serve(&fixture.root, fixture.server, expected, move |peer| {
         let mut peer = accepted(peer, expected);
-        let (rest, bootstrap_cert) = X509Certificate::from_der(&peer.certificate).unwrap();
+        let (rest, bootstrap_cert) = X509Certificate::from_der(peer.certificate()).unwrap();
         assert!(rest.is_empty());
         let validity = bootstrap_cert.validity();
         assert_eq!(validity.not_after.timestamp() - validity.not_before.timestamp(), 210);
