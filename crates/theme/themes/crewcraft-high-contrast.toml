@@ -1,0 +1,78 @@
+# CrewCraft High contrast: maximum legibility, light and dark.
+
+[theme]
+api = 1
+id = "crewcraft-high-contrast"
+name = "High contrast"
+version = "1.0.0"
+author = "The CrewCraft contributors"
+license = "MIT OR Apache-2.0"
+description = "Black and white with strong outlines, for low vision and bright rooms."
+density = "comfortable"
+
+[type]
+font = "system"
+size-small = 13
+size-body = 15
+size-title = 21
+
+[shape]
+radius-s = 2
+radius-m = 4
+radius-l = 6
+
+[colors.light]
+bg-app = "#ffffff"
+bg-pane = "#ffffff"
+bg-canvas = "#ffffff"
+surface = "#ffffff"
+surface-hover = "#e6e6e6"
+stroke = "#000000"
+stroke-strong = "#000000"
+text = "#000000"
+text-muted = "#2b2b2b"
+text-disabled = "#6e6e6e"
+accent = "#00505c"
+accent-hover = "#003b44"
+accent-pressed = "#002a30"
+accent-soft = "#d9eef1"
+on-accent = "#ffffff"
+bubble-mine = "#d9eef1"
+bubble-other = "#f0f0f0"
+link = "#00007a"
+focus-ring = "#000000"
+danger = "#a00000"
+success = "#005a00"
+warning = "#7a4100"
+presence-available = "#005a00"
+presence-busy = "#a00000"
+presence-away = "#7a4100"
+presence-offline = "#4d4d4d"
+
+[colors.dark]
+bg-app = "#000000"
+bg-pane = "#000000"
+bg-canvas = "#000000"
+surface = "#000000"
+surface-hover = "#1f1f1f"
+stroke = "#ffffff"
+stroke-strong = "#ffffff"
+text = "#ffffff"
+text-muted = "#e0e0e0"
+text-disabled = "#9a9a9a"
+accent = "#ffd400"
+accent-hover = "#ffe14d"
+accent-pressed = "#e6bf00"
+accent-soft = "#332b00"
+on-accent = "#000000"
+bubble-mine = "#332b00"
+bubble-other = "#1a1a1a"
+link = "#8cc8ff"
+focus-ring = "#ffd400"
+danger = "#ff6b6b"
+success = "#5fe35f"
+warning = "#ffb347"
+presence-available = "#5fe35f"
+presence-busy = "#ff6b6b"
+presence-away = "#ffb347"
+presence-offline = "#bdbdbd"

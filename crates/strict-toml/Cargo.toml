@@ -1,0 +1,13 @@
+[package]
+name = "crewcraft-strict-toml"
+description = "A strict, dependency-free subset of TOML for theme addons and release manifests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

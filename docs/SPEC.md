@@ -51,7 +51,7 @@ already-enrolled device (approved with a TOTP code).
 
 ## 3. Product scope
 
-CrewCraft implements REQUIREMENTS.md sections 2.1 to 2.7 and 2.9 to 2.20 as written, with these decisions:
+CrewCraft implements REQUIREMENTS.md sections 2.1 to 2.7 and 2.9 to 2.21 as written, with these decisions:
 
 > **Implementation status (early development).** Deleting a message currently appends a deletion event while the
 > original body stays in the room log, so a sync from an older cursor still returns it. Clearing the body in place
@@ -84,6 +84,12 @@ CrewCraft implements REQUIREMENTS.md sections 2.1 to 2.7 and 2.9 to 2.20 as writ
   live in the file libraries so versions, quotas and permissions apply (2.14, 2.15).
 - **Interoperability through open standards**: WebDAV for files, CalDAV and iCalendar for calendars, CardDAV and vCard
   for contacts, SCIM for directory provisioning, OpenID Connect for sign-in, all behind the certificate-gated entrance.
+- **Theme addons** are files an administrator installs on one server; they never leave it, so an organization can
+  keep a theme of its own private (REQUIREMENTS 2.19). CrewCraft's public themes never imitate another product.
+- **Updates flow from the server** (REQUIREMENTS 2.21): the server updates itself from a signed release, with automatic
+  rollback on a failed health check, and every client then updates from that server. The update rules (version
+  ordering, downgrade refusal, rollout buckets, required updates, the rollback state machine) live in the
+  `crewcraft-update` crate so they are tested once and shared by the server and every client.
 - **Plugins are WebAssembly** modules written in Rust against `crewcraft-plugin-sdk`, sandboxed with declared
   capabilities, and draw client UI only through declarative cards (2.18).
 
