@@ -212,6 +212,7 @@ dependencies = [
  "rand_core",
  "rcgen",
  "rustls",
+ "zeroize",
 ]
 
 [[package]]

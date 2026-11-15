@@ -12,6 +12,7 @@ use crewcraft_accounts::totp_guard::SKEW_STEPS;
 use crewcraft_server_core::activation::{GLOBAL_BURST, GLOBAL_PER_SEC, ISSUER, MAX_WRONG_CODES, SOURCE_BURST, SOURCE_PER_SEC};
 use crewcraft_server_core::rate_limit::Limiter;
 use crewcraft_totp::Totp;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StageError {
@@ -28,7 +29,7 @@ pub(crate) struct Candidate<'a> {
     pub email: &'a str,
     pub device_name: &'a str,
     pub key_id: [u8; 32],
-    pub secret: [u8; 20],
+    pub secret: Zeroizing<[u8; 20]>,
 }
 
 pub(crate) struct Begun {
@@ -41,7 +42,7 @@ pub(crate) struct Confirmed {
     pub email: String,
     pub device_name: String,
     pub key_id: [u8; 32],
-    pub secret: [u8; 20],
+    pub secret: Zeroizing<[u8; 20]>,
     pub counter: u64,
 }
 
@@ -50,7 +51,7 @@ struct Pending {
     email: String,
     device_name: String,
     key_id: [u8; 32],
-    secret: [u8; 20],
+    secret: Zeroizing<[u8; 20]>,
     wrong_codes: u32,
 }
 
@@ -127,7 +128,7 @@ impl Staging {
             email: pending.email.clone(),
             device_name: pending.device_name.clone(),
             key_id: pending.key_id,
-            secret: pending.secret,
+            secret: pending.secret.clone(),
             counter,
         })
     }
