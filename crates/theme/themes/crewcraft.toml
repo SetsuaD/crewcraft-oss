@@ -1,0 +1,79 @@
+# CrewCraft: the default theme. Teal accent, neutral greys, light and dark.
+# Format: crates/theme (REQUIREMENTS 2.19). Copy this file to start a theme addon of your own.
+
+[theme]
+api = 1
+id = "crewcraft"
+name = "CrewCraft"
+version = "1.0.0"
+author = "The CrewCraft contributors"
+license = "MIT OR Apache-2.0"
+description = "The default CrewCraft look: teal accent, neutral greys, light and dark."
+density = "comfortable"
+
+[type]
+font = "system"
+size-small = 12
+size-body = 14
+size-title = 20
+
+[shape]
+radius-s = 4
+radius-m = 6
+radius-l = 8
+
+[colors.light]
+bg-app = "#e8ecee"
+bg-pane = "#f4f6f7"
+bg-canvas = "#ffffff"
+surface = "#ffffff"
+surface-hover = "#eef2f3"
+stroke = "#dde3e6"
+stroke-strong = "#7a868c"
+text = "#1d2327"
+text-muted = "#56626a"
+text-disabled = "#a7b0b5"
+accent = "#2b7a89"
+accent-hover = "#246775"
+accent-pressed = "#1d5560"
+accent-soft = "#e1f0f3"
+on-accent = "#ffffff"
+bubble-mine = "#e1f0f3"
+bubble-other = "#f1f3f4"
+link = "#1f6a78"
+focus-ring = "#1d5560"
+danger = "#c0392b"
+success = "#2e7d32"
+warning = "#a15c00"
+presence-available = "#3f9b35"
+presence-busy = "#c42b1c"
+presence-away = "#e8a33d"
+presence-offline = "#8a9196"
+
+[colors.dark]
+bg-app = "#111416"
+bg-pane = "#191d20"
+bg-canvas = "#1e2326"
+surface = "#262c30"
+surface-hover = "#2e353a"
+stroke = "#353d42"
+stroke-strong = "#8a959b"
+text = "#f1f4f5"
+text-muted = "#aab4b9"
+text-disabled = "#5d676c"
+accent = "#5cc0d1"
+accent-hover = "#7dcfdc"
+accent-pressed = "#47a9ba"
+accent-soft = "#1f3d44"
+on-accent = "#0b1f24"
+bubble-mine = "#1f3d44"
+bubble-other = "#262c30"
+link = "#7dcfdc"
+focus-ring = "#7dcfdc"
+danger = "#ef6f61"
+success = "#6cc070"
+warning = "#e9a84c"
+presence-available = "#6cc070"
+presence-busy = "#ef6f61"
+presence-away = "#e9a84c"
+presence-offline = "#8a959b"

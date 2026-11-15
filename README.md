@@ -44,6 +44,10 @@
   time. No third-party service is in the path, and nothing phones home.
 - **Familiar from day one.** The layout and workflow people know from Microsoft Teams, with feature parity as the
   target ([docs/PARITY.md](docs/PARITY.md)), in CrewCraft's own look.
+- **Keeps itself current.** The server updates itself from signed releases and rolls back if the new version fails its
+  health check; every app then updates from its own server, never from the internet (REQUIREMENTS 2.21).
+- **Your look, kept private.** Theme addons are files you install on your own server. They never leave it, and every
+  theme must pass the accessibility contrast checks (REQUIREMENTS 2.19).
 - **Rust from end to end.** Server, media server, desktop, web and phone apps, plugins and tooling; the gate refuses
   other languages (docs/SPEC.md section 7).
 - **Built in the open.** Clean-room, MIT OR Apache-2.0, and every open task is a written behaviour plus the test that defines it.

@@ -251,7 +251,7 @@ organization plug in its own identity provider and authorization service instead
 - **Boundaries.** The client displays only the CrewCraft server and, when one is configured, the identity provider's
   sign-in page; every other link opens in the default browser. Camera, microphone and screen capture are granted to
   the CrewCraft server only. Plain HTTP is refused.
-- **Self-update.** Updates come from a feed behind the same certificate-gated entrance as everything else. The feed
+- **Self-update.** Updates come from the client's own server (2.21), behind the same certificate-gated entrance as everything else. The feed
   is a manifest giving each installer's hash, size and whether it needs elevation. Published installers never change;
   the manifest is replaced atomically. The updater refuses downgrades, changed bytes, and installers not signed by the
   expected publisher.
@@ -415,9 +415,18 @@ Extends the meeting calendar in 2.5.
 - **Built in:** CrewCraft Light, CrewCraft Dark, High contrast, and following the operating system.
 - **Choices.** Each person picks a theme and a density; an administrator sets the organization's default theme, an
   accent colour, and the logo and name in the title bar.
-- **Theme packages** install like plugins (signed, approved by an administrator) and can be previewed before use.
-- **Accessible by rule.** Every theme passes WCAG 2.2 AA contrast for text and controls; the theme validator refuses one
-  that does not, and tests draw the main screens in every built-in theme.
+- **Theme addons.** An organization can add its own themes without changing CrewCraft. A theme addon is one theme file
+  (crate `crewcraft-theme`): its name, version and author, a light palette, an optional dark palette, type and shape.
+  An administrator installs it on the server, from the admin console or by placing the file in the server's themes
+  folder, chooses who may use it (everyone or listed groups) and may make it the organization's default. The server
+  hands the file to clients over the certificate-gated entrance together with its SHA-256, and a client applies only
+  a file whose hash matches. An addon never leaves the server it was installed on, so a theme an organization keeps
+  private stays private. Removing an addon moves its users back to the default theme. Previews work before use.
+- **Strict format.** Unknown sections or keys, duplicate keys, missing required colours and files over 64 KiB are
+  refused with the line number, so a typo is never silently ignored.
+- **Accessible by rule.** Every theme passes WCAG 2.2 AA contrast for text (4.5:1) and controls (3:1); the theme
+  validator refuses one that does not, and tests draw the main screens in every built-in theme. Presence and status are
+  shown by icon shape as well as colour, so a theme's presence colours are not contrast-checked.
 - **Appearance only.** Themes never change layout or workflow (2.20), so help and training apply to every theme.
 
 ### 2.20 Layout
@@ -439,6 +448,40 @@ Extends the meeting calendar in 2.5.
 - **Phones** replace the app bar with a bottom tab bar (2.9) and show one pane at a time with back navigation.
 - **Keyboard and accessibility.** Every main action has a keyboard shortcut, listed in a shortcuts dialog, and every
   screen works with a keyboard and a screen reader.
+
+### 2.21 Updates
+
+Updates flow in one direction: the server updates itself from a signed release, and the clients then update from the
+server they belong to. Nothing on an end user's device reaches out to the internet for updates.
+
+- **Releases.** A release is a manifest (product, version, channel, release date, the oldest client version the server
+  still accepts, and every artifact with its platform, size and SHA-256) signed with the project's release key. The
+  server trusts only the public keys in its configuration, refuses an unsigned or wrongly signed manifest, refuses a
+  version older than or equal to the one running (no downgrades through the update path), and refuses an artifact
+  whose size or hash differs.
+- **Server self-update.** The server checks its configured release source on a schedule (default daily) on the chosen
+  channel (stable or beta). Depending on the administrator's choice it installs automatically inside a maintenance
+  window, waits for an administrator to approve, or stays pinned to a version. It downloads and verifies the release,
+  keeps the running version, swaps in the new one, restarts through the operating system's service manager and runs
+  its health check. If the health check fails within a set time (default 5 minutes) it switches back to the previous
+  version and reports why. Database changes follow principle 15: migrations only add, so the previous version still
+  runs after a rollback.
+- **The server carries the clients.** Each server release includes the matching desktop installers and the Android
+  package. The web client is served by the server, so it is always current: an open page is told a new version is
+  ready and reloads when the person agrees, or at once if its version is no longer accepted.
+- **Clients update from their server.** A client reports its version and platform when it connects. When the server
+  holds a newer client for that platform, the client downloads it through the certificate-gated entrance, checks the
+  release signature and the hash, installs it in place keeping the device's identity, settings and credential, and
+  restarts. Desktop clients install without asking unless the person is in a call; the Android app installs its update
+  with the system's confirmation; store installs (Play, App Store) update through their store, and the server still
+  tells them a newer version exists.
+- **Required updates.** A client older than the server's oldest accepted version may sign in only to update. It shows
+  why and offers the update; nothing else works until it is current.
+- **Rollout.** An administrator can release a new client to a pilot group first, then to a percentage of devices, then
+  to everyone, can pause a rollout, and can hold back a version that misbehaves. Which devices fall into a percentage
+  is decided by a stable hash of the release and the device, so a device does not flip in and out.
+- **Visibility.** The admin console shows the server's version, the release it is waiting on and why, the update and
+  rollback history, and how many devices run each client version. Every update, approval, pause and rollback is audited.
 
 ---
 

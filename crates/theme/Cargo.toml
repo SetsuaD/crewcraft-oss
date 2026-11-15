@@ -1,0 +1,15 @@
+[package]
+name = "crewcraft-theme"
+description = "Themes and theme addons: the token format, WCAG contrast rules, built-in themes and addon delivery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+crewcraft-strict-toml.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

@@ -113,6 +113,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "crewcraft-strict-toml"
+version = "0.0.1"
+
+[[package]]
+name = "crewcraft-theme"
+version = "0.0.1"
+dependencies = [
+ "crewcraft-strict-toml",
+ "sha2",
+]
+
+[[package]]
 name = "crewcraft-totp"
 version = "0.0.1"
 dependencies = [
@@ -120,6 +132,14 @@ dependencies = [
  "sha1",
  "sha2",
  "subtle",
+]
+
+[[package]]
+name = "crewcraft-update"
+version = "0.0.1"
+dependencies = [
+ "crewcraft-strict-toml",
+ "sha2",
 ]
 
 [[package]]
