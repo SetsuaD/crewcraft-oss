@@ -1,0 +1,17 @@
+{
+  "id": "T152-signin-codec",
+  "title": "Encode and decode sign-in on an enrolled device connection",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/lib.rs",
+    "crates/proto/src/signin.rs"
+  ],
+  "test_path": "crates/proto/tests/t152_signin_codec.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t152_signin_codec",
+  "depends_on": [
+    "T100-frame-codec",
+    "T110-message-codec"
+  ],
+  "spec": "SignIn is tag 34 followed by big-endian u16 lengths and UTF-8 fields for email (1 to 320 bytes) and password (0 to 1024 bytes), then exactly six ASCII decimal digits. Accepted is tag 163 followed by the canonical 43-byte unpadded base64url encoding of 32 bytes. Refused is tag 164 with no fields and is the only answer type for a well-formed request that fails authentication. Decode exactly one payload, reject unknown tags, out-of-range fields, invalid UTF-8, and trailing bytes. Decoded secrets borrow the frame. Passwords, codes, and tokens must stay out of Debug, including alternate mode. The transport supplies enrolled device identity and verifies credentials independently. No dependencies or framing changes.",
+  "status": "open"
+}
