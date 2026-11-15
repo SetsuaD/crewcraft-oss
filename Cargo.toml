@@ -22,6 +22,7 @@ crewcraft-theme = { path = "crates/theme" }
 crewcraft-update = { path = "crates/update" }
 crewcraft-tls = { path = "crates/tls" }
 crewcraft-pki = { path = "crates/pki" }
+crewcraft-admission = { path = "crates/admission" }
 
 # crypto: audited RustCrypto crates only, never hand-rolled primitives (docs/SECURITY-DESIGN.md)
 hmac = "0.12"

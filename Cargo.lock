@@ -142,6 +142,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "crewcraft-admission"
+version = "0.0.1"
+dependencies = [
+ "crewcraft-pki",
+ "crewcraft-tls",
+ "rcgen",
+ "rustls",
+ "x509-parser",
+]
+
+[[package]]
 name = "crewcraft-client-core"
 version = "0.0.1"
 dependencies = [
