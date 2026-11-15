@@ -154,6 +154,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "crewcraft-bootstrap"
+version = "0.0.1"
+dependencies = [
+ "crewcraft-accounts",
+ "crewcraft-admission",
+ "crewcraft-pki",
+ "crewcraft-proto",
+ "crewcraft-server-core",
+ "crewcraft-tls",
+ "crewcraft-totp",
+ "rand_core",
+ "rcgen",
+ "rustls",
+]
+
+[[package]]
 name = "crewcraft-client-core"
 version = "0.0.1"
 dependencies = [
