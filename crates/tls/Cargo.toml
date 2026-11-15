@@ -1,0 +1,17 @@
+[package]
+name = "crewcraft-tls"
+description = "Mutual TLS for the staff entrance: rustls configuration and a bounded handshake"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rustls.workspace = true
+
+[dev-dependencies]
+rcgen.workspace = true
+
+[lints]
+workspace = true

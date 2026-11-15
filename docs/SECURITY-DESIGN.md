@@ -6,8 +6,8 @@
 ## 1. Principles
 
 - **Dark by default.** The staff entrance (the server's main port) speaks only mutual TLS. A client without an acceptable certificate
-  fails the TLS handshake, so it receives no HTTP response at all: no banner, no login page, no error page, nothing
-  that confirms what is listening.
+  fails the handshake and receives zero application bytes. TLS 1.3 has to send its handshake messages before the
+  client certificate arrives. The server sends no HTTP response, banner or login page on that connection.
 - **Devices are enrolled, people are verified.** A device certificate says "this is an enrolled device of person P";
   the person's email and password and a TOTP code say "person P is present". All of them are required for a session
   (section 8).
