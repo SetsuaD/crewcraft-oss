@@ -1,0 +1,20 @@
+{
+  "id": "T149-own-sign-in",
+  "title": "Verify CrewCraft password and fresh TOTP for an enrolled person",
+  "crate": "crewcraft-accounts",
+  "files": [
+    "Cargo.lock",
+    "crates/accounts/Cargo.toml",
+    "crates/accounts/src/lib.rs",
+    "crates/accounts/src/sign_in.rs"
+  ],
+  "test_path": "crates/accounts/tests/t149_own_sign_in.rs",
+  "test_cmd": "cargo test -p crewcraft-accounts --test t149_own_sign_in",
+  "depends_on": [
+    "T003-totp-verify",
+    "T007-password-hash",
+    "T008-email-identity"
+  ],
+  "spec": "Verify sign-in for the own password source against server-owned active credentials and the email of an enrolled device already authenticated by the caller. The normalized entered email, enrolled email, and account email must agree. Use the existing Argon2id password verifier and TOTP verifier, accepting one time step of skew and refusing any counter at or below the stored counter. Return a single rejection for every failed attempt. Unknown identities still incur the current password work factor using a fixed dummy PHC string. Reject overlong password inputs without hashing the entire input. Only success returns the counter to commit and whether to replace an outdated password hash. Require the caller to serialize or compare the account state and commit the counter before issuing a session. No transport, persistence, response padding, rate limiting, session issuance, or mailbox calls in this task.",
+  "status": "open"
+}
