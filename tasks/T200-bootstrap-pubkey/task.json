@@ -1,0 +1,19 @@
+{
+  "id": "T200-bootstrap-pubkey",
+  "title": "Ed25519 public key of the bootstrap key pair",
+  "crate": "crewcraft-enroll",
+  "files": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates/enroll/Cargo.toml",
+    "crates/enroll/src/lib.rs"
+  ],
+  "test_path": "crates/enroll/tests/t200_bootstrap_pubkey.rs",
+  "test_cmd": "cargo test -p crewcraft-enroll --test t200_bootstrap_pubkey",
+  "depends_on": ["T006-bootstrap-seed"],
+  "spec": "Use ed25519-dalek to derive the RFC 8032 public key from a 32-byte seed. Enable its zeroize feature for the temporary signing key. The enrollment code derives the same key from its HKDF seed on both sides. The invitation store needs only the public key. The RFC test vectors must match exactly.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

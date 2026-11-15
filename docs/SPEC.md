@@ -34,8 +34,8 @@ All new users are onboarded by an **emailed enrollment code**. Nobody signs up; 
 2. The person installs a client (D2, D4 or D5), opens the link or types the server address and code.
 3. The client does all certificate work itself: it derives the **bootstrap key** from the code, connects with it
    (the server recognises it, see SECURITY-DESIGN.md "Dark enrollment"), generates the real **device key** inside the OS
-   key store (never exportable), and sends a certificate signing request. The server's CA signs a device certificate
-   whose subject the server forces from the invitation, never from the request.
+   key store (never exportable), and sends a certificate signing request. The server verifies the request and
+   stages its public key for issuance.
 4. **The person gives their password.** Their email address, from the invitation, is their sign-in identity. With the
    `mailbox` password source they type their mailbox password once and the server checks it at the
    mail server; with the `own` source they set a new one (12 or more characters, Argon2id). SECURITY-DESIGN.md
@@ -43,7 +43,9 @@ All new users are onboarded by an **emailed enrollment code**. Nobody signs up; 
 5. **TOTP 2FA is mandatory and set up in the same flow**: the server issues a TOTP secret, the client shows it as a QR
    code (`otpauth://` URI) for any authenticator app, and the account is not activated until the person enters a valid
    code. There is no way to skip it and no setting that turns it off.
-6. The code is burned. Every later sign-in needs **the device certificate, the email and password, AND a TOTP code** (at session start; sessions
+6. The server uses the invitation's identity to issue the device certificate. It saves the device and account,
+   consumes the code, and records the accepted TOTP counter in one commit before returning the device chain.
+   Every later sign-in needs **the device certificate, the email and password, AND a TOTP code** (at session start; sessions
    re-ask after a configurable period, default 14 days, and immediately after a new device enrolls).
 
 Adding a second device is the same flow with a new code, which an administrator issues or the person requests from an
@@ -53,9 +55,9 @@ already-enrolled device (approved with a TOTP code).
 
 CrewCraft implements REQUIREMENTS.md sections 2.1 to 2.7 and 2.9 to 2.21 as written, with these decisions:
 
-> **Implementation status (early development).** Deleting a message currently appends a deletion event while the
-> original body stays in the room log, so a sync from an older cursor still returns it. Clearing the body in place
-> (delete means redaction) is required before the server accepts network connections (ROADMAP M2).
+> **Implementation status (early development).** Sync preserves cursor order and sends the deletion event without the
+> redacted bodies or mentions, including after a journal reopen. The append-only journal still retains the recorded
+> operations. Storage redaction remains open for ROADMAP M2.
 
 - **Accounts.** CrewCraft is standalone: it has its own account store (email, TOTP, devices) because a public product
   cannot depend on any one organization's identity system. The password is the person's mailbox password, checked at

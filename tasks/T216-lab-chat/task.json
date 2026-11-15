@@ -1,0 +1,24 @@
+{
+  "id": "T216-lab-chat",
+  "title": "Exchange and replay chat through the certified loopback listener",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/Cargo.toml",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t216_lab_chat.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t216_lab_chat",
+  "depends_on": [
+    "T146-durable-session",
+    "T148-device-bound-session",
+    "T149-own-sign-in",
+    "T201-totp-guard",
+    "T210-mtls-transport",
+    "T212-lab-listener",
+    "T213-stream-frames",
+    "T214-device-session",
+    "T215-chat-session"
+  ],
+  "spec": "Generate a synthetic authority and two device certificates in a test. Use the real admission verifier, loopback listener, absolute stream deadlines, and sign-in and chat sessions to refuse a certless peer with zero application bytes and refuse an enrolled device that claims a different account. Both correctly signed-in clients post and receive messages with preserved authors and cursors. Close the listener, reopen the same message journal, and assert a freshly signed-in client can sync both messages. Keep all account and certificate fixture logic in the test. Fixture state may stay in memory across the journal restart.",
+  "status": "open"
+}

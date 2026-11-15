@@ -9,6 +9,16 @@ publish.workspace = true
 
 [dependencies]
 crewcraft-client-core.workspace = true
+crewcraft-enroll.workspace = true
+crewcraft-proto.workspace = true
+crewcraft-tls.workspace = true
+rustls.workspace = true
+x509-parser = { workspace = true, features = ["verify"] }
+
+[dev-dependencies]
+crewcraft-pki.workspace = true
+crewcraft-totp.workspace = true
+rcgen.workspace = true
 
 [lints]
 workspace = true
