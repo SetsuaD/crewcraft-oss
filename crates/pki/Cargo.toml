@@ -1,0 +1,23 @@
+[package]
+name = "crewcraft-pki"
+description = "The server's certificate authority: server and device certificates from validated requests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rcgen.workspace = true
+rustls-pki-types.workspace = true
+time.workspace = true
+x509-parser.workspace = true
+rand_core.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+crewcraft-tls.workspace = true
+rustls.workspace = true
+
+[lints]
+workspace = true
