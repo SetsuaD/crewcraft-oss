@@ -23,6 +23,9 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::server::{NoServerSessionStorage, VerifierBuilderError, WebPkiClientVerifier};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 
+mod deadline;
+pub use deadline::DeadlineSocket;
+
 /// A certificate chain (leaf first) and the private key of its leaf.
 pub type Identity = (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>);
 
@@ -126,7 +129,7 @@ fn socket_error(e: io::Error) -> TlsError {
 
 /// Run the server handshake on `tcp` within `deadline`. On any failure the error is returned and nothing further is
 /// written; the caller drops the socket. On success the peer has proven possession of a certificate that chains to
-/// the configured client roots. The returned socket has no timeout until the caller sets its application deadline.
+/// the configured client roots. Wrap the returned socket in a [`DeadlineSocket`] for an absolute application deadline.
 pub fn accept(mut tcp: TcpStream, config: Arc<ServerConfig>, deadline: Duration) -> Result<Accepted, TlsError> {
     let started = Instant::now();
     let mut conn = ServerConnection::new(config).map_err(TlsError::Config)?;
