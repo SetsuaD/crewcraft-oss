@@ -15,6 +15,7 @@ crewcraft-proto.workspace = true
 crewcraft-server-core.workspace = true
 crewcraft-totp.workspace = true
 rand_core.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 crewcraft-tls.workspace = true
