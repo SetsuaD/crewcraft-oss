@@ -50,15 +50,15 @@ fn run(args: &[OsString]) -> io::Result<()> {
         }
         [lab, room, state, root, owner, name] if lab == "lab" && room == "room" => {
             let mut lab = lab_admin::reopen(Path::new(state), root_fingerprint(Path::new(root))?, now_ms()).map_err(lab_error)?;
-            let owner = enrolled_email(&lab.accounts, owner)?;
+            let owner = lab_email(owner)?;
             let name = text_arg(name)?;
             let slug = lab.rooms.create_room(&owner, name).map_err(lab_error)?;
             println!("Room {slug}");
         }
         [lab, add, state, root, room, owner, member] if lab == "lab" && add == "add-member" => {
             let mut lab = lab_admin::reopen(Path::new(state), root_fingerprint(Path::new(root))?, now_ms()).map_err(lab_error)?;
-            let owner = enrolled_email(&lab.accounts, owner)?;
-            let member = enrolled_email(&lab.accounts, member)?;
+            let owner = lab_email(owner)?;
+            let member = lab_email(member)?;
             lab.rooms.add_member(text_arg(room)?, &owner, &member, Role::Member).map_err(lab_error)?;
             println!("Member added.");
         }
@@ -120,12 +120,8 @@ fn text_arg(value: &OsString) -> io::Result<&str> {
     value.to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid text argument"))
 }
 
-fn enrolled_email(accounts: &crewcraft_server_core::account_store::AccountStore, input: &OsString) -> io::Result<String> {
-    let email = normalize_email(text_arg(input)?).map_err(lab_error)?;
-    if accounts.person(&email).is_none() {
-        return Err(io::Error::new(io::ErrorKind::NotFound, "the lab account must be enrolled first"));
-    }
-    Ok(email)
+fn lab_email(input: &OsString) -> io::Result<String> {
+    normalize_email(text_arg(input)?).map_err(lab_error)
 }
 
 fn root_fingerprint(path: &Path) -> io::Result<[u8; 32]> {

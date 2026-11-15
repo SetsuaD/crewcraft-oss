@@ -42,6 +42,18 @@ fn installed_server_command_binds_only_loopback_and_keeps_original_version_outpu
     let init = Command::new(executable).args(["lab", "init"]).arg(&data).output().unwrap();
     assert!(init.status.success());
     assert!(root.is_file());
+    let room = Command::new(executable).args(["lab", "room"]).arg(&data).arg(&root).args(["pilot@example.org", "Pilot"]).output().unwrap();
+    assert!(room.status.success());
+    let output = String::from_utf8(room.stdout).unwrap();
+    let slug = output.trim_end().strip_prefix("Room ").unwrap();
+    let membership = Command::new(executable)
+        .args(["lab", "add-member"])
+        .arg(&data)
+        .arg(&root)
+        .args([slug, "pilot@example.org", "peer@example.org"])
+        .output()
+        .unwrap();
+    assert!(membership.status.success());
     let child = Command::new(executable).args(["lab", "serve"]).arg(&data).arg(&root).arg("0").stdout(Stdio::piped()).spawn().unwrap();
     let mut child = ChildGuard(child);
     let stdout = child.0.stdout.take().unwrap();
