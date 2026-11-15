@@ -145,12 +145,12 @@ fn confirm_setup(setup: TotpSetup<'_>, deadline: Instant) -> Option<FirstTotpCod
 
 fn chat_loop(device: &LabDevice<'_>, email: &str, room: &str) -> io::Result<()> {
     let mut session = None;
-    println!("Type signin, post followed by a message, sync, or quit.");
+    println!("Type signin to connect.");
     loop {
         print!("crewcraft> ");
         io::stdout().flush()?;
         let mut line = String::new();
-        let read = io::stdin().lock().take((MAX_BODY + 16) as u64).read_line(&mut line)?;
+        let read = io::stdin().lock().take((MAX_BODY + 32) as u64).read_line(&mut line)?;
         if read == 0 || line.trim_end() == "quit" {
             return Ok(());
         }
@@ -166,6 +166,7 @@ fn chat_loop(device: &LabDevice<'_>, email: &str, room: &str) -> io::Result<()> 
                 Ok(open) => {
                     session = Some(open);
                     println!("Signed in.");
+                    println!("Commands: post <message>, edit <cursor> <message>, delete <cursor>, sync, quit.");
                 }
                 Err(error) => eprintln!("Sign-in failed ({error:?}). Try a fresh code."),
             }
@@ -174,6 +175,26 @@ fn chat_loop(device: &LabDevice<'_>, email: &str, room: &str) -> io::Result<()> 
                 match active.post(room, message) {
                     Ok(cursor) => println!("Sent at {cursor}."),
                     Err(error) => eprintln!("Post failed ({error:?})."),
+                }
+            } else if let Some(arguments) = command.strip_prefix("edit ") {
+                if let Some((cursor, message)) = arguments.split_once(' ')
+                    && let Ok(target @ 1..) = cursor.parse::<u64>()
+                {
+                    match active.edit(room, target, message) {
+                        Ok(cursor) => println!("Edited {target} at {cursor}."),
+                        Err(error) => eprintln!("Edit failed ({error:?})."),
+                    }
+                } else {
+                    eprintln!("Use edit <cursor> <message>.");
+                }
+            } else if let Some(cursor) = command.strip_prefix("delete ") {
+                if let Ok(target @ 1..) = cursor.parse::<u64>() {
+                    match active.delete(room, target) {
+                        Ok(cursor) => println!("Deleted {target} at {cursor}."),
+                        Err(error) => eprintln!("Delete failed ({error:?})."),
+                    }
+                } else {
+                    eprintln!("Use delete <cursor>.");
                 }
             } else if command == "sync" {
                 match active.sync(room) {
@@ -188,7 +209,7 @@ fn chat_loop(device: &LabDevice<'_>, email: &str, room: &str) -> io::Result<()> 
                     Err(error) => eprintln!("Sync failed ({error:?})."),
                 }
             } else {
-                println!("Type post followed by a message, sync, signin, or quit.");
+                println!("Commands: post <message>, edit <cursor> <message>, delete <cursor>, sync, signin, quit.");
             }
         } else {
             println!("Type signin to connect.");

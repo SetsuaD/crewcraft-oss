@@ -48,6 +48,7 @@ const BOB: &str = "bob@example.org";
 const ALICE_SECRET: [u8; 20] = [31; 20];
 const BOB_SECRET: [u8; 20] = [37; 20];
 const DELETED_BODY: &str = "synthetic message for the redaction test";
+const DELETED_EDIT: &str = "synthetic revised text for the redaction test";
 
 struct TestDirectory(PathBuf);
 
@@ -305,6 +306,16 @@ fn both_clients_enroll_and_chat_then_reopen_every_server_store_and_replay() {
     assert_eq!(deleted, 4);
     assert_eq!(client_b.sync(&room, false, first_sign_in, 0, cutoff()), Ok(deleted));
     assert_eq!(client_b.view(&room).unwrap().shown().last(), Some(&line(deleted, ALICE, DELETED_BODY)));
+    assert_eq!(client_a.edit(&room, deleted, DELETED_EDIT, first_sign_in, 0, cutoff()), Ok(5));
+    assert_eq!(client_b.sync(&room, false, first_sign_in, 0, cutoff()), Ok(5));
+    let revised = Shown::Line(Line { cursor: deleted, author: ALICE.into(), html: DELETED_EDIT.into(), edited: true });
+    assert_eq!(client_b.view(&room).unwrap().shown().last(), Some(&revised));
+    assert!(matches!(client_b.delete(&room, deleted, first_sign_in, 0, cutoff()), Err(ChatError::Rejected(_))));
+    assert_eq!(client_b.sync(&room, false, first_sign_in, 0, cutoff()), Ok(5));
+    assert_eq!(client_b.view(&room).unwrap().shown().last(), Some(&revised));
+    assert_eq!(client_a.delete(&room, deleted, first_sign_in, 0, cutoff()), Ok(6));
+    assert_eq!(client_b.sync(&room, false, first_sign_in, 0, cutoff()), Ok(6));
+    assert_eq!(client_b.view(&room).unwrap().shown(), expected);
     drop(client_a);
     drop(client_b);
     first.stop();
@@ -318,7 +329,6 @@ fn both_clients_enroll_and_chat_then_reopen_every_server_store_and_replay() {
     let devices = state.accounts.devices_of(ALICE);
     assert_eq!(devices.len(), 1);
     assert_eq!(state.accounts.devices_of(BOB).len(), 1);
-    assert_eq!(state.rooms.delete(&room, ALICE, deleted), Ok(5));
     assert!(state.accounts.revoke_device(ALICE, devices[0].id).unwrap());
     drop(state);
 
@@ -335,13 +345,15 @@ fn both_clients_enroll_and_chat_then_reopen_every_server_store_and_replay() {
     let mut replay = chat(stream, |probe, deadline| set_deadline(&mut probe.stream, deadline), &bob, &bob.code_at(fresh)).unwrap();
     // Start observing after sign-in so the probe retains only room-sync application bytes.
     *received.borrow_mut() = Some(Vec::new());
-    assert_eq!(replay.sync(&room, false, fresh, 0, cutoff()), Ok(5));
+    assert_eq!(replay.sync(&room, false, fresh, 0, cutoff()), Ok(6));
     let room_view = replay.view(&room).unwrap();
-    assert_eq!(room_view.cursor(), 5);
+    assert_eq!(room_view.cursor(), 6);
     assert_eq!(room_view.shown(), expected);
     drop(replay);
     let wire = received.into_inner().unwrap();
     assert!(!wire.is_empty());
-    assert!(!wire.windows(DELETED_BODY.len()).any(|part| part == DELETED_BODY.as_bytes()));
+    for redacted in [DELETED_BODY, DELETED_EDIT] {
+        assert!(!wire.windows(redacted.len()).any(|part| part == redacted.as_bytes()));
+    }
     second.stop();
 }
