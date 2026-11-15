@@ -57,9 +57,7 @@ impl Sessions {
         if !matches_identity(session) {
             return None;
         }
-        if now_ms.saturating_sub(session.last_seen_ms) < IDLE_MS
-            && now_ms.saturating_sub(session.created_ms) < ABSOLUTE_MS
-        {
+        if now_ms.saturating_sub(session.last_seen_ms) < IDLE_MS && now_ms.saturating_sub(session.created_ms) < ABSOLUTE_MS {
             session.last_seen_ms = now_ms;
             return Some(session.clone());
         }
