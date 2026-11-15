@@ -213,18 +213,30 @@ fn poison_closes_waiting_and_open_sessions() {
 }
 
 #[test]
-fn protocol_error_in_a_coalesced_request_closes_without_a_welcome() {
+fn a_fatal_request_suppresses_replies_and_keeps_earlier_journaled_posts() {
     let path = journal_path("protocol");
-    let mut server = DurableServer::open(&path).unwrap();
-    let mut session = Session::new("alice", server_side());
-    let mut input = framed_hello(1, 3);
-    input.extend(encode(&[99, 0, 0, 0, 40]).unwrap());
+    let room;
+    {
+        let mut server = DurableServer::open(&path).unwrap();
+        room = server.create_room("alice", "General").unwrap();
+        let mut session = Session::new("alice", server_side());
+        let mut input = framed_hello(1, 3);
+        input.extend(framed_request(39, &Request::Post { room: room.clone(), text: "check history after reconnecting".into() }));
+        input.extend(encode(&[99, 0, 0, 0, 40]).unwrap());
 
-    let result = session.receive_durable(&mut server, &input, 0);
-    let expected = SessionError::Conn(ConnError::Request(CodecError::BadKind(99)));
-    assert!(matches!(result, Err(DurableSessionError::Protocol(error)) if error == expected));
-    assert_eq!(session.phase(), Phase::Closed);
+        let result = session.receive_durable(&mut server, &input, 0);
+        let expected = SessionError::Conn(ConnError::Request(CodecError::BadKind(99)));
+        assert!(matches!(result, Err(DurableSessionError::Protocol(error)) if error == expected));
+        assert_eq!(session.phase(), Phase::Closed);
+    }
 
-    drop(server);
+    {
+        let mut server = DurableServer::open(&path).unwrap();
+        let (mut client, mut session) = connect(&mut server, "alice", &room);
+        exchange(&mut client, &mut session, &mut server, Request::Sync { room: room.clone(), cursor: 0 }, 1);
+        let saved = Shown::Line(Line { cursor: 1, author: "alice".into(), html: "check history after reconnecting".into(), edited: false });
+        assert_timeline(&mut client, &room, 1, &[saved]);
+    }
+
     fs::remove_file(path).unwrap();
 }
