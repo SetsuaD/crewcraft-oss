@@ -81,8 +81,9 @@ impl Session {
     }
 
     /// Feed bytes from an authenticated client using the persistent journal.
-    /// Storage errors close the session and suppress all bytes from this call,
-    /// including the Welcome if the same call contained a request.
+    /// A fatal error closes the session and suppresses all bytes from this call,
+    /// including a buffered Welcome. Earlier journaled mutations remain committed.
+    /// Reconcile with the room history before retrying an unacknowledged mutation.
     pub fn receive_durable(&mut self, server: &mut DurableServer, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, DurableSessionError> {
         if self.phase != Phase::Closed
             && let Err(error) = server.check_alive()
