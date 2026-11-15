@@ -10,7 +10,7 @@
   "test_cmd": "cargo test -p crewcraft-server-core --test t203_cert_policy",
   "depends_on": ["T103-invites", "T127-devices"],
   "spec": "Classify a verified certificate identity. An issuing-CA fingerprint registered to a live device selects device sign-in and records the sighting. A verified self-signed Ed25519 key selects the bootstrap path only while a matching invitation is live. No other identity grants entry. No new dependencies.",
-  "status": "open",
+  "status": "done",
   "context": [
     "crates/server-core/src/devices.rs",
     "crates/server-core/src/invites.rs",
