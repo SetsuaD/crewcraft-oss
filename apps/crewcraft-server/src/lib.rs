@@ -3,6 +3,7 @@
 pub mod device_session;
 pub mod issuer_custody;
 pub mod lab_installation;
+pub mod lab_runtime;
 pub mod lab_server;
 pub mod lab_state;
 pub mod listener;
