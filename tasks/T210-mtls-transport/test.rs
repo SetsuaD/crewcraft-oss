@@ -10,9 +10,9 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crewcraft_tls::{Accepted, Identity, TlsError, accept, client_config, connect, server_config};
+use crewcraft_tls::{Accepted, DeadlineSocket, Identity, TlsError, accept, client_config, connect, server_config};
 use rcgen::{BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, KeyUsagePurpose};
-use rustls::RootCertStore;
+use rustls::{RootCertStore, StreamOwned};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
 
 const HANDSHAKE: Duration = Duration::from_secs(3);
@@ -117,8 +117,10 @@ fn an_enrolled_client_completes_mutual_tls_and_exchanges_bytes() {
     let client_id = client_identity("alice device", Some(&ca));
     let leaf = client_id.0[0].as_ref().to_vec();
     let config = client_config(roots(&ca), Some(client_id)).unwrap();
-    let mut stream = connect(tcp(server.addr), config, ServerName::try_from("localhost").unwrap()).unwrap();
+    let stream = connect(tcp(server.addr), config, ServerName::try_from("localhost").unwrap()).unwrap();
+    let mut stream = StreamOwned::new(stream.conn, DeadlineSocket::new(stream.sock, Instant::now() + HANDSHAKE));
     stream.write_all(b"ping").unwrap();
+    stream.sock.set_deadline(Instant::now() + IO);
     let mut pong = [0u8; 4];
     stream.read_exact(&mut pong).unwrap();
     assert_eq!(&pong, b"pong");
@@ -126,6 +128,48 @@ fn an_enrolled_client_completes_mutual_tls_and_exchanges_bytes() {
     assert_eq!(ping, b"ping");
     // The server learns exactly which certificate the client presented.
     assert_eq!(accepted.client_certificate, leaf);
+}
+
+#[test]
+fn fragmented_reads_share_one_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut peer = tcp(listener.local_addr().unwrap());
+    let (socket, _) = listener.accept().unwrap();
+    let start = Instant::now();
+    let mut stream = DeadlineSocket::new(socket, start + Duration::from_millis(700));
+    peer.write_all(b"a").unwrap();
+    let writer = thread::spawn(move || {
+        thread::sleep((start + Duration::from_millis(400)).saturating_duration_since(Instant::now()));
+        peer.write_all(b"b").unwrap();
+        thread::sleep((start + Duration::from_millis(950)).saturating_duration_since(Instant::now()));
+        peer.write_all(b"c").unwrap();
+    });
+
+    // Each gap is shorter than the initial timeout. Resetting that timeout on each read would allow the full frame.
+    let mut frame = [0; 3];
+    let result = stream.read_exact(&mut frame);
+    writer.join().unwrap();
+    let error = result.unwrap_err();
+    assert!(matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock), "{error:?}");
+}
+
+#[test]
+fn reset_reopens_io_for_the_next_frame() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut peer = tcp(listener.local_addr().unwrap());
+    let (socket, _) = listener.accept().unwrap();
+    let mut stream = DeadlineSocket::new(socket, Instant::now());
+    peer.write_all(b"ping").unwrap();
+    let mut frame = [0; 4];
+    assert_eq!(stream.read(&mut frame).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    assert_eq!(stream.write(b"late").unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+
+    stream.set_deadline(Instant::now() + IO);
+    stream.read_exact(&mut frame).unwrap();
+    assert_eq!(&frame, b"ping");
+    stream.write_all(b"pong").unwrap();
+    peer.read_exact(&mut frame).unwrap();
+    assert_eq!(&frame, b"pong");
 }
 
 #[test]

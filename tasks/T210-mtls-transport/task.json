@@ -6,6 +6,7 @@
     "Cargo.lock",
     "Cargo.toml",
     "crates/tls/Cargo.toml",
+    "crates/tls/src/deadline.rs",
     "crates/tls/src/lib.rs",
     "docs/NON-RUST-DEPENDENCIES.md",
     "docs/SECURITY-DESIGN.md"
@@ -13,6 +14,6 @@
   "test_path": "crates/tls/tests/t210_mtls_transport.rs",
   "test_cmd": "cargo test -p crewcraft-tls --test t210_mtls_transport",
   "depends_on": [],
-  "spec": "Drive mutual TLS 1.3 with an overall handshake deadline and disable early data and resumption. A synthetic CA-signed client exchanges bytes on loopback, and the server sees its exact leaf. Plain HTTP receives zero bytes. Missing, self-signed and other-CA client certificates receive zero application bytes and the handshake is refused. The client refuses a server certificate from an untrusted CA or for the wrong server name. Use rustls with ring and record the native helper in the dependency register. This is a transport fixture for recognized CA chains. Enrollment-specific trust, revocation and application sign-in belong to later tasks.",
-  "status": "done"
+  "spec": "Drive mutual TLS 1.3 with an overall handshake deadline and disable early data and resumption. A synthetic CA-signed client exchanges bytes on loopback, and the server sees its exact leaf. Plain HTTP receives zero bytes. Missing, self-signed and other-CA client certificates receive zero application bytes and the handshake is refused. The client refuses a server certificate from an untrusted CA or for the wrong server name. Provide a blocking TCP transport that applies an absolute application deadline before every network read and write, so partial input cannot extend the cutoff. Callers can set a new deadline for the next frame. Use rustls with ring and record the native helper in the dependency register. This is a transport fixture for recognized CA chains. Enrollment-specific trust, revocation and application sign-in belong to later tasks.",
+  "status": "open"
 }
