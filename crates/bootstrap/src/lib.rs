@@ -9,7 +9,8 @@
 //!
 //! The order is the point:
 //! 1. `Redeem` re-checks that the invitation is live, takes the cheap checks, then `Staging::begin` (the per-source and
-//!    server-wide limits) and only then the Argon2 password hash. It answers `Setup` with the authenticator URI and
+//!    server-wide limits) and only then the Argon2 password hash. The hash can run with no lock held: `receive_step` stops
+//!    at `NeedsHash` and `finish_hash` resumes (`receive_shared` is that loop for a shared enroller). It answers `Setup` with the authenticator URI and
 //!    NOTHING ELSE: no certificate exists yet.
 //! 2. `ConfirmTotp` must arrive on the same connection and the same staged attempt. The invitation is re-checked against
 //!    the store immediately before it is used. After the code is accepted, the leaf is built with the device id the store
@@ -35,8 +36,8 @@ mod store;
 pub use admission::DurableAdmission;
 pub use store::{Environment, StoreServices, SystemEnvironment, classify};
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crewcraft_accounts::password;
 use crewcraft_pki::{Authority, Claims, csr_key_id};
@@ -222,13 +223,23 @@ struct Staged {
     password_phc: String,
 }
 
+/// A Redeem that passed the limits and is waiting for the password hash, which the caller computes with no lock held.
+struct Awaiting {
+    attempt: u64,
+    csr: Vec<u8>,
+    request_id: u32,
+    totp_uri: String,
+}
+
 enum State {
     Start,
+    AwaitingHash(Box<Awaiting>),
     Staged(Box<Staged>),
     Done,
 }
 
 enum Step {
+    NeedsHash(String),
     Reply(Vec<u8>),
     ReplyAndClose(Vec<u8>),
     Close,
@@ -244,6 +255,68 @@ fn error_open(id: u32, code: u16) -> Step {
 
 fn error_close(id: u32, code: u16) -> Step {
     frame(id, BootstrapResponse::Error { code }).map_or(Step::Close, Step::ReplyAndClose)
+}
+
+/// The password to hash. Compute the Argon2id PHC string WITHOUT holding any lock, then give it to `finish_hash`.
+pub struct HashJob {
+    password: String,
+}
+
+impl HashJob {
+    pub fn password(&self) -> &str {
+        &self.password
+    }
+}
+
+impl std::fmt::Debug for HashJob {
+    // The password is never printed.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HashJob(..)")
+    }
+}
+
+/// Where `receive_step` and `finish_hash` stopped.
+#[derive(Debug)]
+pub enum Progress {
+    /// Everything buffered so far is handled.
+    Done(Output),
+    /// A Redeem passed its limits and is staged; `bytes` are the replies produced before it. Hash `job` (no lock held) and
+    /// call `finish_hash`. Frames that arrived after the Redeem wait until then.
+    NeedsHash { bytes: Vec<u8>, job: HashJob },
+}
+
+/// The pattern for a listener: lock the shared enroller only for each short step, and hash the password with NO lock held.
+/// `hasher` turns a password into an Argon2id PHC string (`None` on failure). Socket I/O stays outside, as before.
+pub fn receive_shared<S: Services>(
+    conn: &mut BootstrapConnection,
+    enroller: &Mutex<Enroller<S>>,
+    hasher: &dyn Fn(&str) -> Option<String>,
+    input: &[u8],
+) -> Output {
+    let mut bytes = Vec::new();
+    let Ok(mut guard) = enroller.lock() else {
+        conn.closed = true;
+        return Output { bytes, open: false };
+    };
+    let mut progress = conn.receive_step(&mut guard, input);
+    drop(guard);
+    loop {
+        match progress {
+            Progress::Done(out) => {
+                bytes.extend(out.bytes);
+                return Output { bytes, open: out.open };
+            }
+            Progress::NeedsHash { bytes: before, job } => {
+                bytes.extend(before);
+                let phc = hasher(job.password());
+                let Ok(mut guard) = enroller.lock() else {
+                    conn.closed = true;
+                    return Output { bytes, open: false };
+                };
+                progress = conn.finish_hash(&mut guard, job, phc);
+            }
+        }
+    }
 }
 
 /// One bootstrap connection, from its first admitted byte.
@@ -274,14 +347,69 @@ impl BootstrapConnection {
     }
 
     /// Take bytes from the peer and return what to send back. After `open: false` write the bytes and drop the
-    /// connection; later calls return nothing.
+    /// connection; later calls return nothing. This hashes the password with `Services::hash_password` while the caller
+    /// holds the `Enroller`; a listener that shares the enroller between connections should use `receive_shared`.
     pub fn receive<S: Services>(&mut self, enroller: &mut Enroller<S>, input: &[u8]) -> Output {
         let mut bytes = Vec::new();
+        let mut progress = self.receive_step(enroller, input);
+        loop {
+            match progress {
+                Progress::Done(out) => {
+                    bytes.extend(out.bytes);
+                    return Output { bytes, open: out.open };
+                }
+                Progress::NeedsHash { bytes: before, job } => {
+                    bytes.extend(before);
+                    let phc = enroller.services.hash_password(job.password());
+                    progress = self.finish_hash(enroller, job, phc);
+                }
+            }
+        }
+    }
+
+    /// Like `receive`, but stops at the password hash instead of computing it, so the caller can release the lock first.
+    /// The limits and the staging have already happened when it stops: a rate-limited Redeem never asks for a hash.
+    pub fn receive_step<S: Services>(&mut self, enroller: &mut Enroller<S>, input: &[u8]) -> Progress {
         if self.closed || enroller.is_poisoned() {
             self.closed = true;
-            return Output { bytes, open: false };
+            return Progress::Done(Output { bytes: Vec::new(), open: false });
         }
         self.decoder.push(input);
+        self.drive(enroller, Vec::new())
+    }
+
+    /// Resume after `NeedsHash` with the PHC string for the job's password (`None` if hashing failed). Re-checks the
+    /// enroller (it may have been poisoned while the lock was released), answers the pending Redeem with Setup, and goes on
+    /// with any frames that arrived meanwhile.
+    pub fn finish_hash<S: Services>(&mut self, enroller: &mut Enroller<S>, job: HashJob, phc: Option<String>) -> Progress {
+        drop(job);
+        let State::AwaitingHash(awaiting) = std::mem::replace(&mut self.state, State::Done) else {
+            self.closed = true;
+            return Progress::Done(Output { bytes: Vec::new(), open: false });
+        };
+        if self.closed || enroller.is_poisoned() {
+            self.closed = true;
+            return Progress::Done(Output { bytes: Vec::new(), open: false });
+        }
+        let Some(password_phc) = phc else {
+            self.closed = true;
+            let bytes = frame(awaiting.request_id, BootstrapResponse::Error { code: ERR_UNAVAILABLE }).unwrap_or_default();
+            return Progress::Done(Output { bytes, open: false });
+        };
+        let Awaiting { attempt, csr, request_id, totp_uri } = *awaiting;
+        let Some(reply) = frame(request_id, BootstrapResponse::Setup { totp_uri }) else {
+            self.closed = true;
+            return Progress::Done(Output { bytes: Vec::new(), open: false });
+        };
+        self.state = State::Staged(Box::new(Staged { attempt, csr, password_phc }));
+        self.drive(enroller, reply)
+    }
+
+    fn drive<S: Services>(&mut self, enroller: &mut Enroller<S>, mut bytes: Vec<u8>) -> Progress {
+        if matches!(self.state, State::AwaitingHash(_)) {
+            // Frames wait until the hash is supplied.
+            return Progress::Done(Output { bytes, open: !self.closed });
+        }
         loop {
             let payload = match self.decoder.next_frame() {
                 Ok(Some(payload)) => payload,
@@ -298,13 +426,14 @@ impl BootstrapConnection {
                     self.closed = true;
                     break;
                 }
+                Step::NeedsHash(password) => return Progress::NeedsHash { bytes, job: HashJob { password } },
                 Step::Close => {
                     self.closed = true;
                     break;
                 }
             }
         }
-        Output { bytes, open: !self.closed }
+        Progress::Done(Output { bytes, open: !self.closed })
     }
 
     fn handle<S: Services>(&mut self, enroller: &mut Enroller<S>, payload: &[u8]) -> Step {
@@ -345,12 +474,10 @@ impl BootstrapConnection {
             Err(StageError::RateLimited) => return error_close(id, ERR_RATE_LIMITED),
             Err(_) => return error_close(id, ERR_UNAVAILABLE),
         };
-        let Some(password_phc) = e.services.hash_password(password) else {
-            self.state = State::Start;
-            return error_close(id, ERR_UNAVAILABLE);
-        };
-        self.state = State::Staged(Box::new(Staged { attempt: begun.attempt, csr, password_phc }));
-        frame(id, BootstrapResponse::Setup { totp_uri: begun.otpauth_uri }).map_or(Step::Close, Step::Reply)
+        // The limits are taken and the setup is staged. The hash is the caller's to compute, so it can run with no lock held;
+        // `finish_hash` answers the Redeem.
+        self.state = State::AwaitingHash(Box::new(Awaiting { attempt: begun.attempt, csr, request_id: id, totp_uri: begun.otpauth_uri }));
+        Step::NeedsHash(password.to_string())
     }
 
     fn confirm<S: Services>(&mut self, e: &mut Enroller<S>, id: u32, code: &str) -> Step {

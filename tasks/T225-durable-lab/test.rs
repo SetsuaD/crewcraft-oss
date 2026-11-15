@@ -8,8 +8,8 @@ use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -108,12 +108,8 @@ impl Person {
         let key = KeyPair::generate().unwrap();
         let csr = CertificateParams::new(Vec::<String>::new()).unwrap().serialize_request(&key).unwrap();
         let expected_spki = key.subject_public_key_info();
-        let request = || EnrollmentRequest {
-            device_name: "Synthetic Test Device",
-            csr: csr.der().as_ref(),
-            password: PASSWORD,
-            expected_spki: &expected_spki,
-        };
+        let request =
+            || EnrollmentRequest { device_name: "Synthetic Test Device", csr: csr.der().as_ref(), password: PASSWORD, expected_spki: &expected_spki };
         let chain = endpoint
             .open(&self.invitation, WAIT)
             .unwrap()

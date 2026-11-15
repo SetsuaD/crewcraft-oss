@@ -3,7 +3,8 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use crewcraft_bootstrap::{BootstrapConnection, Enroller, Environment, StoreServices};
+use crewcraft_accounts::password;
+use crewcraft_bootstrap::{BootstrapConnection, Enroller, Environment, StoreServices, receive_shared};
 use crewcraft_pki::Authority;
 use crewcraft_proto::bootstrap::{MAX_CSR, MAX_DEVICE_NAME, MAX_PASSWORD};
 use crewcraft_proto::frame::read_frame;
@@ -24,10 +25,7 @@ pub fn bootstrap_handler(
         // Every peer on the lab listener comes from the IPv4 loopback address.
         let mut connection = BootstrapConnection::new(key, "127.0.0.1");
         while let Ok(Some(frame)) = read_frame(stream, MAX_BOOTSTRAP_REQUEST) {
-            let reply = {
-                let Ok(mut handler) = handler.lock() else { return };
-                connection.receive(&mut handler, frame.as_bytes())
-            };
+            let reply = receive_shared(&mut connection, &handler, &|secret| password::hash(secret).ok(), frame.as_bytes());
             if !reply.bytes.is_empty() && stream.write_all(&reply.bytes).and_then(|()| stream.flush()).is_err() {
                 return;
             }
