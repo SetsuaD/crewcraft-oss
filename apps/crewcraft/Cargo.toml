@@ -12,13 +12,16 @@ crewcraft-client-core.workspace = true
 crewcraft-enroll.workspace = true
 crewcraft-proto.workspace = true
 crewcraft-tls.workspace = true
+rcgen.workspace = true
 rustls.workspace = true
+time.workspace = true
 x509-parser = { workspace = true, features = ["verify"] }
+zeroize.workspace = true
 
 [dev-dependencies]
+crewcraft-admission.workspace = true
 crewcraft-pki.workspace = true
 crewcraft-totp.workspace = true
-rcgen.workspace = true
 
 [lints]
 workspace = true

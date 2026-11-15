@@ -172,6 +172,7 @@ dependencies = [
 name = "crewcraft"
 version = "0.0.1"
 dependencies = [
+ "crewcraft-admission",
  "crewcraft-client-core",
  "crewcraft-enroll",
  "crewcraft-pki",
@@ -180,7 +181,9 @@ dependencies = [
  "crewcraft-totp",
  "rcgen",
  "rustls",
+ "time",
  "x509-parser",
+ "zeroize",
 ]
 
 [[package]]
@@ -269,9 +272,11 @@ dependencies = [
  "crewcraft-server-core",
  "crewcraft-tls",
  "crewcraft-totp",
+ "rand_core",
  "rcgen",
  "rustls",
  "sha2",
+ "x509-parser",
 ]
 
 [[package]]

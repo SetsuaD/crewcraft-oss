@@ -541,16 +541,24 @@ impl<L: AppendLog> AccountStore<L> {
         Ok(token)
     }
 
-    /// Continue a session on a connection whose verified client certificate has `fingerprint`: the device must be live
-    /// and the session must belong to that same device and account (T148). `None` when poisoned, when the device is
-    /// revoked or unknown, or when the session is unknown, expired or someone else's. Restored sessions count their idle
-    /// time from creation, so a restart ends sessions idle since then.
+    /// Continue a session by its bearer token on a connection whose verified client certificate has `fingerprint`: the
+    /// device must be live and the session must belong to that same device and canonical account (T148). `None` when
+    /// poisoned, when the device is revoked or unknown, or when the session is unknown, expired or someone else's.
+    /// Restored sessions count their idle time from creation, so a restart ends sessions idle since then.
     pub fn continue_session(&mut self, token: &str, fingerprint: &[u8; 32], now_ms: u64) -> Option<Session> {
-        if self.poisoned {
-            return None;
-        }
-        let device = self.devices.authenticate(fingerprint, now_ms).ok()?;
-        self.sessions.validate_for(token, &device.user, &device.id.to_string(), now_ms)
+        let device = self.authenticate(fingerprint, now_ms).ok()?;
+        self.sessions.validate_hash_for(&token_hash(token), &device.user, &device.id.to_string(), now_ms)
+    }
+
+    /// Continue a session by the SHA-256 of its token, for a stream that dropped the bearer secret after sign-in and
+    /// kept only the digest and the captured leaf. `None` when poisoned, when the leaf is not a live device's exact
+    /// active certificate (revoked, unknown or replaced), or when the session is unknown, expired, or belongs to another
+    /// person or device (T148). Each success refreshes the session's idle clock (in memory only; restored sessions count
+    /// idle time from creation). The leaf's own validity dates are NOT checked here: the TLS verifier checks them at
+    /// the handshake, and a long-lived stream must re-check expiry itself.
+    pub fn continue_session_by_hash(&mut self, token_sha256: &[u8; 32], leaf_der: &[u8], now_ms: u64) -> Option<Session> {
+        let device = self.admit(leaf_der, now_ms).ok()?;
+        self.sessions.validate_hash_for(token_sha256, &device.user, &device.id.to_string(), now_ms)
     }
 
     /// End one session; `Ok(false)` (and nothing written) when the token is unknown.

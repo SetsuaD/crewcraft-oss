@@ -183,7 +183,7 @@ impl LabEndpoint {
         Ok((LabSession { chat }, message))
     }
 
-    fn connect(&self, device: Arc<dyn ResolvesClientCert>) -> Result<Transport, LabError> {
+    pub(crate) fn connect(&self, device: Arc<dyn ResolvesClientCert>) -> Result<Transport, LabError> {
         if !device.has_certs() || device.only_raw_public_keys() {
             return Err(LabError::Device);
         }

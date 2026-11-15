@@ -696,3 +696,59 @@ fn admission_requires_the_exact_active_leaf() {
     assert_eq!(s.admit(cert(2), T0 + 12).unwrap().user, B);
     let _ = fs::remove_file(&p);
 }
+
+// ---- digest-only continuation ----
+
+#[test]
+fn a_stream_can_continue_with_only_the_token_digest_and_its_leaf() {
+    use crewcraft_accounts::sessions::{IDLE_MS, token_hash};
+    let p = path("digest");
+    let (ta, ha, hb) = {
+        let mut s = two_people(&p);
+        let ta = s.sign_in([5; 32], A, 1, 1001, T0 + 10).unwrap();
+        let tb = s.sign_in([6; 32], B, 2, 2001, T0 + 10).unwrap();
+        let (ha, hb) = (token_hash(&ta), token_hash(&tb));
+        (ta, ha, hb)
+    };
+    let mut s = reopen(&p);
+    let session = s.continue_session_by_hash(&ha, cert(1), T0 + 20).unwrap();
+    assert_eq!((session.user.as_str(), session.device.as_str()), (A, "1"));
+    assert!(s.continue_session_by_hash(&ha, cert(2), T0 + 20).is_none(), "A's digest on B's device");
+    assert!(s.continue_session_by_hash(&hb, cert(1), T0 + 20).is_none(), "B's digest on A's device");
+    assert!(s.continue_session_by_hash(&[0; 32], cert(1), T0 + 20).is_none(), "unknown digest");
+    assert!(s.continue_session_by_hash(&ha, cert(9), T0 + 20).is_none(), "a leaf that is not registered");
+    // Idle expiry applies to the digest form too.
+    assert!(s.continue_session_by_hash(&hb, cert(2), T0 + 20 + IDLE_MS).is_none(), "idle past IDLE_MS");
+    // An engaged stream keeps its session alive: each continuation restarts the idle clock.
+    let mid = T0 + 20 + IDLE_MS - 1;
+    assert!(s.continue_session_by_hash(&ha, cert(1), mid).is_some(), "just inside the idle window since the last frame");
+    assert!(s.continue_session_by_hash(&ha, cert(1), mid + IDLE_MS - 1).is_some(), "idle is counted from the last frame");
+    // The bearer form and the digest form see the same session.
+    assert!(s.continue_session(&ta, &fp(1), mid + IDLE_MS).is_some());
+    // Neither the bearer nor anything but its digest is on disk or in Debug.
+    let bytes = fs::read(&p).unwrap();
+    assert!(!bytes.windows(ta.len()).any(|w| w == ta.as_bytes()));
+    assert!(!format!("{s:?}").contains(&ta));
+    // Revocation denies the digest at once.
+    s.revoke_device(A, 1).unwrap();
+    let after = mid + IDLE_MS + 1;
+    assert!(s.continue_session_by_hash(&ha, cert(1), after).is_none());
+    assert!(s.continue_session(&ta, &fp(1), after).is_none());
+    let _ = fs::remove_file(&p);
+}
+
+#[test]
+fn a_poisoned_store_refuses_digest_continuation() {
+    let p = path("digest-poison");
+    let hash = {
+        let mut s = two_people(&p);
+        crewcraft_accounts::sessions::token_hash(&s.sign_in([5; 32], A, 1, 1001, T0 + 10).unwrap())
+    };
+    let mode = Rc::new(Cell::new(0));
+    let mut s = failing(&p, &mode);
+    assert!(s.continue_session_by_hash(&hash, cert(1), T0 + 11).is_some());
+    mode.set(2);
+    assert!(s.accept_totp(A, 1002).is_err());
+    assert!(s.continue_session_by_hash(&hash, cert(1), T0 + 12).is_none());
+    let _ = fs::remove_file(&p);
+}

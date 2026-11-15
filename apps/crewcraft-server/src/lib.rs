@@ -6,3 +6,4 @@ pub mod lab_installation;
 pub mod lab_server;
 pub mod lab_state;
 pub mod listener;
+pub mod stored_device_auth;
