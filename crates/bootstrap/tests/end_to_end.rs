@@ -15,8 +15,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use common::*;
+use crewcraft_accounts::password;
 use crewcraft_admission::{Class, admit, server_config};
-use crewcraft_bootstrap::{BootstrapConnection, DurableAdmission, Enroller, StoreServices};
+use crewcraft_bootstrap::{BootstrapConnection, DurableAdmission, Enroller, StoreServices, receive_shared};
 use crewcraft_proto::bootstrap::{BootstrapResponse, decode_bootstrap_response};
 use crewcraft_proto::frame::Decoder;
 use crewcraft_server_core::account_journal::AccountJournal;
@@ -82,7 +83,8 @@ fn listen(
                         if n == 0 {
                             break;
                         }
-                        let out = conn.receive(&mut shared.lock().unwrap(), &buf[..n]);
+                        // The lock is taken for each short step only; the password is hashed with no lock held.
+                        let out = receive_shared(&mut conn, &shared, &|p| password::hash(p).ok(), &buf[..n]);
                         if !out.bytes.is_empty() {
                             admitted.stream.write_all(&out.bytes).unwrap();
                             admitted.stream.flush().unwrap();
