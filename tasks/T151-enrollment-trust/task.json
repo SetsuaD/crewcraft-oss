@@ -14,5 +14,5 @@
     "T005-enrollment-code"
   ],
   "spec": "Add RootFingerprint to derive, format and parse a SHA-256 fingerprint for the trusted root CA. Accept exactly 64 ASCII hex characters, uppercase or lowercase, and format as lowercase hex. Match only the supplied certificate bytes with that digest and reject a substituted root. The TLS adapter must validate the X.509 chain and hostname using the matching root. Keep the enrollment code format and seed derivation unchanged.",
-  "status": "open"
+  "status": "done"
 }
