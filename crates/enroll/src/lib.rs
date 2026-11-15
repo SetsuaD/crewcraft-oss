@@ -10,6 +10,8 @@
 //! four, then `-` and one Crockford check symbol (the secret as a big-endian integer, mod 37):
 //! `CC1-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-C`.
 
+pub mod server_trust;
+
 /// Crockford base32 alphabet (no I, L, O, U).
 pub const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 /// Crockford check symbols: the alphabet, then `*~$=U` for values 32 to 36.
@@ -156,4 +158,16 @@ impl EnrollmentCode {
         hk.expand(b"bootstrap-ed25519", &mut okm).expect("32-byte HKDF-SHA256 output");
         okm
     }
+
+    /// The Ed25519 public key (RFC 8032) of the bootstrap key pair: `bootstrap_public_key` of `bootstrap_seed`. This is
+    /// the only thing the server stores of an invitation (docs/SECURITY-DESIGN.md section 3). Task T200.
+    pub fn bootstrap_public_key(&self) -> [u8; 32] {
+        bootstrap_public_key(&self.bootstrap_seed())
+    }
+}
+
+/// The Ed25519 public key (32 bytes, RFC 8032 section 5.1.5) for the key pair whose 32-byte seed (the RFC's "secret key")
+/// is `seed`. Task T200.
+pub fn bootstrap_public_key(seed: &[u8; 32]) -> [u8; 32] {
+    ed25519_dalek::SigningKey::from_bytes(seed).verifying_key().to_bytes()
 }

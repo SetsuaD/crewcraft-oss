@@ -8,8 +8,20 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+crewcraft-pki.workspace = true
+crewcraft-admission.workspace = true
 crewcraft-server-core.workspace = true
 crewcraft-proto.workspace = true
+crewcraft-tls.workspace = true
+rustls.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+crewcraft = { path = "../crewcraft" }
+crewcraft-accounts.workspace = true
+crewcraft-client-core.workspace = true
+crewcraft-totp.workspace = true
+rcgen.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "crewcraft-bootstrap"
+description = "The server side of the two-call bootstrap connection: set up a first device, then activate it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+crewcraft-accounts.workspace = true
+crewcraft-pki.workspace = true
+crewcraft-proto.workspace = true
+crewcraft-server-core.workspace = true
+rand_core.workspace = true
+
+[dev-dependencies]
+crewcraft-admission.workspace = true
+crewcraft-tls.workspace = true
+crewcraft-totp.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+
+[lints]
+workspace = true
