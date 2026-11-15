@@ -1,33 +1,51 @@
 //! The server side of the bootstrap connection (docs/SECURITY-DESIGN.md section 3): the two calls a device holding a live
 //! invitation may make, `Redeem` and `ConfirmTotp`, and nothing else.
 //!
-//! Owns: the per-connection state machine that turns the two requests into the staged device, the first TOTP check and the
-//! activation record, and the order in which things happen. Holds no sockets, no TLS and no storage: bytes come in through
-//! `BootstrapConnection::receive`, the in-memory first-enrollment flow is `server-core::activation`, certificates come
-//! from `crewcraft-pki`, and everything that must survive a restart goes out through the `Services::commit_activation` hook.
-//! Called by: the listener, for a peer admitted as `crewcraft_admission::Class::Bootstrap`.
+//! Owns: the per-connection state machine that turns the two requests into a staged device, the first TOTP check and one
+//! durable activation, and the order in which things happen. Holds no sockets, no TLS and no storage format: bytes come in
+//! through `BootstrapConnection::receive`, every decision about who may enroll comes from `Services` (in production the
+//! durable `AccountStore`, `StoreServices`), and certificates come from `crewcraft-pki`. Called by: the listener, for a peer
+//! admitted as `crewcraft_admission::Class::Bootstrap`.
 //!
 //! The order is the point:
-//! 1. `Redeem` takes the cheap checks first, then the liveness re-check, then `Activation::begin` (which takes the per-source
-//!    and server-wide limits), and only then the Argon2 password hash. It answers `Setup` with the authenticator URI and
+//! 1. `Redeem` re-checks that the invitation is live, takes the cheap checks, then `Staging::begin` (the per-source and
+//!    server-wide limits) and only then the Argon2 password hash. It answers `Setup` with the authenticator URI and
 //!    NOTHING ELSE: no certificate exists yet.
-//! 2. `ConfirmTotp` must arrive on the same connection and the same staged attempt. The invitation is re-checked
-//!    immediately before it is used. After the code is accepted the exact leaf is built (not yet recorded), handed with
-//!    everything else to `commit_activation`, and only when that returns `Ok` is the leaf recorded and sent as `Activated`.
-//! 3. A failed commit releases no certificate. Because `Activation::confirm` has already registered the device in memory
-//!    and cannot roll back, the `Enroller` is then POISONED: every later connection is closed without a byte until it is
-//!    rebuilt from durable state.
+//! 2. `ConfirmTotp` must arrive on the same connection and the same staged attempt. The invitation is re-checked against
+//!    the store immediately before it is used. After the code is accepted, the leaf is built with the device id the store
+//!    will allocate, and ONE `Services::activate` commits invitation, person, password, device, exact leaf, key identity
+//!    and the first TOTP counter together. Only when it returns `Ok` is the leaf sent as `Activated`.
+//! 3. Recovery policy. A refusal found before anything was written (invitation gone, key reused, person exists, ...) is an
+//!    error reply and a closed connection with nothing durable changed. A device id that moved is retried once with the
+//!    new id. Any ambiguous failure poisons the `Enroller`: the activation may be durable with a leaf nobody received, the
+//!    invitation is then consumed and the key identity is registered for good, so the recovery is an administrator
+//!    revoking that device and issuing a new invitation, and the person generating a NEW device key. A retry on a new
+//!    connection cannot succeed (the bootstrap key is no longer live).
 //!
-//! Any other message, an out-of-order one, a malformed frame, or a peer that fails a liveness check is closed without a
-//! reply. Sign-in and chat requests cannot even be decoded here (the tags are disjoint).
+//! The setup code that activated the device counts as spent: its counter is the account's last accepted counter, so the
+//! first normal sign-in needs a code from a later time step.
+//!
+//! Any other message, an out-of-order one, a malformed frame, or a peer whose invitation is no longer live is closed
+//! without a reply. Sign-in and chat requests cannot even be decoded here (the tags are disjoint).
+
+mod admission;
+mod staging;
+mod store;
+
+pub use admission::DurableAdmission;
+pub use store::{Environment, StoreServices, SystemEnvironment, classify};
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crewcraft_accounts::password;
 use crewcraft_pki::{Authority, Claims, csr_key_id};
 use crewcraft_proto::bootstrap::{BootstrapRequest, BootstrapResponse, decode_bootstrap_request, encode_bootstrap_response};
 use crewcraft_proto::frame::{Decoder, encode};
-use crewcraft_server_core::activation::{Activation, ActivationAttempt, ActivationError, EnrollmentCandidate};
 use crewcraft_server_core::devices::MAX_NAME_CHARS;
 use rand_core::{OsRng, RngCore};
+
+use staging::{Candidate, StageError, Staging};
 
 /// A malformed or unacceptable request (device name, signing request). The connection is closed after it.
 pub const ERR_BAD_REQUEST: u16 = 1;
@@ -37,20 +55,19 @@ pub const ERR_PASSWORD: u16 = 2;
 pub const ERR_RATE_LIMITED: u16 = 3;
 /// The first TOTP code was wrong. The connection stays open for another code, up to `activation::MAX_WRONG_CODES`.
 pub const ERR_BAD_CODE: u16 = 4;
-/// Anything the server could not complete (including a failed durable commit). The connection is closed after it.
+/// Anything the server could not complete (including a refused or failed durable commit). The connection is closed after it.
 pub const ERR_UNAVAILABLE: u16 = 5;
 
-/// Everything that must become durable together before the device is given its certificate.
+/// Everything that becomes durable together before the device is given its certificate.
 #[derive(Clone)]
 pub struct ActivationRecord {
     /// The account: the invitation's canonical email.
     pub email: String,
     /// The account password, as an Argon2id PHC string. Never the password.
     pub password_phc: String,
-    /// The device's ordinal in the registry, for display. NOT its identity.
+    /// The device id the certificate carries (`OU=device-<id>`), which the store must allocate.
     pub device_id: u64,
-    /// The device's identity: SHA-256 of its public key's SubjectPublicKeyInfo, stable across renewals. This is also the
-    /// registry fingerprint.
+    /// The device's identity: SHA-256 of its public key's SubjectPublicKeyInfo, stable across renewals.
     pub key_id: [u8; 32],
     pub device_name: String,
     /// The exact chain that will be sent: the leaf, then the issuing authority.
@@ -59,9 +76,9 @@ pub struct ActivationRecord {
     pub serial: Vec<u8>,
     /// When the leaf expires, Unix seconds.
     pub not_after: i64,
-    /// The TOTP secret, to be encrypted at rest by the store.
+    /// The TOTP secret, to be sealed by the store.
     pub totp_secret: [u8; 20],
-    /// The counter of the code that just proved the authenticator: the first accepted counter, so it can never be replayed.
+    /// The counter of the code that just proved the authenticator: the first accepted counter, now spent.
     pub accepted_counter: u64,
     /// The bootstrap key whose invitation this consumes.
     pub bootstrap_pub: [u8; 32],
@@ -78,32 +95,52 @@ impl std::fmt::Debug for ActivationRecord {
     }
 }
 
-/// The durable commit failed. Nothing about why is shared with the peer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CommitError;
+/// What a live invitation will create: the person it names and the device id the next activation takes. The leaf is issued
+/// with exactly these claims.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Preview {
+    pub email: String,
+    pub next_device_id: u64,
+}
 
-/// What the handler needs from the server around it.
+/// Why `Services::activate` did not succeed. See `store` for how a store error maps onto these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitFailure {
+    /// The journal promises nothing was written and the file is as before: the same request may be sent again.
+    NotWritten,
+    /// Refused before anything was written; retrying the same request cannot help.
+    Refused,
+    /// Nothing was written because the device id moved since the certificate was built; rebuild and commit again.
+    OrdinalMoved,
+    /// It cannot be known whether the record is durable.
+    Ambiguous,
+}
+
+/// What the handler needs from the server around it. `StoreServices` implements it over the durable store.
 pub trait Services {
     fn now_ms(&self) -> u64;
 
     /// A fresh 20-byte TOTP secret from the system random source, or `None` if it failed (`random_totp_secret`).
     fn new_totp_secret(&mut self) -> Option<[u8; 20]>;
 
-    /// The canonical email of the live invitation with this bootstrap key.
-    fn invitation_email(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> Option<String>;
-
-    /// Whether the peer is still admitted as this bootstrap key right now (the listener asks `Admission`). Called before
-    /// the invitation is used, so a revocation or a consumed invitation since the handshake fails closed.
-    fn still_admitted(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> bool;
-
     /// Hash the account password (Argon2id PHC). Called only after the request passed the rate limits.
     fn hash_password(&mut self, password: &str) -> Option<String> {
         password::hash(password).ok()
     }
 
-    /// Commit the whole record atomically: account, invitation consumed, exact chain, device and first TOTP counter. Return
-    /// `Ok` only when all of it is durable. On `Err` nothing may be left half written.
-    fn commit_activation(&mut self, record: &ActivationRecord) -> Result<(), CommitError>;
+    /// The live invitation with this bootstrap key, as the store holds it (`None`: unknown, expired, consumed, revoked,
+    /// or the store is poisoned).
+    fn preview(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> Option<Preview>;
+
+    /// Whether this person already has an account. Only a first device is enrolled through this path.
+    fn has_person(&self, email: &str) -> bool;
+
+    /// Whether a device was ever registered under this key identity, live or revoked. Such a key never enrolls again.
+    fn key_registered(&self, key_id: &[u8; 32]) -> bool;
+
+    /// Commit the whole record as one durable unit and return the allocated device id. `Ok` only when it is durable; the
+    /// id must equal `record.device_id` (checked before anything is written).
+    fn activate(&mut self, record: &ActivationRecord, now_ms: u64) -> Result<u64, CommitFailure>;
 }
 
 /// A fresh TOTP secret from the operating system's random source.
@@ -115,37 +152,25 @@ pub fn random_totp_secret() -> Option<[u8; 20]> {
 
 /// The shared server state the bootstrap connections act on.
 pub struct Enroller<S: Services> {
-    activation: Activation,
+    staging: Staging,
     authority: Authority,
     services: S,
-    poisoned: bool,
+    poisoned: Arc<AtomicBool>,
 }
 
 impl<S: Services> std::fmt::Debug for Enroller<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Enroller(.., poisoned: {})", self.poisoned)
+        write!(f, "Enroller(.., poisoned: {})", self.is_poisoned())
     }
 }
 
 impl<S: Services> Enroller<S> {
-    pub fn new(activation: Activation, authority: Authority, services: S) -> Self {
-        Self { activation, authority, services, poisoned: false }
-    }
-
-    pub fn activation(&self) -> &Activation {
-        &self.activation
-    }
-
-    pub fn activation_mut(&mut self) -> &mut Activation {
-        &mut self.activation
+    pub fn new(authority: Authority, services: S) -> Self {
+        Self { staging: Staging::new(), authority, services, poisoned: Arc::new(AtomicBool::new(false)) }
     }
 
     pub fn authority(&self) -> &Authority {
         &self.authority
-    }
-
-    pub fn authority_mut(&mut self) -> &mut Authority {
-        &mut self.authority
     }
 
     pub fn services(&self) -> &S {
@@ -156,10 +181,29 @@ impl<S: Services> Enroller<S> {
         &mut self.services
     }
 
-    /// A commit failed after the device was registered in memory: the in-memory state is ahead of the durable state, so
-    /// every bootstrap connection is closed until the `Enroller` is rebuilt from the store.
+    /// Take the enroller apart, for a restart that reopens the durable state and keeps the authority.
+    pub fn into_parts(self) -> (Authority, S) {
+        (self.authority, self.services)
+    }
+
+    /// How many setups are staged (an unfinished enrollment is held only in memory).
+    pub fn staged_count(&self) -> usize {
+        self.staging.pending_count()
+    }
+
+    /// A commit failed ambiguously: whether an activation is durable is unknown, so every bootstrap connection is closed
+    /// until the `Enroller` is rebuilt from the store.
     pub fn is_poisoned(&self) -> bool {
-        self.poisoned
+        self.poisoned.load(Ordering::SeqCst)
+    }
+
+    /// The poison flag, shared with `DurableAdmission` so that admission never has to take the Enroller lock.
+    pub fn poison_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.poisoned)
+    }
+
+    fn poison(&self) {
+        self.poisoned.store(true, Ordering::SeqCst);
     }
 }
 
@@ -173,12 +217,9 @@ pub struct Output {
 }
 
 struct Staged {
-    attempt: ActivationAttempt,
-    device_name: String,
+    attempt: u64,
     csr: Vec<u8>,
-    key_id: [u8; 32],
     password_phc: String,
-    totp_secret: [u8; 20],
 }
 
 enum State {
@@ -236,7 +277,7 @@ impl BootstrapConnection {
     /// connection; later calls return nothing.
     pub fn receive<S: Services>(&mut self, enroller: &mut Enroller<S>, input: &[u8]) -> Output {
         let mut bytes = Vec::new();
-        if self.closed || enroller.poisoned {
+        if self.closed || enroller.is_poisoned() {
             self.closed = true;
             return Output { bytes, open: false };
         }
@@ -279,9 +320,8 @@ impl BootstrapConnection {
 
     fn redeem<S: Services>(&mut self, e: &mut Enroller<S>, id: u32, device_name: &str, csr: Vec<u8>, password: &str) -> Step {
         let now = e.services.now_ms();
-        if !e.services.still_admitted(&self.key, now) {
-            return Step::Close;
-        }
+        // The store is the truth about whether this invitation is live, asked again now.
+        let Some(Preview { email, .. }) = e.services.preview(&self.key, now) else { return Step::Close };
         let name = device_name.trim();
         if name.is_empty() || name.chars().count() > MAX_NAME_CHARS || name.chars().any(char::is_control) {
             return error_open(id, ERR_BAD_REQUEST);
@@ -289,78 +329,100 @@ impl BootstrapConnection {
         if password::check_policy(password).is_err() {
             return error_open(id, ERR_PASSWORD);
         }
-        // Possession of the key and P-256 are checked here; the key identity is staged from the request.
+        // Possession of the key and P-256 are checked here; the stable key identity is staged from the request.
         let Ok(key_id) = csr_key_id(&csr) else { return error_close(id, ERR_BAD_REQUEST) };
-        let Some(email) = e.services.invitation_email(&self.key, now) else { return Step::Close };
-        let Some(totp_secret) = e.services.new_totp_secret() else { return error_close(id, ERR_UNAVAILABLE) };
-        let candidate = EnrollmentCandidate { verified_email: &email, device_name: name, fingerprint: key_id, totp_secret };
+        // A key that was ever registered, revoked or not, never enrolls again; an existing person adds devices another way.
+        if e.services.key_registered(&key_id) || e.services.has_person(&email) {
+            return error_close(id, ERR_UNAVAILABLE);
+        }
+        let Some(secret) = e.services.new_totp_secret() else { return error_close(id, ERR_UNAVAILABLE) };
+        let services = &e.services;
+        e.staging.retain_live(|key| services.preview(key, now).is_some());
         // The limits are taken inside `begin`, before any password hashing.
-        let begun = match e.activation.begin(&self.source, &self.key, candidate, now) {
+        let candidate = Candidate { email: &email, device_name: name, key_id, secret };
+        let begun = match e.staging.begin(&self.source, &self.key, candidate, now) {
             Ok(begun) => begun,
-            Err(ActivationError::RateLimited) => return error_close(id, ERR_RATE_LIMITED),
-            Err(ActivationError::AlreadyEnrolled | ActivationError::AccountMismatch | ActivationError::TotpSetup) => {
-                return error_close(id, ERR_UNAVAILABLE);
-            }
-            Err(_) => return Step::Close,
+            Err(StageError::RateLimited) => return error_close(id, ERR_RATE_LIMITED),
+            Err(_) => return error_close(id, ERR_UNAVAILABLE),
         };
         let Some(password_phc) = e.services.hash_password(password) else {
             self.state = State::Start;
             return error_close(id, ERR_UNAVAILABLE);
         };
-        self.state =
-            State::Staged(Box::new(Staged { attempt: begun.attempt, device_name: name.to_string(), csr, key_id, password_phc, totp_secret }));
+        self.state = State::Staged(Box::new(Staged { attempt: begun.attempt, csr, password_phc }));
         frame(id, BootstrapResponse::Setup { totp_uri: begun.otpauth_uri }).map_or(Step::Close, Step::Reply)
     }
 
     fn confirm<S: Services>(&mut self, e: &mut Enroller<S>, id: u32, code: &str) -> Step {
         let State::Staged(staged) = std::mem::replace(&mut self.state, State::Done) else { return Step::Close };
         let now = e.services.now_ms();
-        // Re-check against live state immediately before the invitation is used.
-        if !e.services.still_admitted(&self.key, now) || !e.activation.is_pending(&self.key, now) {
-            return Step::Close;
-        }
-        let activated = match e.activation.confirm(&self.source, &self.key, staged.attempt, code, now) {
-            Ok(activated) => activated,
-            Err(ActivationError::BadCode) => {
+        // Re-check against the store immediately before the invitation is used.
+        let Some(Preview { email, next_device_id }) = e.services.preview(&self.key, now) else { return Step::Close };
+        let mut next_device_id = next_device_id;
+        let confirmed = match e.staging.confirm(&self.source, &self.key, staged.attempt, code, now) {
+            Ok(confirmed) if confirmed.email == email => confirmed,
+            Err(StageError::BadCode) => {
                 self.state = State::Staged(staged);
                 return error_open(id, ERR_BAD_CODE);
             }
-            Err(ActivationError::RateLimited) => return error_close(id, ERR_RATE_LIMITED),
-            Err(ActivationError::Device(_) | ActivationError::AlreadyEnrolled | ActivationError::TotpSetup) => {
-                return error_close(id, ERR_UNAVAILABLE);
+            Err(StageError::RateLimited) => return error_close(id, ERR_RATE_LIMITED),
+            _ => return Step::Close,
+        };
+        // Build the leaf with the device id the store will allocate and commit once. If the id moved in between (nothing
+        // was written), build again with the new id; a second move is a refusal.
+        for round in 0..2 {
+            let device_id = next_device_id;
+            let claims = Claims { person: &email, device_id };
+            let issued = match e.authority.prepare_device(&staged.csr, &claims, now) {
+                Ok(issued) if issued.key_id == confirmed.key_id => issued,
+                _ => return error_close(id, ERR_UNAVAILABLE),
+            };
+            let record = ActivationRecord {
+                email: email.clone(),
+                password_phc: staged.password_phc.clone(),
+                device_id,
+                key_id: confirmed.key_id,
+                device_name: confirmed.device_name.clone(),
+                chain: issued.chain.clone(),
+                serial: issued.serial.clone(),
+                not_after: issued.not_after,
+                totp_secret: confirmed.secret,
+                accepted_counter: confirmed.counter,
+                bootstrap_pub: self.key,
+            };
+            match e.services.activate(&record, now) {
+                Ok(allocated) if allocated == device_id => {
+                    // Durable, and the subject names the allocated id. Only now does the peer see the leaf.
+                    e.staging.finish(&self.key);
+                    let reply =
+                        BootstrapResponse::Activated { certificate: issued.certificate, issuer_certificate: e.authority.certificate().to_vec() };
+                    return frame(id, reply).map_or(Step::Close, Step::ReplyAndClose);
+                }
+                Ok(_) => {
+                    // Durable under a different id than the certificate claims: the identity is split. Release nothing.
+                    e.poison();
+                    return error_close(id, ERR_UNAVAILABLE);
+                }
+                Err(CommitFailure::OrdinalMoved) if round == 0 => {
+                    // Nothing was written; the store says which id it would assign now.
+                    match e.services.preview(&self.key, now) {
+                        Some(moved) => next_device_id = moved.next_device_id,
+                        None => return Step::Close,
+                    }
+                }
+                Err(CommitFailure::NotWritten) => {
+                    // The journal left the file exactly as before. The staged setup is untouched, so the client may send
+                    // ConfirmTotp again on this connection (within the source limit).
+                    self.state = State::Staged(staged);
+                    return error_open(id, ERR_UNAVAILABLE);
+                }
+                Err(CommitFailure::Refused | CommitFailure::OrdinalMoved) => return error_close(id, ERR_UNAVAILABLE),
+                Err(CommitFailure::Ambiguous) => {
+                    e.poison();
+                    return error_close(id, ERR_UNAVAILABLE);
+                }
             }
-            Err(_) => return Step::Close,
-        };
-        // From here the device is registered in memory and cannot be unregistered: any failure poisons the enroller.
-        let claims = Claims { person: &activated.email, device_id: activated.device_id };
-        let issued = match e.authority.prepare_device(&staged.csr, &claims, now) {
-            Ok(issued) if issued.key_id == staged.key_id => issued,
-            _ => {
-                e.poisoned = true;
-                return error_close(id, ERR_UNAVAILABLE);
-            }
-        };
-        let record = ActivationRecord {
-            email: activated.email.clone(),
-            password_phc: staged.password_phc,
-            device_id: activated.device_id,
-            key_id: staged.key_id,
-            device_name: staged.device_name,
-            chain: issued.chain.clone(),
-            serial: issued.serial.clone(),
-            not_after: issued.not_after,
-            totp_secret: staged.totp_secret,
-            accepted_counter: activated.accepted_counter,
-            bootstrap_pub: self.key,
-        };
-        if e.services.commit_activation(&record).is_err() {
-            e.poisoned = true;
-            return error_close(id, ERR_UNAVAILABLE);
         }
-        // Durable. Only now does the authority treat the leaf as good, and only now does the peer see it.
-        e.authority.record_issued(&issued, &claims);
-        let activated_reply =
-            BootstrapResponse::Activated { certificate: issued.certificate, issuer_certificate: e.authority.certificate().to_vec() };
-        frame(id, activated_reply).map_or(Step::Close, Step::ReplyAndClose)
+        error_close(id, ERR_UNAVAILABLE)
     }
 }
