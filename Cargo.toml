@@ -20,6 +20,9 @@ crewcraft-client-core = { path = "crates/client-core" }
 crewcraft-strict-toml = { path = "crates/strict-toml" }
 crewcraft-theme = { path = "crates/theme" }
 crewcraft-update = { path = "crates/update" }
+crewcraft-tls = { path = "crates/tls" }
+crewcraft-pki = { path = "crates/pki" }
+crewcraft-admission = { path = "crates/admission" }
 
 # crypto: audited RustCrypto crates only, never hand-rolled primitives (docs/SECURITY-DESIGN.md)
 hmac = "0.12"
@@ -33,7 +36,10 @@ base64 = "0.22"
 
 # TLS (docs/NON-RUST-DEPENDENCIES.md): rustls with the ring provider, TLS 1.3 only; rcgen makes test certificates.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
-rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "x509-parser"] }
+rustls-pki-types = "1"
+time = { version = "0.3", default-features = false }
+x509-parser = { version = "0.18", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
