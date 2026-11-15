@@ -9,8 +9,8 @@
   "test_path": "crates/accounts/tests/t202_signin_throttle.rs",
   "test_cmd": "cargo test -p crewcraft-accounts --test t202_signin_throttle",
   "depends_on": [],
-  "spec": "Implement Throttle as its doc comments say, with the HashMap already in the struct. Delete the `#[allow(clippy::todo)]` on the impl. Use saturating arithmetic: a now_ms far in the future or a huge count must never overflow or panic. No new dependencies.",
-  "status": "open",
+  "spec": "Track failed sign-ins per canonical person. Double the wait from one second after each admitted failure and lock attempts for fifteen minutes after ten failures. Attempts during the lock do not extend it. Reset on successful sign-in or administrator request. Use saturating arithmetic for timestamps and counts. No new dependencies.",
+  "status": "done",
   "context": [
     "docs/SECURITY-DESIGN.md"
   ]
