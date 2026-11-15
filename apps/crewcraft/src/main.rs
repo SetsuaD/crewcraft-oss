@@ -91,7 +91,7 @@ fn lab_error(error: impl std::fmt::Debug) -> io::Error {
 
 #[cfg(target_os = "linux")]
 fn terminal_password(prompt: &str) -> io::Result<String> {
-    use nix::sys::signal::{SigSet, Signal, SigmaskHow};
+    use nix::sys::signal::{SigSet, SigmaskHow, Signal};
     use nix::sys::termios::{FlushArg, tcflush};
 
     let config = rpassword::ConfigBuilder::new().input_file_path("/dev/stdin").output_writer(io::stderr()).build();
@@ -102,11 +102,7 @@ fn terminal_password(prompt: &str) -> io::Result<String> {
     // Defer delivery until the guard restores the terminal and failed input is discarded.
     let previous_mask = interrupts.thread_swap_mask(SigmaskHow::SIG_BLOCK)?;
     let result = rpassword::prompt_password_with_config(prompt, config);
-    let discarded = if result.is_err() {
-        tcflush(io::stdin(), FlushArg::TCIFLUSH)
-    } else {
-        Ok(())
-    };
+    let discarded = if result.is_err() { tcflush(io::stdin(), FlushArg::TCIFLUSH) } else { Ok(()) };
     previous_mask.thread_set_mask()?;
     discarded?;
     result
