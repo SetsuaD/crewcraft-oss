@@ -32,16 +32,17 @@ fn confirm_totp_wire_format() {
 
 #[test]
 fn response_wire_formats_and_round_trips() {
-    let redeemed = BootstrapResponse::Redeemed { certificate: vec![9, 9], totp_uri: "otpauth://x".into() };
-    let bytes = encode_bootstrap_response(9, &redeemed).unwrap();
-    let mut expected = vec![160u8, 0, 0, 0, 9, 0, 2, 9, 9, 0, 11];
+    let setup = BootstrapResponse::Setup { totp_uri: "otpauth://x".into() };
+    let bytes = encode_bootstrap_response(9, &setup).unwrap();
+    let mut expected = vec![160u8, 0, 0, 0, 9, 0, 11];
     expected.extend_from_slice(b"otpauth://x");
     assert_eq!(bytes, expected);
-    assert_eq!(decode_bootstrap_response(&bytes).unwrap(), (9, redeemed));
+    assert_eq!(decode_bootstrap_response(&bytes).unwrap(), (9, setup));
 
-    let bytes = encode_bootstrap_response(1, &BootstrapResponse::Activated).unwrap();
-    assert_eq!(bytes, vec![161, 0, 0, 0, 1]);
-    assert_eq!(decode_bootstrap_response(&bytes).unwrap(), (1, BootstrapResponse::Activated));
+    let activated = BootstrapResponse::Activated { certificate: vec![9, 8], issuer_certificate: vec![7, 6, 5] };
+    let bytes = encode_bootstrap_response(1, &activated).unwrap();
+    assert_eq!(bytes, vec![161, 0, 0, 0, 1, 0, 2, 9, 8, 0, 3, 7, 6, 5]);
+    assert_eq!(decode_bootstrap_response(&bytes).unwrap(), (1, activated));
 
     let bytes = encode_bootstrap_response(2, &BootstrapResponse::Error { code: 0x0102 }).unwrap();
     assert_eq!(bytes, vec![162, 0, 0, 0, 2, 1, 2]);
@@ -78,8 +79,25 @@ fn truncated_and_trailing_input() {
     let mut longer = good.clone();
     longer.push(0);
     assert_eq!(decode_bootstrap_request(&longer).unwrap_err(), CodecError::TrailingBytes);
-    let activated = vec![161u8, 0, 0, 0, 1, 0];
-    assert_eq!(decode_bootstrap_response(&activated).unwrap_err(), CodecError::TrailingBytes);
+    for response in [
+        BootstrapResponse::Setup { totp_uri: "otpauth://x".into() },
+        BootstrapResponse::Activated { certificate: vec![9, 8], issuer_certificate: vec![7, 6, 5] },
+    ] {
+        let mut encoded = encode_bootstrap_response(1, &response).unwrap();
+        for cut in 0..encoded.len() {
+            assert_eq!(decode_bootstrap_response(&encoded[..cut]).unwrap_err(), CodecError::Truncated, "cut at {cut}");
+        }
+        encoded.push(0);
+        assert_eq!(decode_bootstrap_response(&encoded).unwrap_err(), CodecError::TrailingBytes);
+    }
+}
+
+#[test]
+fn rejects_prerelease_responses_that_put_the_certificate_before_confirmation() {
+    let mut old_redeemed = vec![160, 0, 0, 0, 1, 0, 2, 9, 9, 0, 11];
+    old_redeemed.extend_from_slice(b"otpauth://x");
+    assert_eq!(decode_bootstrap_response(&old_redeemed).unwrap_err(), CodecError::TrailingBytes);
+    assert_eq!(decode_bootstrap_response(&[161, 0, 0, 0, 1]).unwrap_err(), CodecError::Truncated);
 }
 
 #[test]
@@ -103,12 +121,18 @@ fn field_ranges_are_enforced_both_ways() {
         assert_eq!(encode_bootstrap_request(1, &BootstrapRequest::ConfirmTotp { code: code.into() }).unwrap_err(), CodecError::FieldLength);
     }
 
-    let resp = |cert: Vec<u8>, uri: String| BootstrapResponse::Redeemed { certificate: cert, totp_uri: uri };
-    assert_eq!(encode_bootstrap_response(1, &resp(vec![], "u".into())).unwrap_err(), CodecError::FieldLength);
-    assert_eq!(encode_bootstrap_response(1, &resp(vec![0; MAX_CERT + 1], "u".into())).unwrap_err(), CodecError::FieldLength);
-    assert_eq!(encode_bootstrap_response(1, &resp(vec![1], String::new())).unwrap_err(), CodecError::FieldLength);
-    assert_eq!(encode_bootstrap_response(1, &resp(vec![1], big(MAX_URI + 1))).unwrap_err(), CodecError::FieldLength);
-    assert!(encode_bootstrap_response(1, &resp(vec![0; MAX_CERT], big(MAX_URI))).is_ok());
+    let setup = |totp_uri| BootstrapResponse::Setup { totp_uri };
+    assert_eq!(encode_bootstrap_response(1, &setup(String::new())).unwrap_err(), CodecError::FieldLength);
+    assert_eq!(encode_bootstrap_response(1, &setup(big(MAX_URI + 1))).unwrap_err(), CodecError::FieldLength);
+    assert_eq!(decode_bootstrap_response(&encode_bootstrap_response(1, &setup(big(MAX_URI))).unwrap()).unwrap().1, setup(big(MAX_URI)));
+
+    let activated = |certificate, issuer_certificate| BootstrapResponse::Activated { certificate, issuer_certificate };
+    for bytes in [vec![], vec![0; MAX_CERT + 1]] {
+        assert_eq!(encode_bootstrap_response(1, &activated(bytes.clone(), vec![1])).unwrap_err(), CodecError::FieldLength);
+        assert_eq!(encode_bootstrap_response(1, &activated(vec![1], bytes)).unwrap_err(), CodecError::FieldLength);
+    }
+    let full_chain = activated(vec![0; MAX_CERT], vec![1; MAX_CERT]);
+    assert_eq!(decode_bootstrap_response(&encode_bootstrap_response(1, &full_chain).unwrap()).unwrap().1, full_chain);
 }
 
 /// On decode the length prefix is judged before the bytes are read, so a huge announced length is `FieldLength`, not
@@ -125,12 +149,19 @@ fn decode_checks_the_length_prefix_first() {
     let mut bytes = vec![32u8, 0, 0, 0, 1, 0, 1, b'd'];
     bytes.extend_from_slice(&((MAX_CSR + 1) as u16).to_be_bytes());
     assert_eq!(decode_bootstrap_request(&bytes).unwrap_err(), CodecError::FieldLength);
+    let oversized = ((MAX_CERT + 1) as u16).to_be_bytes();
+    assert_eq!(decode_bootstrap_response(&[161, 0, 0, 0, 1, oversized[0], oversized[1]]).unwrap_err(), CodecError::FieldLength);
+    assert_eq!(
+        decode_bootstrap_response(&[161, 0, 0, 0, 1, 0, 1, 9, oversized[0], oversized[1]]).unwrap_err(),
+        CodecError::FieldLength
+    );
 }
 
 #[test]
 fn invalid_utf8_is_refused() {
     let bytes = vec![33u8, 0, 0, 0, 1, 0, 6, 0xFF, 0xFE, b'1', b'2', b'3', b'4'];
     assert_eq!(decode_bootstrap_request(&bytes).unwrap_err(), CodecError::BadUtf8);
+    assert_eq!(decode_bootstrap_response(&[160, 0, 0, 0, 1, 0, 1, 0xFF]).unwrap_err(), CodecError::BadUtf8);
 }
 
 #[test]
@@ -141,7 +172,9 @@ fn secrets_stay_out_of_debug_output() {
     let shown = format!("{:?}", BootstrapRequest::ConfirmTotp { code: "654321".into() });
     assert!(!shown.contains("654321"), "{shown}");
 
-    let response = BootstrapResponse::Redeemed { certificate: vec![1, 2, 3], totp_uri: "otpauth://totp/fixture?secret=mock".into() };
-    assert_eq!(format!("{response:?}"), "Redeemed { certificate: <3 bytes>, totp_uri: .. }");
-    assert!(!format!("{response:#?}").contains("otpauth://"));
+    let setup = BootstrapResponse::Setup { totp_uri: "otpauth://totp/fixture".into() };
+    assert_eq!(format!("{setup:?}"), "Setup { totp_uri: .. }");
+    assert_eq!(format!("{setup:#?}"), "Setup { totp_uri: .. }");
+    let activated = BootstrapResponse::Activated { certificate: vec![1, 2, 3], issuer_certificate: vec![4, 5, 6] };
+    assert_eq!(format!("{activated:?}"), "Activated { certificate: .., issuer_certificate: .. }");
 }

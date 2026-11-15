@@ -12,9 +12,13 @@
 //! - tag 33 `ConfirmTotp`: `str code` (exactly `CODE_LEN` bytes)
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
-//! - tag 160 `Redeemed`: `bytes certificate (1 to MAX_CERT) | str totp_uri (1 to MAX_URI)`
-//! - tag 161 `Activated`: no fields
+//! - tag 160 `Setup`: `str totp_uri (1 to MAX_URI)`
+//! - tag 161 `Activated`: `bytes certificate (1 to MAX_CERT) | bytes issuer_certificate (1 to MAX_CERT)`
 //! - tag 162 `Error`: `u16 code`
+//!
+//! Send `Setup` after staging the signing request and password. Send `Activated` only after committing the
+//! exact issued certificate and activation state. Its two DER certificates form the device chain, leaf first.
+//! The client's server trust anchor comes from the invitation.
 //!
 //! Decoding checks, in the order the bytes are read: the tag (`Truncated` if there is none, `BadKind(tag)` for a tag
 //! this module does not decode), the id (`Truncated`), then each field (`Truncated` when bytes run out, `FieldLength`
@@ -51,16 +55,16 @@ impl std::fmt::Debug for BootstrapRequest {
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum BootstrapResponse {
-    Redeemed { certificate: Vec<u8>, totp_uri: String },
-    Activated,
+    Setup { totp_uri: String },
+    Activated { certificate: Vec<u8>, issuer_certificate: Vec<u8> },
     Error { code: u16 },
 }
 
 impl std::fmt::Debug for BootstrapResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Redeemed { certificate, .. } => write!(f, "Redeemed {{ certificate: <{} bytes>, totp_uri: .. }}", certificate.len()),
-            Self::Activated => f.write_str("Activated"),
+            Self::Setup { .. } => f.write_str("Setup { totp_uri: .. }"),
+            Self::Activated { .. } => f.write_str("Activated { certificate: .., issuer_certificate: .. }"),
             Self::Error { code } => f.debug_struct("Error").field("code", code).finish(),
         }
     }
@@ -68,7 +72,7 @@ impl std::fmt::Debug for BootstrapResponse {
 
 const REDEEM: u8 = 32;
 const CONFIRM_TOTP: u8 = 33;
-const REDEEMED: u8 = 160;
+const SETUP: u8 = 160;
 const ACTIVATED: u8 = 161;
 const ERROR: u8 = 162;
 
@@ -155,12 +159,15 @@ pub fn decode_bootstrap_request(mut input: &[u8]) -> Result<(u32, BootstrapReque
 pub fn encode_bootstrap_response(id: u32, response: &BootstrapResponse) -> Result<Vec<u8>, CodecError> {
     let mut out;
     match response {
-        BootstrapResponse::Redeemed { certificate, totp_uri } => {
-            out = header(REDEEMED, id);
-            put_field(&mut out, certificate, 1, MAX_CERT)?;
+        BootstrapResponse::Setup { totp_uri } => {
+            out = header(SETUP, id);
             put_field(&mut out, totp_uri.as_bytes(), 1, MAX_URI)?;
         }
-        BootstrapResponse::Activated => out = header(ACTIVATED, id),
+        BootstrapResponse::Activated { certificate, issuer_certificate } => {
+            out = header(ACTIVATED, id);
+            put_field(&mut out, certificate, 1, MAX_CERT)?;
+            put_field(&mut out, issuer_certificate, 1, MAX_CERT)?;
+        }
         BootstrapResponse::Error { code } => {
             out = header(ERROR, id);
             out.extend_from_slice(&code.to_be_bytes());
@@ -170,12 +177,13 @@ pub fn encode_bootstrap_response(id: u32, response: &BootstrapResponse) -> Resul
 }
 
 pub fn decode_bootstrap_response(mut input: &[u8]) -> Result<(u32, BootstrapResponse), CodecError> {
-    let (tag, id) = read_header(&mut input, REDEEMED..=ERROR)?;
+    let (tag, id) = read_header(&mut input, SETUP..=ERROR)?;
     let response = match tag {
-        REDEEMED => {
-            BootstrapResponse::Redeemed { certificate: read_field(&mut input, 1, MAX_CERT)?.to_vec(), totp_uri: read_string(&mut input, 1, MAX_URI)? }
-        }
-        ACTIVATED => BootstrapResponse::Activated,
+        SETUP => BootstrapResponse::Setup { totp_uri: read_string(&mut input, 1, MAX_URI)? },
+        ACTIVATED => BootstrapResponse::Activated {
+            certificate: read_field(&mut input, 1, MAX_CERT)?.to_vec(),
+            issuer_certificate: read_field(&mut input, 1, MAX_CERT)?.to_vec(),
+        },
         ERROR => BootstrapResponse::Error { code: u16::from_be_bytes(take_array(&mut input)?) },
         _ => return Err(CodecError::BadKind(tag)),
     };
