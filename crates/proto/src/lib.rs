@@ -6,6 +6,7 @@
 /// Protocol version spoken by this build. A server refuses clients whose major version differs.
 pub const PROTOCOL_VERSION: (u16, u16) = (0, 1);
 
+pub mod bootstrap;
 pub mod frame;
 pub mod handshake;
 pub mod message;

@@ -1,0 +1,18 @@
+{
+  "id": "T203-cert-policy",
+  "title": "Certificate policy: enrolled devices and live bootstrap keys in, everything else out",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/cert_policy.rs"
+  ],
+  "test_path": "crates/server-core/tests/t203_cert_policy.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t203_cert_policy",
+  "depends_on": [],
+  "spec": "Implement decide as its doc comments say, with Devices::authenticate and InviteBook::is_pending (shown for reference). Delete the `#[allow(clippy::todo)]`. No new dependencies.",
+  "status": "open",
+  "context": [
+    "crates/server-core/src/devices.rs",
+    "crates/server-core/src/invites.rs",
+    "docs/SECURITY-DESIGN.md"
+  ]
+}
