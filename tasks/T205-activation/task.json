@@ -1,0 +1,24 @@
+{
+  "id": "T205-activation",
+  "title": "Two-step enrollment: register the device only after the first TOTP code",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/activation.rs",
+    "crates/server-core/src/invites.rs"
+  ],
+  "test_path": "crates/server-core/tests/t205_activation.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t205_activation",
+  "depends_on": [
+    "T201-totp-guard"
+  ],
+  "spec": "Implement the volatile first-enrollment Activation flow. Bind the password-verified canonical email and signed certificate candidate to a replaceable server-held attempt. Preserve the live invitation until a matching attempt supplies the first valid TOTP; then register the device, enroll TOTP with the accepted counter, and consume the invitation. A wrong identity, wrong attempt, expired or reissued invitation, existing TOTP enrollment, or device registration failure cannot activate the candidate. Keep shared source and global limits and remove an attempt after five wrong codes. Keep the setup URI out of Debug and expose device reads, authentication and revocation without raw device registration. Preserve the legacy T130 API. No external dependencies.",
+  "status": "done",
+  "context": [
+    "crates/server-core/src/enrollment.rs",
+    "crates/server-core/src/invites.rs",
+    "crates/server-core/src/devices.rs",
+    "crates/server-core/src/rate_limit.rs",
+    "crates/accounts/src/totp_guard.rs",
+    "docs/SECURITY-DESIGN.md"
+  ]
+}
