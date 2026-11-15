@@ -1,12 +1,13 @@
-//! The whole first-device path over real mutual TLS on loopback: a bootstrap handshake with the invitation key, Redeem,
-//! Setup, ConfirmTotp, Activated, and then a reconnect as an enrolled device with the issued chain. The server side uses
-//! `crewcraft-admission` for who may connect and `crewcraft-bootstrap` for what a bootstrap peer may do. Every socket has
-//! a deadline. The fixture memory store stands in for durable storage; nothing here is a runnable server.
+//! The whole first-device path over real mutual TLS on loopback, with the durable store behind it and a RESTART in the
+//! middle: a bootstrap handshake with the invitation key, Redeem, Setup, ConfirmTotp, Activated; the server process is
+//! stopped and its journal reopened; then the device reconnects with exactly the issued chain and is admitted from the
+//! reloaded store alone. Every socket has a deadline. No listener command exists; this is a test harness only.
 
 #![allow(clippy::unwrap_used)]
 
 mod common;
 
+use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -14,11 +15,12 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use common::*;
-use crewcraft_admission::{Admission, Class, admit, server_config};
-use crewcraft_bootstrap::{BootstrapConnection, Enroller};
-use crewcraft_pki::Status;
+use crewcraft_admission::{Class, admit, server_config};
+use crewcraft_bootstrap::{BootstrapConnection, DurableAdmission, Enroller, StoreServices};
 use crewcraft_proto::bootstrap::{BootstrapResponse, decode_bootstrap_response};
 use crewcraft_proto::frame::Decoder;
+use crewcraft_server_core::account_store::AccountStore;
+use crewcraft_server_core::journal::Journal;
 use crewcraft_tls::{client_config, connect};
 use rcgen::CertificateParams;
 use rustls::RootCertStore;
@@ -26,25 +28,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, Serve
 
 const IO: Duration = Duration::from_secs(3);
 
-type Shared = Arc<Mutex<Enroller<MemoryStore>>>;
-
-/// What the listener tells `admit`: live state read from the same enroller the bootstrap handler writes.
-#[derive(Debug)]
-struct Live(Shared);
-
-impl Admission for Live {
-    fn device_ok(&self, certificate: &[u8]) -> bool {
-        let enroller = self.0.lock().unwrap();
-        match enroller.authority().status(certificate, now_ms()) {
-            Ok(Status::Good(info)) => enroller.activation().devices().list(&info.person).iter().any(|d| d.fingerprint == info.key_id && !d.revoked),
-            _ => false,
-        }
-    }
-
-    fn bootstrap_key_live(&self, public_key: &[u8; 32]) -> bool {
-        self.0.lock().unwrap().activation().is_pending(public_key, now_ms())
-    }
-}
+type Shared = Arc<Mutex<Enroller<StoreServices<Journal, TestEnv>>>>;
 
 fn roots(der: &[u8]) -> RootCertStore {
     let mut store = RootCertStore::empty();
@@ -52,59 +36,50 @@ fn roots(der: &[u8]) -> RootCertStore {
     store
 }
 
-struct Lab {
-    shared: Shared,
-    addr: SocketAddr,
-    root_cert: Vec<u8>,
-    bootstrap_cert: Vec<u8>,
-    bootstrap_key: Vec<u8>,
-    secret: [u8; 20],
-    server: JoinHandle<Vec<String>>,
+/// The server's certificate and key as bytes, so the same identity serves before and after the restart.
+struct Identity {
+    chain: Vec<Vec<u8>>,
+    key: Vec<u8>,
 }
 
 /// A listener that handles `connections` connections in turn and reports what each one was.
-fn lab(connections: usize) -> Lab {
-    let w = world();
-    let bootstrap_cert = {
-        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
-        params.distinguished_name.push(rcgen::DnType::CommonName, "bootstrap");
-        params.self_signed(&w.bootstrap_key).unwrap().der().to_vec()
-    };
-    let bootstrap_key = w.bootstrap_key.serialize_der();
-    let (root_cert, secret) = (w.root_cert.clone(), w.secret);
-    let server_identity = w.enroller.authority().server_certificate("localhost", now_ms()).unwrap();
-    let shared: Shared = Arc::new(Mutex::new(w.enroller));
-    let identity = (
-        server_identity.chain.iter().map(|c| CertificateDer::from(c.clone())).collect(),
-        PrivateKeyDer::from(PrivatePkcs8KeyDer::from(server_identity.key_pkcs8.clone())),
+fn listen(
+    shared: Shared,
+    identity: &Identity,
+    root_cert: &[u8],
+    bootstrap_key: [u8; 32],
+    connections: usize,
+) -> (SocketAddr, JoinHandle<Vec<String>>) {
+    let live = Arc::new(DurableAdmission(shared.clone()));
+    let id = (
+        identity.chain.iter().map(|c| CertificateDer::from(c.clone())).collect(),
+        PrivateKeyDer::from(PrivatePkcs8KeyDer::from(identity.key.clone())),
     );
-    let live = Arc::new(Live(shared.clone()));
-    let config = server_config(identity, roots(&root_cert), live.clone()).unwrap();
+    let config = server_config(id, roots(root_cert), live.clone()).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    let key = w.key;
-    let server_shared = shared.clone();
-    let server = thread::spawn(move || {
+    let handle = thread::spawn(move || {
         let mut seen = Vec::new();
         for _ in 0..connections {
             let (tcp, _) = listener.accept().unwrap();
-            let Ok(mut admitted) = admit(tcp, config.clone(), IO, &*live, (now_ms() / 1000) as i64) else {
+            let now = (real_now_ms() / 1000) as i64;
+            let Ok(mut admitted) = admit(tcp, config.clone(), IO, &*live, now) else {
                 seen.push("refused".to_string());
                 continue;
             };
             admitted.stream.sock.set_read_timeout(Some(IO)).unwrap();
             match admitted.class {
-                Class::Bootstrap(bootstrap_pub) => {
-                    assert_eq!(bootstrap_pub, key);
+                Class::Bootstrap(key) => {
+                    assert_eq!(key, bootstrap_key);
                     seen.push("bootstrap".to_string());
-                    let mut conn = BootstrapConnection::new(bootstrap_pub, "127.0.0.1");
+                    let mut conn = BootstrapConnection::new(key, "127.0.0.1");
                     let mut buf = [0u8; 4096];
                     // A bootstrap peer gets nothing but the two enrollment calls; anything else ends the connection.
                     while let Ok(n) = admitted.stream.read(&mut buf) {
                         if n == 0 {
                             break;
                         }
-                        let out = conn.receive(&mut server_shared.lock().unwrap(), &buf[..n]);
+                        let out = conn.receive(&mut shared.lock().unwrap(), &buf[..n]);
                         if !out.bytes.is_empty() {
                             admitted.stream.write_all(&out.bytes).unwrap();
                             admitted.stream.flush().unwrap();
@@ -116,7 +91,7 @@ fn lab(connections: usize) -> Lab {
                 }
                 Class::Device => {
                     // Recheck before any application I/O, as the listener must.
-                    if admitted.recheck(&*live, (now_ms() / 1000) as i64).is_err() {
+                    if admitted.recheck(&*live, now).is_err() {
                         seen.push("device-recheck-failed".to_string());
                         continue;
                     }
@@ -130,22 +105,18 @@ fn lab(connections: usize) -> Lab {
         }
         seen
     });
-    Lab { shared, addr, root_cert, bootstrap_cert, bootstrap_key, secret, server }
-}
-
-fn tcp(addr: SocketAddr) -> TcpStream {
-    let s = TcpStream::connect(addr).unwrap();
-    s.set_read_timeout(Some(IO)).unwrap();
-    s.set_write_timeout(Some(IO)).unwrap();
-    s
+    (addr, handle)
 }
 
 type Client = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
 
-fn dial(lab: &Lab, chain: Vec<Vec<u8>>, key: Vec<u8>) -> Client {
+fn dial(addr: SocketAddr, root_cert: &[u8], chain: Vec<Vec<u8>>, key: Vec<u8>) -> Client {
     let identity = (chain.into_iter().map(CertificateDer::from).collect(), PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key)));
-    let config = client_config(roots(&lab.root_cert), Some(identity)).unwrap();
-    connect(tcp(lab.addr), config, ServerName::try_from("localhost").unwrap()).unwrap()
+    let config = client_config(roots(root_cert), Some(identity)).unwrap();
+    let tcp = TcpStream::connect(addr).unwrap();
+    tcp.set_read_timeout(Some(IO)).unwrap();
+    tcp.set_write_timeout(Some(IO)).unwrap();
+    connect(tcp, config, ServerName::try_from("localhost").unwrap()).unwrap()
 }
 
 /// Read until one whole response frame has arrived.
@@ -176,52 +147,77 @@ fn assert_dark(mut stream: Client) {
 }
 
 #[test]
-fn a_first_device_enrolls_over_mutual_tls_and_reconnects_with_the_issued_chain() {
-    let lab = lab(3);
+fn a_first_device_enrolls_survives_a_restart_and_reconnects_with_the_issued_chain() {
+    let path = std::env::temp_dir().join(format!("crewcraft-bootstrap-e2e-{}.journal", std::process::id()));
+    let _ = fs::remove_file(&path);
+    let p = parts();
+    let bootstrap_cert = CertificateParams::new(Vec::<String>::new()).unwrap().self_signed(&p.bootstrap_key).unwrap().der().to_vec();
+    let bootstrap_key = p.bootstrap_key.serialize_der();
+    let (root_cert, key, secret) = (p.root_cert.clone(), p.key, p.secret);
+    let w = world_over(AccountStore::open(&path, service_key()).unwrap(), p, real_now_ms(), true);
+    let clock = w.now();
+    let server = w.enroller.authority().server_certificate("localhost", clock).unwrap();
+    let identity = Identity { chain: server.chain.clone(), key: server.key_pkcs8.clone() };
+    let shared: Shared = Arc::new(Mutex::new(w.enroller));
     let (device_key, csr) = device_csr();
 
-    // 1. The bootstrap handshake with the invitation key, then Redeem. The reply is Setup and carries no certificate.
-    let mut bootstrap = dial(&lab, vec![lab.bootstrap_cert.clone()], lab.bootstrap_key.clone());
+    // 1. Bootstrap handshake with the invitation key, then Redeem. The reply is Setup and carries no certificate.
+    let (addr, first) = listen(shared.clone(), &identity, &root_cert, key, 2);
+    let mut bootstrap = dial(addr, &root_cert, vec![bootstrap_cert.clone()], bootstrap_key.clone());
     bootstrap.write_all(&redeem_frame(1, "laptop", &csr, PASSWORD)).unwrap();
     let (id, setup) = read_response(&mut bootstrap);
     assert_eq!(id, 1);
     let BootstrapResponse::Setup { totp_uri } = setup else { panic!("not Setup") };
     assert!(totp_uri.starts_with("otpauth://totp/"));
-    assert!(lab.shared.lock().unwrap().services().committed.is_empty(), "nothing is committed before the code");
+    assert!(shared.lock().unwrap().services().store().person(EMAIL).is_none(), "nothing is durable before the code");
 
     // 2. Confirm on the same connection. Only now does the device get its chain.
-    let code = code_at(lab.secret, lab.shared.lock().unwrap().services().clock_ms);
+    let code = code_at(secret, clock);
     bootstrap.write_all(&confirm_frame(2, &code)).unwrap();
     let (id, activated) = read_response(&mut bootstrap);
     assert_eq!(id, 2);
     let BootstrapResponse::Activated { certificate, issuer_certificate } = activated else { panic!("not Activated") };
-    {
-        let enroller = lab.shared.lock().unwrap();
-        let committed = &enroller.services().committed;
-        assert_eq!(committed.len(), 1);
-        assert_eq!(committed[0].chain, vec![certificate.clone(), issuer_certificate.clone()]);
-        assert_eq!(enroller.activation().devices().list(EMAIL).len(), 1);
-    }
+    drop(bootstrap);
+    // The consumed invitation no longer gets in, even before any restart.
+    assert_dark(dial(addr, &root_cert, vec![bootstrap_cert.clone()], bootstrap_key.clone()));
+    assert_eq!(first.join().unwrap(), ["bootstrap", "refused"]);
 
-    // 3. Reconnect as an enrolled device with exactly the chain the server issued and the key that signed the request.
-    let mut device = dial(&lab, vec![certificate.clone(), issuer_certificate], device_key.serialize_der());
+    // 3. The process stops. A new one opens the same journal with the same service key and nothing else.
+    let enroller = Arc::try_unwrap(shared).unwrap().into_inner().unwrap();
+    let (authority, services) = enroller.into_parts();
+    let (store, env) = services.into_parts();
+    drop(store);
+    let reopened = StoreServices::new(AccountStore::open(&path, service_key()).unwrap(), env);
+    let shared: Shared = Arc::new(Mutex::new(Enroller::new(authority, reopened)));
+    assert_eq!(shared.lock().unwrap().services().store().device_certificate(1).unwrap(), certificate.as_slice());
+
+    // 4. The device reconnects with exactly the issued chain and the key that signed the request, and is admitted from the
+    //    reloaded store. A client with the old bootstrap certificate is still refused.
+    let (addr, second) = listen(shared, &identity, &root_cert, key, 2);
+    let mut device = dial(addr, &root_cert, vec![certificate, issuer_certificate], device_key.serialize_der());
     device.write_all(b"ping").unwrap();
     let mut pong = [0u8; 4];
     device.read_exact(&mut pong).unwrap();
     assert_eq!(&pong, b"pong");
-
-    // 4. The invitation is used up: the bootstrap certificate no longer gets in, and a client with no certificate never did.
-    assert_dark(dial(&lab, vec![lab.bootstrap_cert.clone()], lab.bootstrap_key.clone()));
-    let seen = lab.server.join().unwrap();
-    assert_eq!(seen, ["bootstrap", "device", "refused"]);
+    assert_dark(dial(addr, &root_cert, vec![bootstrap_cert], bootstrap_key));
+    assert_eq!(second.join().unwrap(), ["device", "refused"]);
 }
 
 #[test]
 fn a_bootstrap_peer_that_sends_anything_else_is_cut_off_without_a_reply() {
-    let lab = lab(1);
-    let (_key, _csr) = device_csr();
-    let mut bootstrap = dial(&lab, vec![lab.bootstrap_cert.clone()], lab.bootstrap_key.clone());
-    // An ordinary chat-protocol frame (a Ping request, tag 5 in the request codec) on a bootstrap connection.
+    let path = std::env::temp_dir().join(format!("crewcraft-bootstrap-e2e-cut-{}.journal", std::process::id()));
+    let _ = fs::remove_file(&path);
+    let p = parts();
+    let bootstrap_cert = CertificateParams::new(Vec::<String>::new()).unwrap().self_signed(&p.bootstrap_key).unwrap().der().to_vec();
+    let bootstrap_key = p.bootstrap_key.serialize_der();
+    let (root_cert, key) = (p.root_cert.clone(), p.key);
+    let w = world_over(AccountStore::open(&path, service_key()).unwrap(), p, real_now_ms(), true);
+    let server = w.enroller.authority().server_certificate("localhost", w.now()).unwrap();
+    let identity = Identity { chain: server.chain.clone(), key: server.key_pkcs8.clone() };
+    let shared: Shared = Arc::new(Mutex::new(w.enroller));
+    let (addr, handle) = listen(shared.clone(), &identity, &root_cert, key, 1);
+    let mut bootstrap = dial(addr, &root_cert, vec![bootstrap_cert], bootstrap_key);
+    // An ordinary chat-protocol frame (a Ping request) on a bootstrap connection.
     let ping = crewcraft_proto::request::encode_request(1, &crewcraft_proto::request::Request::Ping).unwrap();
     bootstrap.write_all(&crewcraft_proto::frame::encode(&ping).unwrap()).unwrap();
     let mut plain = Vec::new();
@@ -231,7 +227,6 @@ fn a_bootstrap_peer_that_sends_anything_else_is_cut_off_without_a_reply() {
         matches!(error, Some(ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted | ErrorKind::BrokenPipe)),
         "{error:?}"
     );
-    assert_eq!(lab.server.join().unwrap(), ["bootstrap"]);
-    // Nothing was staged by it.
-    assert_eq!(lab.shared.lock().unwrap().activation().pending_count(), 0);
+    assert_eq!(handle.join().unwrap(), ["bootstrap"]);
+    assert_eq!(shared.lock().unwrap().staged_count(), 0);
 }
