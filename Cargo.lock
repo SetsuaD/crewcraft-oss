@@ -72,6 +72,7 @@ version = "0.0.1"
 dependencies = [
  "argon2",
  "base64",
+ "crewcraft-totp",
  "rand_core",
  "sha2",
  "subtle",
@@ -108,7 +109,9 @@ dependencies = [
 name = "crewcraft-server-core"
 version = "0.0.1"
 dependencies = [
+ "crewcraft-accounts",
  "crewcraft-proto",
+ "crewcraft-totp",
  "sha2",
 ]
 
