@@ -143,6 +143,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "crewcraft-admission"
+version = "0.0.1"
+dependencies = [
+ "crewcraft-pki",
+ "crewcraft-tls",
+ "rcgen",
+ "rustls",
+ "x509-parser",
+]
+
+[[package]]
 name = "crewcraft-client-core"
 version = "0.0.1"
 dependencies = [
@@ -156,6 +167,20 @@ dependencies = [
  "ed25519-dalek",
  "hkdf",
  "sha2",
+]
+
+[[package]]
+name = "crewcraft-pki"
+version = "0.0.1"
+dependencies = [
+ "crewcraft-tls",
+ "rand_core",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "sha2",
+ "time",
+ "x509-parser",
 ]
 
 [[package]]
