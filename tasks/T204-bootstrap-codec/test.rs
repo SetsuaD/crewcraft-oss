@@ -151,10 +151,7 @@ fn decode_checks_the_length_prefix_first() {
     assert_eq!(decode_bootstrap_request(&bytes).unwrap_err(), CodecError::FieldLength);
     let oversized = ((MAX_CERT + 1) as u16).to_be_bytes();
     assert_eq!(decode_bootstrap_response(&[161, 0, 0, 0, 1, oversized[0], oversized[1]]).unwrap_err(), CodecError::FieldLength);
-    assert_eq!(
-        decode_bootstrap_response(&[161, 0, 0, 0, 1, 0, 1, 9, oversized[0], oversized[1]]).unwrap_err(),
-        CodecError::FieldLength
-    );
+    assert_eq!(decode_bootstrap_response(&[161, 0, 0, 0, 1, 0, 1, 9, oversized[0], oversized[1]]).unwrap_err(), CodecError::FieldLength);
 }
 
 #[test]
