@@ -39,7 +39,7 @@ serial fails the handshake) and published as a CRL for any reverse proxy in fron
 
 The problem: a new device has no certificate yet, but the server answers only mutual TLS.
 
-The solution: the enrollment code itself is the credential for exactly one handshake.
+The enrollment code is the bootstrap credential while its invitation is unexpired and unused.
 
 1. When an administrator creates an invitation, the server draws 160 random bits (the code), computes
    `seed = HKDF-SHA256(ikm = code bits, salt = "crewcraft-enroll-v1", info = "bootstrap-ed25519")`, derives the Ed25519
@@ -49,10 +49,14 @@ The solution: the enrollment code itself is the credential for exactly one hands
 3. The server's client-certificate verifier accepts a handshake if the certificate chains to the issuing CA and is not
    revoked, **or** if it is self-signed with a public key that matches an unexpired, unused invitation. Anything else
    fails the handshake.
-4. A bootstrap connection can reach exactly two calls: "redeem this invitation with this certificate signing request"
-   and "confirm my first TOTP code". Every other request on it is closed without a response.
-5. On successful TOTP confirmation the invitation is burned (stored as used, with the device it produced) and the
-   bootstrap public key stops matching.
+4. A bootstrap connection can reach exactly two calls. The first stages the verified certificate signing request
+   and password setup, then returns the authenticator setup URI. The same connection confirms the first TOTP code
+   against that staged request. Every other request on the connection is closed without a response.
+5. A successful confirmation commits the account, exact issued device certificate, consumed invitation and accepted
+   TOTP counter together. The bootstrap public key stops matching. Only after the commit does the server return the
+   device leaf and issuing certificate. A disconnect before the commit can restart setup while the invitation is live.
+   If the commit succeeds but delivery fails, the invitation stays consumed. An administrator revokes the inaccessible
+   device and uses the account recovery flow.
 
 Properties: the server never stores the code; a database leak does not reveal codes (the public key does not give
 the seed back); an attacker without the code cannot complete a handshake; guessing is online-only (one handshake per
