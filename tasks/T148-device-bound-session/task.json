@@ -12,5 +12,5 @@
     "T127-devices"
   ],
   "spec": "Add Sessions::validate_for(token, user, device, now_ms). Reject unknown tokens and any mismatch with the user and device resolved from the verified client certificate. Leave the owner's entry untouched on a mismatch. A matching live token refreshes its idle timestamp as before. A matching expired or revoked token is refused. Preserve the existing validate and token storage behavior.",
-  "status": "open"
+  "status": "done"
 }
