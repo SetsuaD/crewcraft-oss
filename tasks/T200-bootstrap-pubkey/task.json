@@ -3,13 +3,16 @@
   "title": "Ed25519 public key of the bootstrap key pair",
   "crate": "crewcraft-enroll",
   "files": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates/enroll/Cargo.toml",
     "crates/enroll/src/lib.rs"
   ],
   "test_path": "crates/enroll/tests/t200_bootstrap_pubkey.rs",
   "test_cmd": "cargo test -p crewcraft-enroll --test t200_bootstrap_pubkey",
-  "depends_on": [],
-  "spec": "Implement bootstrap_public_key(seed) with ed25519-dalek (already added to the workspace and to this crate: the RustCrypto-adjacent, audited Ed25519 implementation; SECURITY-DESIGN.md forbids hand-rolled primitives): SigningKey::from_bytes(seed).verifying_key().to_bytes(). Then remove the `#[allow(clippy::todo)]` on the stub. The server stores only this public key per invitation, and the client derives the same key from the emailed code, so it must match RFC 8032 exactly. No other new dependencies.",
-  "status": "open",
+  "depends_on": ["T006-bootstrap-seed"],
+  "spec": "Use ed25519-dalek to derive the RFC 8032 public key from a 32-byte seed. Enable its zeroize feature for the temporary signing key. The enrollment code derives the same key from its HKDF seed on both sides. The invitation store needs only the public key. The RFC test vectors must match exactly.",
+  "status": "done",
   "context": [
     "docs/SECURITY-DESIGN.md"
   ]
