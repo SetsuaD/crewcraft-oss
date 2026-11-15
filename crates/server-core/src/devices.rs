@@ -69,6 +69,11 @@ impl Devices {
         Ok(id)
     }
 
+    /// The id the next enrolled device will get.
+    pub fn next_id(&self) -> u64 {
+        self.next_id
+    }
+
     /// What `enroll` would refuse, in the same order, without changing anything; `Ok` is the id `enroll` would assign.
     /// The account store validates with this before it journals an activation.
     pub fn check_enroll(&self, user: &str, name: &str, fingerprint: &[u8; 32]) -> Result<u64, DeviceError> {

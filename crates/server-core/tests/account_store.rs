@@ -57,6 +57,7 @@ fn first(n: u8, counter: u64, secret: &'static [u8]) -> Activation<'static> {
         spki_sha256: [n.wrapping_add(100); 32],
         counter,
         first_device: Some(FirstDevice { password_phc: Some(PHC), totp_secret: secret }),
+        expected_device_id: None,
     }
 }
 
@@ -68,6 +69,7 @@ fn another_device(n: u8, counter: u64) -> Activation<'static> {
         spki_sha256: [n.wrapping_add(100); 32],
         counter,
         first_device: None,
+        expected_device_id: None,
     }
 }
 
@@ -606,6 +608,7 @@ fn records_round_trip_and_garbage_is_refused() {
         AccountOp::DeviceRevoked { email: A.into(), device_id: 4 },
         AccountOp::SessionCreated { token_sha256: [8; 32], email: A.into(), device_id: 5, created_ms: 11 },
         AccountOp::SessionRevoked { token_sha256: [8; 32] },
+        AccountOp::SignedIn { email: A.into(), device_id: 5, counter: 80, token_sha256: [9; 32], created_ms: 12 },
     ];
     for op in &ops {
         let bytes = encode_account_op(op).unwrap();
@@ -617,4 +620,79 @@ fn records_round_trip_and_garbage_is_refused() {
     }
     assert_eq!(decode_account_op(&[99]).unwrap_err(), CodecError::BadKind(99));
     assert_eq!(decode_account_op(&[]).unwrap_err(), CodecError::Truncated);
+}
+
+// ---- single-record sign-in and W7 hooks ----
+
+#[test]
+fn sign_in_saves_the_counter_and_the_session_in_one_record() {
+    let p = path("sign-in");
+    let token = {
+        let mut s = two_people(&p);
+        assert_eq!(s.sign_in([5; 32], A, 1, 1000, T0 + 10).unwrap_err(), StoreError::StaleCounter { last: 1000 }, "the setup code is spent");
+        assert!(s.session_hashes().is_empty(), "a refused sign-in starts no session");
+        let records_before = fs::metadata(&p).unwrap().len();
+        let token = s.sign_in([5; 32], A, 1, 1001, T0 + 10).unwrap();
+        let one_frame = fs::metadata(&p).unwrap().len() - records_before;
+        assert!(one_frame < 200, "one record, not two ({one_frame} bytes)");
+        assert_eq!(s.sign_in([6; 32], A, 1, 1001, T0 + 11).unwrap_err(), StoreError::StaleCounter { last: 1001 });
+        assert_eq!(s.sign_in([6; 32], A, 2, 1002, T0 + 11).unwrap_err(), StoreError::Device(DeviceError::NoSuchDevice));
+        token
+    };
+    let mut s = reopen(&p);
+    assert_eq!(s.person(A).unwrap().last_totp_counter, 1001);
+    assert!(s.continue_session(&token, &fp(1), T0 + 20).is_some());
+    assert_eq!(s.sign_in([7; 32], A, 1, 1001, T0 + 21).unwrap_err(), StoreError::StaleCounter { last: 1001 });
+    let _ = fs::remove_file(&p);
+}
+
+#[test]
+fn a_torn_sign_in_leaves_neither_the_counter_nor_the_session() {
+    let p = path("sign-in-torn");
+    {
+        let mut s = two_people(&p);
+        s.sign_in([5; 32], A, 1, 1001, T0 + 10).unwrap();
+    }
+    let len = fs::metadata(&p).unwrap().len();
+    fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(len - 5).unwrap();
+    let mut s = reopen(&p);
+    assert_eq!(s.person(A).unwrap().last_totp_counter, 1000, "the counter rolled back with the session");
+    assert!(s.session_hashes().is_empty());
+    s.sign_in([5; 32], A, 1, 1001, T0 + 11).unwrap();
+    let _ = fs::remove_file(&p);
+}
+
+#[test]
+fn preview_gives_the_stored_claims_and_the_commit_rechecks_the_id() {
+    let p = path("preview");
+    let mut s = AccountStore::create(&p, key()).unwrap();
+    s.issue_invite(invite(A, 1), T0).unwrap();
+    s.issue_invite(invite(B, 2), T0).unwrap();
+    assert_eq!(s.preview_activation(&[1; 32], T0 + 1).unwrap(), (A.to_string(), 1));
+    assert_eq!(s.preview_activation(&[9; 32], T0 + 1).unwrap_err(), StoreError::NoInvite);
+    // B's certificate was issued for id 1 too; A commits first, so B's id moved.
+    let mut a = first(1, 1000, SECRET_A);
+    a.expected_device_id = Some(1);
+    assert_eq!(s.activate(a, T0 + 2).unwrap(), 1);
+    let mut b = first(2, 2000, SECRET_B);
+    b.expected_device_id = Some(1);
+    assert_eq!(s.activate(b, T0 + 3).unwrap_err(), StoreError::DeviceIdMoved { expected: 1, next: 2 });
+    assert!(s.is_invite_pending(&[2; 32], T0 + 3), "nothing was committed for B");
+    assert_eq!(s.preview_activation(&[2; 32], T0 + 3).unwrap(), (B.to_string(), 2));
+    let _ = fs::remove_file(&p);
+}
+
+#[test]
+fn admission_requires_the_exact_active_leaf() {
+    let p = path("admit");
+    let mut s = two_people(&p);
+    assert_eq!(s.admit(cert(1), T0 + 10).unwrap().user, A);
+    assert_eq!(s.admit(cert(9), T0 + 10).unwrap_err(), StoreError::Device(DeviceError::NoSuchDevice));
+    s.revoke_device(A, 1).unwrap();
+    assert_eq!(s.admit(cert(1), T0 + 11).unwrap_err(), StoreError::Device(DeviceError::Revoked));
+    drop(s);
+    let mut s = reopen(&p);
+    assert_eq!(s.admit(cert(1), T0 + 12).unwrap_err(), StoreError::Device(DeviceError::Revoked));
+    assert_eq!(s.admit(cert(2), T0 + 12).unwrap().user, B);
+    let _ = fs::remove_file(&p);
 }
