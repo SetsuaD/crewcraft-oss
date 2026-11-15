@@ -173,7 +173,7 @@ impl<L: AppendLog, E: Environment> Services for StoreServices<L, E> {
             spki_sha256: record.key_id,
             counter: record.accepted_counter,
             expected_device_id: Some(record.device_id),
-            first_device: Some(FirstDevice { password_phc: Some(&record.password_phc), totp_secret: &record.totp_secret }),
+            first_device: Some(FirstDevice { password_phc: Some(&record.password_phc), totp_secret: &record.totp_secret[..] }),
         };
         let Ok(mut store) = self.store.lock() else { return Err(CommitFailure::Ambiguous) };
         store.activate(activation, now_ms).map_err(|e| classify(&e))

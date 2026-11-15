@@ -39,6 +39,8 @@ pub use store::{Environment, StoreServices, SystemEnvironment, classify};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use zeroize::{Zeroize, Zeroizing};
+
 use crewcraft_accounts::password;
 use crewcraft_pki::{Authority, Claims, csr_key_id};
 use crewcraft_proto::bootstrap::{BootstrapRequest, BootstrapResponse, decode_bootstrap_request, encode_bootstrap_response};
@@ -77,8 +79,8 @@ pub struct ActivationRecord {
     pub serial: Vec<u8>,
     /// When the leaf expires, Unix seconds.
     pub not_after: i64,
-    /// The TOTP secret, to be sealed by the store.
-    pub totp_secret: [u8; 20],
+    /// The TOTP secret, to be sealed by the store. Wiped when the record is dropped.
+    pub totp_secret: Zeroizing<[u8; 20]>,
     /// The counter of the code that just proved the authenticator: the first accepted counter, now spent.
     pub accepted_counter: u64,
     /// The bootstrap key whose invitation this consumes.
@@ -239,7 +241,7 @@ enum State {
 }
 
 enum Step {
-    NeedsHash(String),
+    NeedsHash(Zeroizing<String>),
     Reply(Vec<u8>),
     ReplyAndClose(Vec<u8>),
     Close,
@@ -259,7 +261,7 @@ fn error_close(id: u32, code: u16) -> Step {
 
 /// The password to hash. Compute the Argon2id PHC string WITHOUT holding any lock, then give it to `finish_hash`.
 pub struct HashJob {
-    password: String,
+    password: Zeroizing<String>,
 }
 
 impl HashJob {
@@ -441,7 +443,11 @@ impl BootstrapConnection {
         let staged = matches!(self.state, State::Staged(_));
         let start = matches!(self.state, State::Start);
         match request {
-            BootstrapRequest::Redeem { device_name, csr, password } if start || staged => self.redeem(enroller, id, &device_name, csr, &password),
+            BootstrapRequest::Redeem { device_name, csr, password } if start || staged => {
+                // The decoded password is wiped when this arm ends.
+                let password = Zeroizing::new(password);
+                self.redeem(enroller, id, &device_name, csr, &password)
+            }
             BootstrapRequest::ConfirmTotp { code } if staged => self.confirm(enroller, id, &code),
             _ => Step::Close,
         }
@@ -464,7 +470,9 @@ impl BootstrapConnection {
         if e.services.key_registered(&key_id) || e.services.has_person(&email) {
             return error_close(id, ERR_UNAVAILABLE);
         }
-        let Some(secret) = e.services.new_totp_secret() else { return error_close(id, ERR_UNAVAILABLE) };
+        let Some(mut drawn) = e.services.new_totp_secret() else { return error_close(id, ERR_UNAVAILABLE) };
+        let secret = Zeroizing::new(drawn);
+        drawn.zeroize();
         let services = &e.services;
         e.staging.retain_live(|key| services.preview(key, now).is_some());
         // The limits are taken inside `begin`, before any password hashing.
@@ -477,7 +485,7 @@ impl BootstrapConnection {
         // The limits are taken and the setup is staged. The hash is the caller's to compute, so it can run with no lock held;
         // `finish_hash` answers the Redeem.
         self.state = State::AwaitingHash(Box::new(Awaiting { attempt: begun.attempt, csr, request_id: id, totp_uri: begun.otpauth_uri }));
-        Step::NeedsHash(password.to_string())
+        Step::NeedsHash(Zeroizing::new(password.to_string()))
     }
 
     fn confirm<S: Services>(&mut self, e: &mut Enroller<S>, id: u32, code: &str) -> Step {
@@ -513,7 +521,7 @@ impl BootstrapConnection {
                 chain: issued.chain.clone(),
                 serial: issued.serial.clone(),
                 not_after: issued.not_after,
-                totp_secret: confirmed.secret,
+                totp_secret: confirmed.secret.clone(),
                 accepted_counter: confirmed.counter,
                 bootstrap_pub: self.key,
             };
