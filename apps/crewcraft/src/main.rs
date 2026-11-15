@@ -89,34 +89,30 @@ fn lab_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("{error:?}"))
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn terminal_password(prompt: &str) -> io::Result<String> {
-    use signal_hook::consts::SIGINT;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, OnceLock};
+    use nix::sys::signal::{SigSet, Signal, SigmaskHow};
+    use nix::sys::termios::{FlushArg, tcflush};
 
-    static DEFAULT_INTERRUPT: OnceLock<io::Result<Arc<AtomicBool>>> = OnceLock::new();
-    let enabled = DEFAULT_INTERRUPT
-        .get_or_init(|| {
-            let enabled = Arc::new(AtomicBool::new(true));
-            signal_hook::flag::register_conditional_default(SIGINT, Arc::clone(&enabled))?;
-            Ok(enabled)
-        })
-        .as_ref()
-        .map_err(|error| io::Error::new(error.kind(), "could not configure credential prompt cancellation"))?;
+    let config = rpassword::ConfigBuilder::new().input_file_path("/dev/stdin").output_writer(io::stderr()).build();
+    let mut interrupts = SigSet::empty();
+    interrupts.add(Signal::SIGINT);
 
-    // rpassword raises SIGINT before dropping its Unix terminal guard. Let it return
-    // and restore the terminal before applying the normal interrupt action.
-    enabled.store(false, Ordering::SeqCst);
-    let result = rpassword::prompt_password(prompt);
-    enabled.store(true, Ordering::SeqCst);
-    if matches!(&result, Err(error) if error.kind() == io::ErrorKind::Interrupted) {
-        signal_hook::low_level::emulate_default_handler(SIGINT)?;
-    }
+    // The prompt raises SIGINT on this thread before dropping its terminal guard.
+    // Defer delivery until the guard restores the terminal and failed input is discarded.
+    let previous_mask = interrupts.thread_swap_mask(SigmaskHow::SIG_BLOCK)?;
+    let result = rpassword::prompt_password_with_config(prompt, config);
+    let discarded = if result.is_err() {
+        tcflush(io::stdin(), FlushArg::TCIFLUSH)
+    } else {
+        Ok(())
+    };
+    previous_mask.thread_set_mask()?;
+    discarded?;
     result
 }
 
-#[cfg(not(unix))]
+#[cfg(not(target_os = "linux"))]
 fn terminal_password(prompt: &str) -> io::Result<String> {
     rpassword::prompt_password(prompt)
 }
