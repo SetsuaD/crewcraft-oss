@@ -51,8 +51,17 @@ impl Sessions {
         self.validate_matching(token, now_ms, |session| session.user == user && session.device == device)
     }
 
+    /// `validate_for` for a stream that kept only the SHA-256 of the token (it dropped the bearer secret after
+    /// sign-in). Same expiry and identity rules.
+    pub fn validate_hash_for(&mut self, token_sha256: &[u8; 32], user: &str, device: &str, now_ms: u64) -> Option<Session> {
+        self.validate_key_matching(hex(token_sha256), now_ms, |session| session.user == user && session.device == device)
+    }
+
     fn validate_matching(&mut self, token: &str, now_ms: u64, matches_identity: impl FnOnce(&Session) -> bool) -> Option<Session> {
-        let key = token_key(token);
+        self.validate_key_matching(token_key(token), now_ms, matches_identity)
+    }
+
+    fn validate_key_matching(&mut self, key: String, now_ms: u64, matches_identity: impl FnOnce(&Session) -> bool) -> Option<Session> {
         let session = self.sessions.get_mut(&key)?;
         if !matches_identity(session) {
             return None;
