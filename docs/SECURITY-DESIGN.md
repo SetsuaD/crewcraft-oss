@@ -43,9 +43,13 @@ The solution: the enrollment code itself is the credential for exactly one hands
 
 1. When an administrator creates an invitation, the server draws 160 random bits (the code), computes
    `seed = HKDF-SHA256(ikm = code bits, salt = "crewcraft-enroll-v1", info = "bootstrap-ed25519")`, derives the Ed25519
-   public key from `seed`, and stores **only that public key**, the invitation record and its expiry. It emails the code.
+   public key from `seed`, and stores **only that public key**, the invitation record and its expiry. The trusted
+   invitation includes the code, the server name and the SHA-256 fingerprint of the root certificate's DER bytes.
+   The administrator supplies the root certificate with the invitation or through the organization's trust setup.
 2. The client parses the code (typos are caught by the check symbol before any network traffic), derives the same
-   seed and key pair, makes a self-signed certificate for it, and connects.
+   seed and key pair, makes a self-signed certificate for it, and connects. It checks the fingerprint of the supplied
+   root certificate before trusting that root and uses standard TLS certificate chain and hostname checks. A missing
+   or mismatched trust anchor stops enrollment before the client sends a request or password.
 3. The server's client-certificate verifier accepts a handshake if the certificate chains to the issuing CA and is not
    revoked, **or** if it is self-signed with a public key that matches an unexpired, unused invitation. Anything else
    fails the handshake.
