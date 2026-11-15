@@ -8,7 +8,8 @@ use crewcraft_proto::push::{MAX_MENTIONS, Push, encode_push};
 use crewcraft_proto::request::{Request, Response, decode_request, encode_response};
 
 use crate::cursor_log::Since;
-use crate::dispatch::handle;
+use crate::dispatch::{Backend, handle, handle_backend};
+use crate::durable::{DurableError, DurableServer};
 use crate::room_service::{Event, EventKind};
 use crate::server::Server;
 
@@ -19,6 +20,19 @@ pub enum ConnError {
     Frame(FrameError),
     /// A complete frame is not a request (`decode_request` failed). Its id is unknown, so it cannot be answered.
     Request(CodecError),
+}
+
+/// Fatal failure of a connection backed by a durable server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurableConnError {
+    Protocol(ConnError),
+    Storage(DurableError),
+}
+
+impl From<ConnError> for DurableConnError {
+    fn from(error: ConnError) -> Self {
+        Self::Protocol(error)
+    }
 }
 
 /// The push for one room event: `Posted` becomes `Push::Posted` with the event's actor as author and its html and
@@ -66,18 +80,38 @@ impl Connection {
     /// Returns everything to send, in that order. On a fatal error, returns only the error: no bytes from this call
     /// are sent and the caller closes the connection.
     pub fn receive(&mut self, server: &mut Server, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, ConnError> {
+        self.receive_with(server, bytes, now_ms, |s, user, request, now| Ok(handle(s, user, request, now)), |s| s)
+    }
+
+    /// Handle framed requests with the same wire behavior as [Self::receive].
+    /// A successful mutation is acknowledged after it is recorded. Any storage
+    /// failure is fatal and drops this call's buffered output. Earlier durable
+    /// mutations in the same call remain committed.
+    pub fn receive_durable(&mut self, server: &mut DurableServer, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, DurableConnError> {
+        server.check_alive().map_err(DurableConnError::Storage)?;
+        self.receive_with(
+            server,
+            bytes,
+            now_ms,
+            |s, user, request, now| handle_backend(&mut Backend::Durable(s), user, request, now).map_err(DurableConnError::Storage),
+            DurableServer::server,
+        )
+    }
+
+    fn receive_with<S, E: From<ConnError>>(
+        &mut self,
+        server: &mut S,
+        bytes: &[u8],
+        now_ms: u64,
+        mut dispatch: impl FnMut(&mut S, &str, &Request, u64) -> Result<Response, E>,
+        read: impl Fn(&S) -> &Server,
+    ) -> Result<Vec<u8>, E> {
         self.decoder.push(bytes);
         let mut out = Vec::new();
 
-        loop {
-            let payload = match self.decoder.next_frame() {
-                Ok(Some(p)) => p,
-                Ok(None) => break,
-                Err(e) => return Err(ConnError::Frame(e)),
-            };
-
+        while let Some(payload) = self.decoder.next_frame().map_err(ConnError::Frame)? {
             let (id, request) = decode_request(&payload).map_err(ConnError::Request)?;
-            let response = handle(server, &self.user, &request, now_ms);
+            let response = dispatch(server, &self.user, &request, now_ms)?;
             let resp_bytes = encode_response(id, &response).map_err(ConnError::Request)?;
             let framed_resp = encode(&resp_bytes).map_err(ConnError::Frame)?;
             out.extend_from_slice(&framed_resp);
@@ -85,7 +119,7 @@ impl Connection {
             // After a successful Sync, append the room's events as push frames.
             if let Request::Sync { room, cursor } = &request
                 && matches!(response, Response::Ok { .. })
-                && let Ok(service) = server.room(room)
+                && let Ok(service) = read(server).room(room)
                 && let Ok(Since::Events(events)) = service.sync(&self.user, *cursor)
             {
                 for (ev_cursor, ev) in events {
