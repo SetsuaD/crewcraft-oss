@@ -53,23 +53,15 @@ impl LabRuntime {
 
     /// Build the handler with the same account store used by TLS admission and chat authentication.
     /// The listener owns the connection deadlines and joins its handlers before returning.
-    pub fn serve<B>(
-        self,
-        shutdown: &AtomicBool,
-        make_bootstrap: impl FnOnce(Arc<Mutex<AccountStore>>, Authority) -> io::Result<B>,
-    ) -> io::Result<()>
+    pub fn serve<B>(self, shutdown: &AtomicBool, make_bootstrap: impl FnOnce(Arc<Mutex<AccountStore>>, Authority) -> io::Result<B>) -> io::Result<()>
     where
         B: Fn([u8; 32], &mut BootstrapStream) + Send + Sync + 'static,
     {
         let Self { server, accounts, issuer, now_ms, ownership } = self;
         let bootstrap = make_bootstrap(accounts.clone(), issuer)?;
         let throttle = Arc::new(Mutex::new(Throttle::new()));
-        let result = server.serve(
-            shutdown,
-            move || now_ms(),
-            move |der, now| StoredDeviceAuth::bind(accounts.clone(), throttle.clone(), der, now),
-            bootstrap,
-        );
+        let result =
+            server.serve(shutdown, move || now_ms(), move |der, now| StoredDeviceAuth::bind(accounts.clone(), throttle.clone(), der, now), bootstrap);
         drop(ownership);
         result
     }
