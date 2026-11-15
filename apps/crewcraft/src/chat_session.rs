@@ -82,6 +82,14 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         self.request(Request::Post { room: room.to_owned(), text: text.to_owned() }, now_ms, local_minute, deadline)
     }
 
+    pub fn edit(&mut self, room: &str, target: u64, text: &str, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<u64, ChatError> {
+        self.request(Request::Edit { room: room.to_owned(), target, text: text.to_owned() }, now_ms, local_minute, deadline)
+    }
+
+    pub fn delete(&mut self, room: &str, target: u64, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<u64, ChatError> {
+        self.request(Request::Delete { room: room.to_owned(), target }, now_ms, local_minute, deadline)
+    }
+
     /// Follow the room and fetch events after its current cursor. Return the acknowledged head
     /// after the timeline reaches it. A gap or incomplete replay leaves the applied prefix visible.
     pub fn sync(&mut self, room: &str, direct: bool, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<u64, ChatError> {

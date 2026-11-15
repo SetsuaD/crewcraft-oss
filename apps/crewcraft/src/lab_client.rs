@@ -88,6 +88,20 @@ impl LabSession {
         self.chat.post(room, text, 0, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
     }
 
+    pub fn edit(&mut self, room: &str, target: u64, text: &str) -> Result<u64, LabError> {
+        if !valid_room(room) || target == 0 {
+            return Err(LabError::Usage);
+        }
+        self.chat.edit(room, target, text, 0, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    pub fn delete(&mut self, room: &str, target: u64) -> Result<u64, LabError> {
+        if !valid_room(room) || target == 0 {
+            return Err(LabError::Usage);
+        }
+        self.chat.delete(room, target, 0, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
     pub fn sync(&mut self, room: &str) -> Result<(u64, Vec<Shown>), LabError> {
         if !valid_room(room) {
             return Err(LabError::Usage);
