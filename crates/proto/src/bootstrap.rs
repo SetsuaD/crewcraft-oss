@@ -172,10 +172,9 @@ pub fn encode_bootstrap_response(id: u32, response: &BootstrapResponse) -> Resul
 pub fn decode_bootstrap_response(mut input: &[u8]) -> Result<(u32, BootstrapResponse), CodecError> {
     let (tag, id) = read_header(&mut input, REDEEMED..=ERROR)?;
     let response = match tag {
-        REDEEMED => BootstrapResponse::Redeemed {
-            certificate: read_field(&mut input, 1, MAX_CERT)?.to_vec(),
-            totp_uri: read_string(&mut input, 1, MAX_URI)?,
-        },
+        REDEEMED => {
+            BootstrapResponse::Redeemed { certificate: read_field(&mut input, 1, MAX_CERT)?.to_vec(), totp_uri: read_string(&mut input, 1, MAX_URI)? }
+        }
         ACTIVATED => BootstrapResponse::Activated,
         ERROR => BootstrapResponse::Error { code: u16::from_be_bytes(take_array(&mut input)?) },
         _ => return Err(CodecError::BadKind(tag)),
