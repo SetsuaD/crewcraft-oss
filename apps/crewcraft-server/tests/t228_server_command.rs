@@ -9,8 +9,6 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crewcraft_server::lab_installation::LabInstallation;
-
 struct ChildGuard(Child);
 
 impl Drop for ChildGuard {
@@ -40,14 +38,11 @@ fn installed_server_command_binds_only_loopback_and_keeps_original_version_outpu
     fs::create_dir(&directory).unwrap();
     let directory = TestDirectory(directory);
     let data = directory.0.join("state");
-    let root = directory.0.join("root.der");
-    let installation = LabInstallation::initialize(&data, u64::try_from(elapsed.as_millis()).unwrap()).unwrap();
-    fs::write(&root, installation.issuer.root_certificate()).unwrap();
-    drop(installation);
-
-    let child = Command::new(executable)
-        .args(["lab", "serve"]).arg(&data).arg(&root).arg("0")
-        .stdout(Stdio::piped()).spawn().unwrap();
+    let root = data.join("trust-root.der");
+    let init = Command::new(executable).args(["lab", "init"]).arg(&data).output().unwrap();
+    assert!(init.status.success());
+    assert!(root.is_file());
+    let child = Command::new(executable).args(["lab", "serve"]).arg(&data).arg(&root).arg("0").stdout(Stdio::piped()).spawn().unwrap();
     let mut child = ChildGuard(child);
     let stdout = child.0.stdout.take().unwrap();
     let (tx, rx) = mpsc::channel();

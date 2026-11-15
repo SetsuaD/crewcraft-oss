@@ -1,37 +1,42 @@
-//! Real mTLS chat and full lab-state reopen. Synthetic devices are activated directly in the account store.
+//! Wire enrollment, mTLS chat and full lab-state reopen with two synthetic people.
 #![allow(clippy::unwrap_used)]
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crewcraft::bootstrap_transport::{BootstrapEndpoint, BootstrapTransportError};
 use crewcraft::chat_session::{ChatError, ChatSession};
-use crewcraft_accounts::password;
-use crewcraft_accounts::throttle::Throttle;
-use crewcraft_admission::Admission;
+use crewcraft::enroll_client::{EnrollmentError, EnrollmentRequest, ExchangeProblem, FirstTotpCode};
+use crewcraft::lab_client::LabError;
+use crewcraft_bootstrap::Environment;
 use crewcraft_client_core::notify::Settings;
 use crewcraft_client_core::room_view::Shown;
 use crewcraft_client_core::timeline::Line;
-use crewcraft_pki::{Authority, Claims};
+use crewcraft_enroll::EnrollmentCode;
+use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_proto::frame;
 use crewcraft_proto::handshake::{Hello, ServerSide};
 use crewcraft_proto::signin::{SignIn, encode_request};
+use crewcraft_server::lab_bootstrap::bootstrap_handler;
 use crewcraft_server::lab_installation::LabInstallation;
-use crewcraft_server::lab_server::{LabOptions, LabServer, Timeouts};
-use crewcraft_server::stored_device_auth::StoredDeviceAuth;
-use crewcraft_server_core::account_store::{AccountStore, Activation, FirstDevice};
+use crewcraft_server::lab_runtime::LabRuntime;
+use crewcraft_server::lab_server::{LabOptions, Timeouts};
+use crewcraft_server_core::account_store::AccountStore;
+use crewcraft_server_core::activation::ISSUER;
 use crewcraft_server_core::invites::Invite;
 use crewcraft_server_core::room::Role;
-use crewcraft_tls::{DeadlineSocket, Identity, client_config, connect};
+use crewcraft_tls::{DeadlineSocket, client_config, connect};
 use crewcraft_totp::Totp;
-use rcgen::{CertificateParams, KeyPair};
+use rcgen::{CertificateParams, KeyPair, PublicKeyData};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
@@ -73,10 +78,6 @@ fn cutoff() -> Instant {
     Instant::now() + WAIT
 }
 
-fn identity(chain: Vec<Vec<u8>>, key: Vec<u8>) -> Identity {
-    (chain.into_iter().map(CertificateDer::from).collect(), PrivatePkcs8KeyDer::from(key).into())
-}
-
 fn roots(root_der: &[u8]) -> RootCertStore {
     let mut roots = RootCertStore::empty();
     roots.add(CertificateDer::from(root_der)).unwrap();
@@ -86,7 +87,7 @@ fn roots(root_der: &[u8]) -> RootCertStore {
 struct Person {
     email: &'static str,
     secret: [u8; 20],
-    invitation: [u8; 32],
+    invitation: EnrollmentCode,
 }
 
 impl Person {
@@ -98,50 +99,70 @@ impl Person {
         self.totp().generate(now_ms / 1000)
     }
 
-    fn activate(&self, store: &mut AccountStore, issuer: &mut Authority, trusted: RootCertStore, phc: &str, now_ms: u64) -> (u64, Arc<ClientConfig>) {
-        let invite = Invite { email: self.email.into(), bootstrap_pub: self.invitation, expires_ms: now_ms + 300_000 };
+    fn invite(&self, store: &mut AccountStore, now_ms: u64) {
+        let invite = Invite { email: self.email.into(), bootstrap_pub: self.invitation.bootstrap_public_key(), expires_ms: now_ms + 300_000 };
         store.issue_invite(invite, now_ms).unwrap();
-        let (person, device_id) = store.preview_activation(&self.invitation, now_ms).unwrap();
-        assert_eq!(person, self.email);
+    }
+
+    fn enroll(&self, endpoint: &BootstrapEndpoint, trusted: RootCertStore, now_ms: u64) -> Arc<ClientConfig> {
         let key = KeyPair::generate().unwrap();
         let csr = CertificateParams::new(Vec::<String>::new()).unwrap().serialize_request(&key).unwrap();
-        let issued = issuer.issue_device(csr.der(), &Claims { person: &person, device_id }, now_ms).unwrap();
-        let setup_code = self.code_at(now_ms);
-        let counter = self.totp().verify(&setup_code, now_ms / 1000, 0, None).unwrap();
-        let activation = Activation {
-            bootstrap_pub: self.invitation,
+        let expected_spki = key.subject_public_key_info();
+        let request = || EnrollmentRequest {
             device_name: "Synthetic Test Device",
-            certificate: &issued.certificate,
-            spki_sha256: issued.key_id,
-            counter,
-            first_device: Some(FirstDevice { password_phc: Some(phc), totp_secret: &self.secret }),
-            expected_device_id: Some(device_id),
+            csr: csr.der().as_ref(),
+            password: PASSWORD,
+            expected_spki: &expected_spki,
         };
-        assert_eq!(store.activate(activation, now_ms).unwrap(), device_id);
-        assert!(!store.is_invite_pending(&self.invitation, now_ms));
-        let config = client_config(trusted, Some(identity(issued.chain, key.serialize_der()))).unwrap();
-        (device_id, config)
+        let chain = endpoint
+            .open(&self.invitation, WAIT)
+            .unwrap()
+            .enroll(request(), |setup, _| {
+                assert!(setup.protected_uri() == self.totp().otpauth_uri(ISSUER, self.email));
+                FirstTotpCode::parse(self.code_at(now_ms))
+            })
+            .unwrap();
+        self.assert_consumed(endpoint, request());
+        let identity = (vec![chain.leaf, chain.issuer], PrivatePkcs8KeyDer::from(key.serialize_der()).into());
+        client_config(trusted, Some(identity)).unwrap()
+    }
+
+    fn assert_consumed(&self, endpoint: &BootstrapEndpoint, request: EnrollmentRequest<'_>) {
+        match endpoint.open(&self.invitation, WAIT) {
+            Err(error) => assert_eq!(error, BootstrapTransportError::Connection(LabError::Handshake)),
+            Ok(connection) => {
+                // A client can finish writing its handshake before the server checks its invitation key.
+                // If it gets that far, expect a bare close without any bootstrap application response.
+                let error = connection.enroll(request, |_, _| None).unwrap_err();
+                assert!(matches!(
+                    error,
+                    EnrollmentError::Setup(ExchangeProblem::Io(
+                        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted | io::ErrorKind::BrokenPipe
+                    ))
+                ));
+            }
+        }
     }
 }
 
-#[derive(Debug)]
-struct StoreAdmission {
-    accounts: Arc<Mutex<AccountStore>>,
-    now: Arc<AtomicU64>,
+struct TestEnvironment {
+    clock: Arc<AtomicU64>,
+    secrets: VecDeque<[u8; 20]>,
 }
 
-impl Admission for StoreAdmission {
-    fn device_ok(&self, leaf_der: &[u8]) -> bool {
-        self.accounts.lock().is_ok_and(|mut store| store.admit(leaf_der, self.now.load(Ordering::SeqCst)).is_ok())
+impl Environment for TestEnvironment {
+    fn now_ms(&self) -> u64 {
+        self.clock.load(Ordering::SeqCst)
     }
 
-    fn bootstrap_key_live(&self, key: &[u8; 32]) -> bool {
-        self.accounts.lock().is_ok_and(|store| store.is_invite_pending(key, self.now.load(Ordering::SeqCst)))
+    fn totp_secret(&mut self) -> Option<[u8; 20]> {
+        self.secrets.pop_front()
     }
 }
 
 struct Running {
     address: SocketAddr,
+    clock: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<io::Result<()>>>,
 }
@@ -162,46 +183,24 @@ impl Drop for Running {
     }
 }
 
-fn start(state: LabInstallation, now: Arc<AtomicU64>) -> Running {
-    let LabInstallation { ownership, issuer, accounts, rooms } = state;
-    let (root_der, issuer) = issuer.into_parts();
-    start_parts(ownership, root_der, issuer, accounts, rooms, now)
-}
-
-fn start_parts(
-    ownership: crewcraft_server::lab_state::LabState,
-    root_der: Vec<u8>,
-    issuer: Authority,
-    accounts: AccountStore,
-    rooms: crewcraft_server_core::durable::DurableServer,
-    now: Arc<AtomicU64>,
-) -> Running {
-    let server_cert = issuer.server_certificate("localhost", wall_ms()).unwrap();
-    let accounts = Arc::new(Mutex::new(accounts));
-    let throttle = Arc::new(Mutex::new(Throttle::new()));
-    let admission = Arc::new(StoreAdmission { accounts: accounts.clone(), now: now.clone() });
+fn start(state: LabInstallation, initial_auth_time: u64) -> Running {
     let options = LabOptions {
         address: "127.0.0.1:0".parse().unwrap(),
         capacity: NonZeroUsize::new(4).unwrap(),
         timeouts: Timeouts { handshake: WAIT, sign_in: WAIT, signed_in_frame: WAIT, bootstrap: WAIT },
         protocol: ServerSide { min_version: 1, max_version: 1, features: 0, name: "test server".into() },
     };
-    let server = LabServer::bind(options, identity(server_cert.chain, server_cert.key_pkcs8), roots(&root_der), admission, rooms).unwrap();
+    // Sign the TLS server certificate at wall time. Control TOTP and rate limiting only after binding.
+    let clock = Arc::new(AtomicU64::new(wall_ms()));
+    let server_clock = clock.clone();
+    let server = LabRuntime::bind(state, options, move || server_clock.load(Ordering::SeqCst)).unwrap();
     let address = server.local_addr().unwrap();
+    clock.store(initial_auth_time, Ordering::SeqCst);
+    let environment = TestEnvironment { clock: clock.clone(), secrets: VecDeque::from([ALICE_SECRET, BOB_SECRET]) };
     let stop = Arc::new(AtomicBool::new(false));
     let shutdown = stop.clone();
-    let thread = thread::spawn(move || {
-        let result = server.serve(
-            &shutdown,
-            move || now.load(Ordering::SeqCst),
-            move |leaf, at| StoredDeviceAuth::bind(accounts.clone(), throttle.clone(), leaf, at),
-            |_, _| {},
-        );
-        drop(issuer);
-        drop(ownership);
-        result
-    });
-    Running { address, stop, thread: Some(thread) }
+    let thread = thread::spawn(move || server.serve(&shutdown, |accounts, issuer| Ok(bootstrap_handler(accounts, issuer, environment))));
+    Running { address, clock, stop, thread: Some(thread) }
 }
 
 type ClientStream = StreamOwned<ClientConnection, DeadlineSocket>;
@@ -267,22 +266,25 @@ fn line(cursor: u64, author: &str, text: &str) -> Shown {
 }
 
 #[test]
-fn both_clients_chat_then_reopen_every_server_store_and_replay() {
+fn both_clients_enroll_and_chat_then_reopen_every_server_store_and_replay() {
     let directory = TestDirectory::new();
     let state_path = directory.0.join("state");
     let setup_time = wall_ms();
-    let state = LabInstallation::initialize(&state_path, setup_time).unwrap();
+    let mut state = LabInstallation::initialize(&state_path, setup_time).unwrap();
     let pin = state.issuer.root_fingerprint();
-    let LabInstallation { ownership, issuer, mut accounts, mut rooms } = state;
-    let (root_der, mut issuer) = issuer.into_parts();
+    let root_der = state.issuer.root_certificate().to_vec();
     let trusted = roots(&root_der);
-    let alice = Person { email: ALICE, secret: ALICE_SECRET, invitation: [1; 32] };
-    let bob = Person { email: BOB, secret: BOB_SECRET, invitation: [2; 32] };
-    let phc = password::hash(PASSWORD).unwrap();
-    let (alice_id, alice_config) = alice.activate(&mut accounts, &mut issuer, trusted.clone(), &phc, setup_time);
-    let (_, bob_config) = bob.activate(&mut accounts, &mut issuer, trusted.clone(), &phc, setup_time);
-    let room = rooms.create_room(ALICE, "General").unwrap();
-    assert_eq!(rooms.add_member(&room, ALICE, BOB, Role::Member), Ok(1));
+    let alice = Person { email: ALICE, secret: ALICE_SECRET, invitation: EnrollmentCode::from_bytes([1; 20]) };
+    let bob = Person { email: BOB, secret: BOB_SECRET, invitation: EnrollmentCode::from_bytes([2; 20]) };
+    alice.invite(&mut state.accounts, setup_time);
+    bob.invite(&mut state.accounts, setup_time);
+    let room = state.rooms.create_room(ALICE, "General").unwrap();
+    assert_eq!(state.rooms.add_member(&room, ALICE, BOB, Role::Member), Ok(1));
+
+    let first = start(state, setup_time);
+    let endpoint = BootstrapEndpoint::new(&first.address.to_string(), "localhost", RootFingerprint::from_der(&root_der), &root_der).unwrap();
+    let alice_config = alice.enroll(&endpoint, trusted.clone(), setup_time);
+    let bob_config = bob.enroll(&endpoint, trusted.clone(), setup_time);
 
     // Pick a synthetic sign-in time with distinct adjacent codes so the replay assertion cannot hit a collision.
     let first_sign_in = (1..=8)
@@ -292,8 +294,7 @@ fn both_clients_chat_then_reopen_every_server_store_and_replay() {
             alice.code_at(at) != alice.code_at(at - STEP_MS) && bob_code != bob.code_at(at - STEP_MS) && bob_code != bob.code_at(at + STEP_MS)
         })
         .unwrap();
-    let clock = Arc::new(AtomicU64::new(first_sign_in));
-    let first = start_parts(ownership, root_der, issuer, accounts, rooms, clock.clone());
+    first.clock.store(first_sign_in, Ordering::SeqCst);
     let mut client_a = chat(dial(first.address, alice_config.clone()), set_deadline, &alice, &alice.code_at(first_sign_in)).unwrap();
     let mut client_b = chat(dial(first.address, bob_config.clone()), set_deadline, &bob, &bob.code_at(first_sign_in)).unwrap();
 
@@ -316,18 +317,23 @@ fn both_clients_chat_then_reopen_every_server_store_and_replay() {
     assert_eq!(state.accounts.session_hashes().len(), 2);
     assert_eq!(state.accounts.person(ALICE).unwrap().last_totp_counter, first_sign_in / STEP_MS);
     assert_eq!(state.accounts.person(BOB).unwrap().last_totp_counter, first_sign_in / STEP_MS);
+    assert!(!state.accounts.is_invite_pending(&alice.invitation.bootstrap_public_key(), first_sign_in));
+    assert!(!state.accounts.is_invite_pending(&bob.invitation.bootstrap_public_key(), first_sign_in));
+    let devices = state.accounts.devices_of(ALICE);
+    assert_eq!(devices.len(), 1);
+    assert_eq!(state.accounts.devices_of(BOB).len(), 1);
     assert_eq!(state.rooms.delete(&room, ALICE, deleted), Ok(5));
-    assert!(state.accounts.revoke_device(ALICE, alice_id).unwrap());
+    assert!(state.accounts.revoke_device(ALICE, devices[0].id).unwrap());
     drop(state);
 
     let reopened = LabInstallation::open(&state_path, pin, wall_ms()).unwrap();
-    let second = start(reopened, clock.clone());
+    let second = start(reopened, first_sign_in);
     assert_dark(dial(second.address, client_config(trusted, None).unwrap()), BOB, &bob.code_at(first_sign_in));
     assert_dark(dial(second.address, alice_config), ALICE, &alice.code_at(first_sign_in));
     let used_code = bob.code_at(first_sign_in);
     assert!(matches!(chat(dial(second.address, bob_config.clone()), set_deadline, &bob, &used_code), Err(ChatError::SignInRefused)));
     let fresh = first_sign_in + 2 * STEP_MS;
-    clock.store(fresh, Ordering::SeqCst);
+    second.clock.store(fresh, Ordering::SeqCst);
     let received = RefCell::new(None);
     let stream = ObserveReads { stream: dial(second.address, bob_config), capture: &received };
     let mut replay = chat(stream, |probe, deadline| set_deadline(&mut probe.stream, deadline), &bob, &bob.code_at(fresh)).unwrap();

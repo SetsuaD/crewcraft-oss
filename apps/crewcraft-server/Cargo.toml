@@ -11,6 +11,7 @@ publish.workspace = true
 crewcraft-accounts.workspace = true
 crewcraft-admission.workspace = true
 crewcraft-bootstrap.workspace = true
+crewcraft-enroll.workspace = true
 crewcraft-pki.workspace = true
 crewcraft-proto.workspace = true
 crewcraft-server-core.workspace = true
