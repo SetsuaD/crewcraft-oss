@@ -10,6 +10,7 @@ pub mod oidc;
 pub mod password;
 pub mod sessions;
 pub mod sign_in;
+pub mod throttle;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
