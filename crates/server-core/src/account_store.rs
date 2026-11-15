@@ -70,6 +70,12 @@ pub enum StoreError {
     BadField,
     /// The device key (its SubjectPublicKeyInfo) is already registered, live or revoked: a revoked key never returns.
     KeyInUse,
+    /// `activate_expecting` was told which device id the certificate carries, and the store would allocate another.
+    /// Nothing was written.
+    Ordinal {
+        expected: u64,
+        next: u64,
+    },
 }
 
 impl fmt::Display for StoreError {
@@ -334,9 +340,29 @@ impl<L: AppendLog> AccountStore<L> {
         self.invites.is_pending(bootstrap_pub, now_ms)
     }
 
+    /// The canonical email of the live invitation with this bootstrap key: the person an activation will create.
+    pub fn pending_invite_email(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> Option<String> {
+        self.invites.pending(bootstrap_pub, now_ms).map(|invite| invite.email.clone())
+    }
+
     /// Commit an activation as ONE record and return the new device id. The person is the invitation's email: the
     /// client cannot choose it. Only after `Ok` may the server answer the client with success (or its certificate).
     pub fn activate(&mut self, activation: Activation<'_>, now_ms: u64) -> Result<u64, StoreError> {
+        self.activate_with(activation, None, now_ms)
+    }
+
+    /// The device id the next activation will allocate. A certificate issued before the commit carries it.
+    pub fn next_device_id(&self) -> u64 {
+        self.devices.next_id()
+    }
+
+    /// `activate`, for a certificate that already names its device id: if the store would allocate any other id, refuse
+    /// with `Ordinal` BEFORE anything is written, so the certificate's claim and the persistent identity cannot differ.
+    pub fn activate_expecting(&mut self, activation: Activation<'_>, expected_device_id: u64, now_ms: u64) -> Result<u64, StoreError> {
+        self.activate_with(activation, Some(expected_device_id), now_ms)
+    }
+
+    fn activate_with(&mut self, activation: Activation<'_>, expected_device_id: Option<u64>, now_ms: u64) -> Result<u64, StoreError> {
         let email = self.invites.pending(&activation.bootstrap_pub, now_ms).ok_or(StoreError::NoInvite)?.email.clone();
         let new_person = match activation.first_device {
             None => None,
@@ -347,6 +373,9 @@ impl<L: AppendLog> AccountStore<L> {
         };
         let device_id =
             self.devices.check_enroll(&email, activation.device_name, &fingerprint(activation.certificate)).map_err(StoreError::Device)?;
+        if let Some(expected) = expected_device_id.filter(|expected| *expected != device_id) {
+            return Err(StoreError::Ordinal { expected, next: device_id });
+        }
         self.commit(AccountOp::Activated {
             bootstrap_pub: activation.bootstrap_pub,
             new_person,
