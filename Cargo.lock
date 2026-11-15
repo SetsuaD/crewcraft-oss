@@ -199,8 +199,10 @@ dependencies = [
 name = "crewcraft-server-core"
 version = "0.0.1"
 dependencies = [
+ "crewcraft-accounts",
  "crewcraft-client-core",
  "crewcraft-proto",
+ "crewcraft-totp",
  "sha2",
 ]
 
