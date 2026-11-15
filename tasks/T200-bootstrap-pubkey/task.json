@@ -1,0 +1,16 @@
+{
+  "id": "T200-bootstrap-pubkey",
+  "title": "Ed25519 public key of the bootstrap key pair",
+  "crate": "crewcraft-enroll",
+  "files": [
+    "crates/enroll/src/lib.rs"
+  ],
+  "test_path": "crates/enroll/tests/t200_bootstrap_pubkey.rs",
+  "test_cmd": "cargo test -p crewcraft-enroll --test t200_bootstrap_pubkey",
+  "depends_on": [],
+  "spec": "Implement bootstrap_public_key(seed) with ed25519-dalek (already added to the workspace and to this crate: the RustCrypto-adjacent, audited Ed25519 implementation; SECURITY-DESIGN.md forbids hand-rolled primitives): SigningKey::from_bytes(seed).verifying_key().to_bytes(). Then remove the `#[allow(clippy::todo)]` on the stub. The server stores only this public key per invitation, and the client derives the same key from the emailed code, so it must match RFC 8032 exactly. No other new dependencies.",
+  "status": "open",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}
