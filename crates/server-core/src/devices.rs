@@ -57,23 +57,8 @@ impl Devices {
     /// Enroll a device for `user` at `now_ms` (its `enrolled_ms` and `last_seen_ms`). Checks, in order: `BadName`,
     /// `Revoked`, `FingerprintInUse`, `TooMany`. Returns the new id.
     pub fn enroll(&mut self, user: &str, name: &str, fingerprint: [u8; 32], now_ms: u64) -> Result<u64, DeviceError> {
+        self.check_enroll(user, name, &fingerprint)?;
         let trimmed = name.trim();
-        if trimmed.is_empty() || trimmed.chars().count() > MAX_NAME_CHARS || trimmed.chars().any(|c| c.is_control()) {
-            return Err(DeviceError::BadName);
-        }
-
-        if let Some(&idx) = self.by_fingerprint.get(&fingerprint) {
-            if self.devices[idx].revoked {
-                return Err(DeviceError::Revoked);
-            }
-            return Err(DeviceError::FingerprintInUse);
-        }
-
-        let live_count = self.devices.iter().filter(|d| d.user == user && !d.revoked).count();
-        if live_count >= MAX_DEVICES {
-            return Err(DeviceError::TooMany);
-        }
-
         let id = self.next_id;
         self.next_id += 1;
         let device =
@@ -82,6 +67,26 @@ impl Devices {
         self.devices.push(device);
         self.by_fingerprint.insert(fingerprint, idx);
         Ok(id)
+    }
+
+    /// What `enroll` would refuse, in the same order, without changing anything; `Ok` is the id `enroll` would assign.
+    /// The account store validates with this before it journals an activation.
+    pub fn check_enroll(&self, user: &str, name: &str, fingerprint: &[u8; 32]) -> Result<u64, DeviceError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() || trimmed.chars().count() > MAX_NAME_CHARS || trimmed.chars().any(|c| c.is_control()) {
+            return Err(DeviceError::BadName);
+        }
+        if let Some(&idx) = self.by_fingerprint.get(fingerprint) {
+            if self.devices[idx].revoked {
+                return Err(DeviceError::Revoked);
+            }
+            return Err(DeviceError::FingerprintInUse);
+        }
+        let live_count = self.devices.iter().filter(|d| d.user == user && !d.revoked).count();
+        if live_count >= MAX_DEVICES {
+            return Err(DeviceError::TooMany);
+        }
+        Ok(self.next_id)
     }
 
     /// A connection presented this certificate fingerprint: the live device it belongs to, after setting its
