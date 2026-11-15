@@ -266,6 +266,7 @@ dependencies = [
  "crewcraft",
  "crewcraft-accounts",
  "crewcraft-admission",
+ "crewcraft-bootstrap",
  "crewcraft-client-core",
  "crewcraft-pki",
  "crewcraft-proto",

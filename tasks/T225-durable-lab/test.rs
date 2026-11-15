@@ -1,6 +1,7 @@
 //! Real mTLS chat and full lab-state reopen. Synthetic devices are activated directly in the account store.
 #![allow(clippy::unwrap_used)]
 
+use std::cell::RefCell;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -41,6 +42,7 @@ const ALICE: &str = "alice@example.org";
 const BOB: &str = "bob@example.org";
 const ALICE_SECRET: [u8; 20] = [31; 20];
 const BOB_SECRET: [u8; 20] = [37; 20];
+const DELETED_BODY: &str = "synthetic message for the redaction test";
 
 struct TestDirectory(PathBuf);
 
@@ -203,7 +205,31 @@ fn start_parts(
 }
 
 type ClientStream = StreamOwned<ClientConnection, DeadlineSocket>;
-type SetDeadline = fn(&mut ClientStream, Instant);
+
+struct ObserveReads<'a> {
+    stream: ClientStream,
+    capture: &'a RefCell<Option<Vec<u8>>>,
+}
+
+impl Read for ObserveReads<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.stream.read(buf)?;
+        if let Some(received) = self.capture.borrow_mut().as_mut() {
+            received.extend_from_slice(&buf[..read]);
+        }
+        Ok(read)
+    }
+}
+
+impl Write for ObserveReads<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
 
 fn dial(address: SocketAddr, config: Arc<ClientConfig>) -> ClientStream {
     let socket = TcpStream::connect_timeout(&address, WAIT).unwrap();
@@ -215,10 +241,10 @@ fn set_deadline(stream: &mut ClientStream, deadline: Instant) {
     stream.sock.set_deadline(deadline);
 }
 
-fn chat(running: &Running, config: Arc<ClientConfig>, person: &Person, code: &str) -> Result<ChatSession<ClientStream, SetDeadline>, ChatError> {
+fn chat<S: Read + Write, D: FnMut(&mut S, Instant)>(stream: S, deadline: D, person: &Person, code: &str) -> Result<ChatSession<S, D>, ChatError> {
     let request = SignIn { email: person.email, password: PASSWORD, code };
     let hello = Hello { min_version: 1, max_version: 1, features: 0, client: "test client".into() };
-    ChatSession::connect(dial(running.address, config), set_deadline as SetDeadline, &request, hello, Settings::new(person.email), WAIT, cutoff())
+    ChatSession::connect(stream, deadline, &request, hello, Settings::new(person.email), WAIT, cutoff())
 }
 
 fn assert_dark(mut stream: ClientStream, email: &str, code: &str) {
@@ -268,8 +294,8 @@ fn both_clients_chat_then_reopen_every_server_store_and_replay() {
         .unwrap();
     let clock = Arc::new(AtomicU64::new(first_sign_in));
     let first = start_parts(ownership, root_der, issuer, accounts, rooms, clock.clone());
-    let mut client_a = chat(&first, alice_config.clone(), &alice, &alice.code_at(first_sign_in)).unwrap();
-    let mut client_b = chat(&first, bob_config.clone(), &bob, &bob.code_at(first_sign_in)).unwrap();
+    let mut client_a = chat(dial(first.address, alice_config.clone()), set_deadline, &alice, &alice.code_at(first_sign_in)).unwrap();
+    let mut client_b = chat(dial(first.address, bob_config.clone()), set_deadline, &bob, &bob.code_at(first_sign_in)).unwrap();
 
     let expected = [line(2, ALICE, "Hello from Alice"), line(3, BOB, "Hello from Bob")];
     assert_eq!(client_a.post(&room, "Hello from Alice", first_sign_in, 0, cutoff()), Ok(2));
@@ -278,6 +304,10 @@ fn both_clients_chat_then_reopen_every_server_store_and_replay() {
     assert_eq!(client_b.post(&room, "Hello from Bob", first_sign_in, 0, cutoff()), Ok(3));
     assert_eq!(client_a.sync(&room, false, first_sign_in, 0, cutoff()), Ok(3));
     assert_eq!(client_a.view(&room).unwrap().shown(), expected);
+    let deleted = client_a.post(&room, DELETED_BODY, first_sign_in, 0, cutoff()).unwrap();
+    assert_eq!(deleted, 4);
+    assert_eq!(client_b.sync(&room, false, first_sign_in, 0, cutoff()), Ok(deleted));
+    assert_eq!(client_b.view(&room).unwrap().shown().last(), Some(&line(deleted, ALICE, DELETED_BODY)));
     drop(client_a);
     drop(client_b);
     first.stop();
@@ -286,6 +316,7 @@ fn both_clients_chat_then_reopen_every_server_store_and_replay() {
     assert_eq!(state.accounts.session_hashes().len(), 2);
     assert_eq!(state.accounts.person(ALICE).unwrap().last_totp_counter, first_sign_in / STEP_MS);
     assert_eq!(state.accounts.person(BOB).unwrap().last_totp_counter, first_sign_in / STEP_MS);
+    assert_eq!(state.rooms.delete(&room, ALICE, deleted), Ok(5));
     assert!(state.accounts.revoke_device(ALICE, alice_id).unwrap());
     drop(state);
 
@@ -294,12 +325,21 @@ fn both_clients_chat_then_reopen_every_server_store_and_replay() {
     assert_dark(dial(second.address, client_config(trusted, None).unwrap()), BOB, &bob.code_at(first_sign_in));
     assert_dark(dial(second.address, alice_config), ALICE, &alice.code_at(first_sign_in));
     let used_code = bob.code_at(first_sign_in);
-    assert!(matches!(chat(&second, bob_config.clone(), &bob, &used_code), Err(ChatError::SignInRefused)));
+    assert!(matches!(chat(dial(second.address, bob_config.clone()), set_deadline, &bob, &used_code), Err(ChatError::SignInRefused)));
     let fresh = first_sign_in + 2 * STEP_MS;
     clock.store(fresh, Ordering::SeqCst);
-    let mut replay = chat(&second, bob_config, &bob, &bob.code_at(fresh)).unwrap();
-    assert_eq!(replay.sync(&room, false, fresh, 0, cutoff()), Ok(3));
-    assert_eq!(replay.view(&room).unwrap().shown(), expected);
+    let received = RefCell::new(None);
+    let stream = ObserveReads { stream: dial(second.address, bob_config), capture: &received };
+    let mut replay = chat(stream, |probe, deadline| set_deadline(&mut probe.stream, deadline), &bob, &bob.code_at(fresh)).unwrap();
+    // Start observing after sign-in so the probe retains only room-sync application bytes.
+    *received.borrow_mut() = Some(Vec::new());
+    assert_eq!(replay.sync(&room, false, fresh, 0, cutoff()), Ok(5));
+    let room_view = replay.view(&room).unwrap();
+    assert_eq!(room_view.cursor(), 5);
+    assert_eq!(room_view.shown(), expected);
     drop(replay);
+    let wire = received.into_inner().unwrap();
+    assert!(!wire.is_empty());
+    assert!(!wire.windows(DELETED_BODY.len()).any(|part| part == DELETED_BODY.as_bytes()));
     second.stop();
 }
