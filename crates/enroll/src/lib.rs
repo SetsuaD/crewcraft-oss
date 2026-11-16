@@ -10,6 +10,8 @@
 //! four, then `-` and one Crockford check symbol (the secret as a big-endian integer, mod 37):
 //! `CC1-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-C`.
 
+pub mod server_trust;
+
 /// Crockford base32 alphabet (no I, L, O, U).
 pub const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 /// Crockford check symbols: the alphabet, then `*~$=U` for values 32 to 36.
