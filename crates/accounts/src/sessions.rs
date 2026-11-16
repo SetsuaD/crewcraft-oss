@@ -42,11 +42,22 @@ impl Sessions {
     /// since it was created. A live lookup sets `last_seen_ms = now_ms` and returns the updated session; a dead one is
     /// removed and gives `None`, as does an unknown token.
     pub fn validate(&mut self, token: &str, now_ms: u64) -> Option<Session> {
+        self.validate_matching(token, now_ms, |_| true)
+    }
+
+    /// Validate a token against the user and device identified by the verified client certificate.
+    /// A mismatched identity leaves the owner's session untouched.
+    pub fn validate_for(&mut self, token: &str, user: &str, device: &str, now_ms: u64) -> Option<Session> {
+        self.validate_matching(token, now_ms, |session| session.user == user && session.device == device)
+    }
+
+    fn validate_matching(&mut self, token: &str, now_ms: u64, matches_identity: impl FnOnce(&Session) -> bool) -> Option<Session> {
         let key = token_key(token);
-        if let Some(session) = self.sessions.get_mut(&key)
-            && now_ms.saturating_sub(session.last_seen_ms) < IDLE_MS
-            && now_ms.saturating_sub(session.created_ms) < ABSOLUTE_MS
-        {
+        let session = self.sessions.get_mut(&key)?;
+        if !matches_identity(session) {
+            return None;
+        }
+        if now_ms.saturating_sub(session.last_seen_ms) < IDLE_MS && now_ms.saturating_sub(session.created_ms) < ABSOLUTE_MS {
             session.last_seen_ms = now_ms;
             return Some(session.clone());
         }
