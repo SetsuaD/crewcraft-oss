@@ -28,10 +28,12 @@ pub struct Event {
     /// Who made the change.
     pub actor: String,
     pub kind: EventKind,
-    /// `render::render` of the trimmed text for `Posted` and `Edited`; empty for every other kind.
+    /// `render::render` of the trimmed text for live `Posted` and `Edited` events.
+    /// Empty after redaction or for other kinds.
     pub html: String,
-    /// For `Posted` and `Edited`: `mentions::mentions` of the trimmed text, keeping only names that are members of the
-    /// room at that moment and are not the actor, in the order `mentions` returns them. Empty for every other kind.
+    /// Mentions in live `Posted` and `Edited` events, in the order returned by `mentions::mentions`.
+    /// Includes only room members other than the actor at the time of the event.
+    /// Empty after redaction or for other kinds.
     pub mentions: Vec<String>,
 }
 
@@ -128,7 +130,8 @@ impl RoomService {
 
     /// Delete the message posted at `target`. Checks, in order: a non-member is `Room(NotMember)`; the target must be a
     /// live `Posted` event (`NoSuchMessage`); its author, an Admin or an Owner may delete it, anyone else is `NotAllowed`.
-    /// Appends `Deleted { target }`; the target can then be neither edited nor deleted again.
+    /// Clears the target and every held revision in place, then appends `Deleted { target }`.
+    /// The target can then be neither edited nor deleted again.
     pub fn delete(&mut self, actor: &str, target: u64) -> Result<u64, ServiceError> {
         let role = match self.room.role(actor) {
             Some(r) => r,
@@ -137,6 +140,17 @@ impl RoomService {
         let event = self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
         if event.actor != actor && role < Role::Admin {
             return Err(ServiceError::NotAllowed);
+        }
+        for (cursor, event) in self.log.events_mut() {
+            let redact = match event.kind {
+                EventKind::Posted => cursor == target,
+                EventKind::Edited { target: edited } => edited == target,
+                _ => false,
+            };
+            if redact {
+                event.html.clear();
+                event.mentions.clear();
+            }
         }
         self.deleted.insert(target);
         let new_event = Event {

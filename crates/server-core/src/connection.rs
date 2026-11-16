@@ -35,13 +35,13 @@ impl From<ConnError> for DurableConnError {
     }
 }
 
-/// The push for one room event: `Posted` becomes `Push::Posted` with the event's actor as author and its html and
-/// mentions; `Edited { target }` becomes `Push::Edited` with the html and mentions; `Deleted { target }` becomes
-/// `Push::Deleted`; `Joined` and `Left` become `Push::Other`. `room` and `cursor` are given. A push carries at most
-/// `push::MAX_MENTIONS` mentions, the first ones: a message may mention more members than that, and a push that could
-/// not be encoded would close every member's connection on each `Sync` of the room.
+/// Map a room event to its wire push. Redacted posts and edits use the same cursor-only `Push::Other` as membership
+/// events. Live posts and edits include their body and up to the first `push::MAX_MENTIONS` mentions, so the push fits
+/// the codec's mention limit. A deletion sends `Push::Deleted` with its target.
 pub fn to_push(room: &str, cursor: u64, event: &Event) -> Push {
     match &event.kind {
+        // Live post and edit bodies are nonempty. Advance through redacted entries without showing or notifying.
+        EventKind::Posted | EventKind::Edited { .. } if event.html.is_empty() => Push::Other { room: room.to_string(), cursor },
         EventKind::Posted => {
             Push::Posted { room: room.to_string(), cursor, author: event.actor.clone(), html: event.html.clone(), mentions: first_mentions(event) }
         }
