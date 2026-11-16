@@ -25,13 +25,15 @@ them together (REQUIREMENTS.md section 5: one client logic, thin shells).
 
 ## 2. Onboarding
 
-All new users are onboarded by an **emailed enrollment code**. Nobody signs up; nobody receives a certificate file.
+All new users are onboarded by an **emailed enrollment code**. The client enrolls its own device key and certificate.
 
 1. An administrator invites a person (name, email, role) in the admin console. The server creates a single-use code
    (160 random bits, `CC1-XXXX-...-C` with a typo-catching check symbol, valid 72 hours by default) and emails it with
-   a `crewcraft://enroll?server=...&code=...` link. The code itself is never stored, only a key derived from it
+   a `crewcraft://enroll?server=...&code=...&root_sha256=...` link. The trusted invitation supplies the server name
+   and SHA-256 fingerprint of its root certificate. The code itself is never stored, only a key derived from it
    (SECURITY-DESIGN.md "Dark enrollment").
-2. The person installs a client (D2, D4 or D5), opens the link or types the server address and code.
+2. The person installs a client (D2, D4 or D5), opens the link or enters the server address, code and root fingerprint.
+   The administrator supplies the root certificate with the invitation or through the organization's trust setup.
 3. The client does all certificate work itself: it derives the **bootstrap key** from the code, connects with it
    (the server recognises it, see SECURITY-DESIGN.md "Dark enrollment"), generates the real **device key** inside the OS
    key store (never exportable), and sends a certificate signing request. The server's CA signs a device certificate
