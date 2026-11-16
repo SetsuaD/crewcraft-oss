@@ -5,7 +5,8 @@ use crewcraft_proto::frame::{FrameError, MAX_FRAME, encode};
 use crewcraft_proto::handshake::{Reply, ServerSide, decode_hello, encode_reply, negotiate};
 use crewcraft_proto::message::CodecError;
 
-use crate::connection::{ConnError, Connection};
+use crate::connection::{ConnError, Connection, DurableConnError};
+use crate::durable::{DurableError, DurableServer};
 use crate::server::Server;
 
 /// Where the session is.
@@ -31,6 +32,19 @@ pub enum SessionError {
     Closed,
 }
 
+/// Fatal errors from a session using a durable journal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurableSessionError {
+    Protocol(SessionError),
+    Storage(DurableError),
+}
+
+impl From<SessionError> for DurableSessionError {
+    fn from(error: SessionError) -> Self {
+        Self::Protocol(error)
+    }
+}
+
 pub struct Session {
     user: String,
     server_side: ServerSide,
@@ -40,7 +54,7 @@ pub struct Session {
 }
 
 impl Session {
-    /// A session for `user` (already authenticated by its client certificate), speaking `server_side`.
+    /// A session for an already authenticated user. This handshake only negotiates the protocol.
     pub fn new(user: &str, server_side: ServerSide) -> Self {
         Self { user: user.to_string(), server_side, phase: Phase::Hello, buf: Vec::new(), connection: None }
     }
@@ -63,14 +77,51 @@ impl Session {
     ///
     /// On any error the session is `Closed` afterwards and no bytes from that call are sent.
     pub fn receive(&mut self, server: &mut Server, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, SessionError> {
-        match self.phase {
-            Phase::Closed => Err(SessionError::Closed),
-            Phase::Hello => self.receive_hello(server, bytes, now_ms),
-            Phase::Open { .. } => self.receive_open(server, bytes, now_ms),
-        }
+        self.receive_with(bytes, |conn, input| conn.receive(server, input, now_ms).map_err(SessionError::Conn))
     }
 
-    fn receive_hello(&mut self, server: &mut Server, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, SessionError> {
+    /// Feed bytes from an authenticated client using the persistent journal.
+    /// A fatal error closes the session and suppresses all bytes from this call,
+    /// including a buffered Welcome. Earlier journaled mutations remain committed.
+    /// Reconcile with the room history before retrying an unacknowledged mutation.
+    pub fn receive_durable(&mut self, server: &mut DurableServer, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, DurableSessionError> {
+        if self.phase != Phase::Closed
+            && let Err(error) = server.check_alive()
+        {
+            self.phase = Phase::Closed;
+            self.buf.clear();
+            return Err(DurableSessionError::Storage(error));
+        }
+
+        self.receive_with(bytes, |conn, input| match conn.receive_durable(server, input, now_ms) {
+            Ok(out) => Ok(out),
+            Err(DurableConnError::Protocol(error)) => Err(SessionError::Conn(error).into()),
+            Err(DurableConnError::Storage(error)) => Err(DurableSessionError::Storage(error)),
+        })
+    }
+
+    fn receive_with<E: From<SessionError>>(
+        &mut self,
+        bytes: &[u8],
+        receive: impl FnOnce(&mut Connection, &[u8]) -> Result<Vec<u8>, E>,
+    ) -> Result<Vec<u8>, E> {
+        let result = match self.phase {
+            Phase::Closed => Err(SessionError::Closed.into()),
+            Phase::Hello => self.receive_hello(bytes, receive),
+            Phase::Open { .. } => self.connection.as_mut().ok_or_else(|| SessionError::Closed.into()).and_then(|conn| receive(conn, bytes)),
+        };
+        if result.is_err() {
+            self.phase = Phase::Closed;
+            self.buf.clear();
+        }
+        result
+    }
+
+    fn receive_hello<E: From<SessionError>>(
+        &mut self,
+        bytes: &[u8],
+        receive: impl FnOnce(&mut Connection, &[u8]) -> Result<Vec<u8>, E>,
+    ) -> Result<Vec<u8>, E> {
         self.buf.extend_from_slice(bytes);
 
         // Need at least 4 bytes for the frame header.
@@ -80,9 +131,7 @@ impl Session {
 
         let header = u32::from_be_bytes([self.buf[0], self.buf[1], self.buf[2], self.buf[3]]) as usize;
         if header > MAX_FRAME {
-            self.buf.clear();
-            self.phase = Phase::Closed;
-            return Err(SessionError::Frame(FrameError::TooLarge(header)));
+            return Err(SessionError::Frame(FrameError::TooLarge(header)).into());
         }
         if self.buf.len() < 4 + header {
             return Ok(Vec::new());
@@ -91,24 +140,10 @@ impl Session {
         let payload = self.buf[4..4 + header].to_vec();
         self.buf.drain(..4 + header);
 
-        // Decode the Hello.
-        let hello = decode_hello(&payload).map_err(|e| {
-            self.phase = Phase::Closed;
-            SessionError::Hello(e)
-        })?;
-
-        // Negotiate.
+        let hello = decode_hello(&payload).map_err(SessionError::Hello)?;
         let reply = negotiate(&hello, &self.server_side);
-
-        // Encode and frame the reply.
-        let reply_bytes = encode_reply(&reply).map_err(|e| {
-            self.phase = Phase::Closed;
-            SessionError::Hello(e)
-        })?;
-        let mut out = encode(&reply_bytes).map_err(|e| {
-            self.phase = Phase::Closed;
-            SessionError::Frame(e)
-        })?;
+        let reply_bytes = encode_reply(&reply).map_err(SessionError::Hello)?;
+        let mut out = encode(&reply_bytes).map_err(SessionError::Frame)?;
 
         match reply {
             Reply::Welcome { version, features, server: _ } => {
@@ -117,37 +152,15 @@ impl Session {
                 // Feed any remaining bytes (from the same call) to the now-open connection.
                 if !self.buf.is_empty() {
                     let remaining = std::mem::take(&mut self.buf);
-                    match conn.receive(server, &remaining, now_ms) {
-                        Ok(conn_out) => out.extend_from_slice(&conn_out),
-                        Err(e) => {
-                            self.phase = Phase::Closed;
-                            self.connection = Some(conn);
-                            return Err(SessionError::Conn(e));
-                        }
-                    }
+                    out.extend(receive(&mut conn, &remaining)?);
                 }
                 self.connection = Some(conn);
                 Ok(out)
             }
             Reply::Refuse { .. } => {
                 self.phase = Phase::Closed;
+                self.buf.clear();
                 Ok(out)
-            }
-        }
-    }
-
-    fn receive_open(&mut self, server: &mut Server, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, SessionError> {
-        match self.connection.as_mut() {
-            Some(conn) => match conn.receive(server, bytes, now_ms) {
-                Ok(out) => Ok(out),
-                Err(e) => {
-                    self.phase = Phase::Closed;
-                    Err(SessionError::Conn(e))
-                }
-            },
-            None => {
-                self.phase = Phase::Closed;
-                Err(SessionError::Closed)
             }
         }
     }

@@ -11,5 +11,8 @@ publish.workspace = true
 crewcraft-proto.workspace = true
 sha2.workspace = true
 
+[dev-dependencies]
+crewcraft-client-core.workspace = true
+
 [lints]
 workspace = true
