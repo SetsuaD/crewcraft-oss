@@ -53,9 +53,10 @@ already-enrolled device (approved with a TOTP code).
 
 CrewCraft implements REQUIREMENTS.md sections 2.1 to 2.7 and 2.9 to 2.21 as written, with these decisions:
 
-> **Implementation status (early development).** Deleting a message currently appends a deletion event while the
-> original body stays in the room log, so a sync from an older cursor still returns it. Clearing the body in place
-> (delete means redaction) is required before the server accepts network connections (ROADMAP M2).
+> **Implementation status (early development).** Deletion clears the post and its revisions in the room log.
+> Sync preserves the cursor order and sends the deletion event without the redacted bodies or mentions, including after
+> reopening the journal. The append-only journal still retains the recorded operations. Storage redaction and the
+> authenticated network listener remain open for ROADMAP M2.
 
 - **Accounts.** CrewCraft is standalone: it has its own account store (email, TOTP, devices) because a public product
   cannot depend on any one organization's identity system. The password is the person's mailbox password, checked at

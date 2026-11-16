@@ -10,7 +10,7 @@ pub enum Since<T> {
     Gap { oldest: u64 },
 }
 
-/// An append-only log that keeps the newest `capacity` events. Cursors start at 1 and only grow.
+/// A log that keeps the newest `capacity` events. Appends assign cursors starting at 1.
 #[derive(Debug)]
 pub struct EventLog<T> {
     events: VecDeque<(u64, T)>,
@@ -38,6 +38,11 @@ impl<T: Clone> EventLog<T> {
     /// The newest cursor; 0 while nothing has been appended.
     pub fn head(&self) -> u64 {
         self.head
+    }
+
+    /// Update held payloads in place without changing their cursor, position or the log head.
+    pub(crate) fn events_mut(&mut self) -> impl Iterator<Item = (u64, &mut T)> {
+        self.events.iter_mut().map(|(cursor, event)| (*cursor, event))
     }
 
     /// Events after `cursor`, the last one the client already has. A cursor at or past `head` gets `Events(vec![])`.
