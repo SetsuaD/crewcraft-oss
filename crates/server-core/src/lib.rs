@@ -7,6 +7,7 @@ pub use crewcraft_proto::PROTOCOL_VERSION;
 
 pub mod admin;
 pub mod audit;
+pub mod cert_policy;
 pub mod connection;
 pub mod cursor_log;
 pub mod devices;
