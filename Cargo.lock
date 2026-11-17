@@ -138,6 +138,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "crewcraft-ui-model"
+version = "0.0.1"
+dependencies = [
+ "crewcraft-client-core",
+]
+
+[[package]]
 name = "crewcraft-update"
 version = "0.0.1"
 dependencies = [

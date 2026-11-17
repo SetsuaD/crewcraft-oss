@@ -1,0 +1,14 @@
+[package]
+name = "crewcraft-ui-model"
+description = "What the CrewCraft clients show and send, with no drawing and no I/O"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+crewcraft-client-core.workspace = true
+
+[lints]
+workspace = true
