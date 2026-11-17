@@ -16,6 +16,8 @@ allow = [
     "Unicode-3.0",
     "CC0-1.0",
     "CDLA-Permissive-2.0",
+    # Fonts only (approved 2026-11-17). Font files keep their own license and ship with its text; see docs/CLEAN-ROOM.md rule 3.
+    "OFL-1.1",
 ]
 confidence-threshold = 0.9
 
