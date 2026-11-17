@@ -20,6 +20,7 @@ crewcraft-client-core = { path = "crates/client-core" }
 crewcraft-strict-toml = { path = "crates/strict-toml" }
 crewcraft-theme = { path = "crates/theme" }
 crewcraft-update = { path = "crates/update" }
+crewcraft-ui-model = { path = "crates/ui-model" }
 
 # crypto: audited RustCrypto crates only, never hand-rolled primitives (docs/SECURITY-DESIGN.md)
 hmac = "0.12"

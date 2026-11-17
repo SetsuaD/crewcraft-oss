@@ -1,0 +1,18 @@
+{
+  "id": "T302-ui-feed",
+  "title": "Feed rows: a room's messages and pending sends, grouped by author",
+  "crate": "crewcraft-ui-model",
+  "files": [
+    "crates/ui-model/src/feed.rs"
+  ],
+  "test_path": "crates/ui-model/tests/t302_ui_feed.rs",
+  "test_cmd": "cargo test -p crewcraft-ui-model --test t302_ui_feed",
+  "depends_on": [],
+  "spec": "Implement feed_rows in crates/ui-model/src/feed.rs as its doc comment says: one FeedRow per Shown entry in order; Line becomes Message and Pending stays Pending with every field copied; first_of_group is true unless the row directly above is a Message by exactly the same author. Remove the clippy::todo allow. No new dependencies.",
+  "status": "open",
+  "context": [
+    "crates/ui-model/src/lib.rs",
+    "crates/client-core/src/room_view.rs",
+    "crates/client-core/src/timeline.rs"
+  ]
+}

@@ -21,3 +21,24 @@ Rust ([docs/SPEC.md](docs/SPEC.md) section 7). The target is feature parity with
 | M11 | **Plugins and themes** (2.18, 2.19): WebAssembly plugin host, `crewcraft-plugin-sdk`, declarative plugin UI, theme packages | a sample bot, a slash command and a channel tab built with the SDK run on a real server; a theme package installs and passes the contrast check |
 | M12 | **Parity sweep**: whiteboard, spreadsheets, live cards, breakout rooms, webinars, captions and the other rows of PARITY.md | every PARITY.md row is `done` or a recorded non-goal |
 | M13 | **1.0 release**: an external security review and signed installers for every platform | review findings closed and 1.0 tagged |
+
+## First beta
+
+The first public beta (`0.1.0-beta.1`) is M2 plus a thin slice of M3. A person installs the server, runs its first-run
+setup, enrolls two desktop clients from codes, signs in with TOTP on each, and the two exchange messages in a room.
+Teams, files, presence, search and themes come in later betas.
+
+DONE_WHEN: a release carries a Windows MSI, a Linux AppImage and deb, a macOS DMG, the Linux server and `SHA256SUMS.txt`,
+and that two-client flow passes on a clean machine per platform.
+
+The desktop client is split so most of it is tested without a window:
+
+| Task | Piece | Crate |
+|---|---|---|
+| T300 | Room list: followed rooms, the open room, unread badges | ui-model |
+| T301 | Composer: one draft per room, trimming and length limit | ui-model |
+| T302 | Feed rows: messages and pending sends, grouped by author | ui-model |
+
+Still to write: the egui views over these three, and the worker thread that runs the chat session for the window.
+The egui views wait on a font decision, because every usable UI font is under the SIL Open Font License, which
+`deny.toml` does not list yet.

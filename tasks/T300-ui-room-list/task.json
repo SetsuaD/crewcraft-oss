@@ -1,0 +1,16 @@
+{
+  "id": "T300-ui-room-list",
+  "title": "Room list: rooms the user follows, the open room, unread badges",
+  "crate": "crewcraft-ui-model",
+  "files": [
+    "crates/ui-model/src/room_list.rs"
+  ],
+  "test_path": "crates/ui-model/tests/t300_ui_room_list.rs",
+  "test_cmd": "cargo test -p crewcraft-ui-model --test t300_ui_room_list",
+  "depends_on": [],
+  "spec": "Implement RoomList in crates/ui-model/src/room_list.rs as its doc comments say: add refuses blank and exactly-duplicate names; rows are sorted by name ignoring ASCII case, exact name breaking ties; select returns Command::Sync only for a listed room that is not already selected, and clears its unread; the selected room's unread stays 0; total_unread saturates. Replace the `_todo` field and remove the clippy::todo allow. No new dependencies.",
+  "status": "open",
+  "context": [
+    "crates/ui-model/src/lib.rs"
+  ]
+}
