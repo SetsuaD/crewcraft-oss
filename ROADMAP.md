@@ -40,5 +40,5 @@ The desktop client is split so most of it is tested without a window:
 | T302 | Feed rows: messages and pending sends, grouped by author | ui-model |
 
 Still to write: the egui views over these three, and the worker thread that runs the chat session for the window.
-The egui views wait on a font decision, because every usable UI font is under the SIL Open Font License, which
-`deny.toml` does not list yet.
+Fonts are decided: `OFL-1.1` is allowed for fonts only (docs/CLEAN-ROOM.md rule 3). The views turn off egui's
+`default_fonts` feature, which also needs `Ubuntu-font-1.0`, and bundle one OFL font with its license text.
