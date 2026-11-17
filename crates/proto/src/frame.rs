@@ -1,6 +1,9 @@
 //! Length-prefixed frames: a 4-byte big-endian length, then that many payload bytes. Every message on a CrewCraft
 //! connection is one frame. Task T100.
 
+use std::fmt;
+use std::io::{self, Read};
+
 /// Largest payload a frame may carry (1 MiB). A longer length is refused as soon as its header is read.
 pub const MAX_FRAME: usize = 1 << 20;
 
@@ -19,6 +22,50 @@ pub fn encode(payload: &[u8]) -> Result<Vec<u8>, FrameError> {
     frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     frame.extend_from_slice(payload);
     Ok(frame)
+}
+
+/// One received frame, including its length prefix.
+pub struct ReceivedFrame(Vec<u8>);
+
+impl ReceivedFrame {
+    /// The length prefix and payload, for the existing incremental session APIs.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// The message inside the frame, for a protocol-phase decoder.
+    pub fn payload(&self) -> &[u8] {
+        &self.0[4..]
+    }
+}
+
+impl fmt::Debug for ReceivedFrame {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        output.debug_struct("ReceivedFrame").field("payload_len", &self.payload().len()).finish()
+    }
+}
+
+/// Read one complete frame, leaving any later frame unread. The caller supplies the limit for the current phase.
+/// Clean EOF before the header returns `None`. A partial header or payload is `UnexpectedEof`.
+/// Reject lengths above either limit before allocating or reading the payload.
+/// On an error the caller closes the connection. The stream supplies its own I/O deadline.
+pub fn read_frame(reader: &mut impl Read, payload_limit: usize) -> io::Result<Option<ReceivedFrame>> {
+    let mut header = [0; 4];
+    match reader.read_exact(&mut header[..1]) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error),
+    }
+    reader.read_exact(&mut header[1..])?;
+    let len = u32::from_be_bytes(header) as usize;
+    if len > payload_limit.min(MAX_FRAME) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "protocol frame exceeds its phase limit"));
+    }
+
+    let mut frame = vec![0; 4 + len];
+    frame[..4].copy_from_slice(&header);
+    reader.read_exact(&mut frame[4..])?;
+    Ok(Some(ReceivedFrame(frame)))
 }
 
 /// Incremental decoder: push bytes as they arrive, then take whole frames out.
