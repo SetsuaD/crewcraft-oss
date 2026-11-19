@@ -1,0 +1,20 @@
+{
+  "id": "T221-enroll-client",
+  "title": "Run client bootstrap and verify the activated certificate chain",
+  "crate": "crewcraft",
+  "files": [
+    "Cargo.lock",
+    "apps/crewcraft/Cargo.toml",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft/src/enroll_client.rs"
+  ],
+  "test_path": "apps/crewcraft/tests/t221_enroll_client.rs",
+  "test_cmd": "cargo test -p crewcraft --test t221_enroll_client",
+  "depends_on": [
+    "T151-enrollment-trust",
+    "T204-bootstrap-codec",
+    "T213-stream-frames"
+  ],
+  "spec": "Use one verified and bounded bootstrap stream to send Redeem and Confirm and consume the matching Setup and Activated replies. Pass a redacted typed authenticator setup URI to a protected prompt that returns a validated first TOTP code. Setup refusal and cancellation send no confirmation; explicit confirmation refusal is distinct from an unknown outcome after sending confirmation. Verify complete DER, issuer signing path to the caller's pinned root, leaf client authentication under WebPKI, and exact signer SPKI before returning the verified leaf and issuing intermediate. Never log credentials, persist data, or retry the exchange.",
+  "status": "open"
+}

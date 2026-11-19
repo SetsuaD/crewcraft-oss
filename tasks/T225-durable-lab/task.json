@@ -1,0 +1,22 @@
+{
+  "id": "T225-durable-lab",
+  "title": "Verify encrypted chat after reopening the entire lab state",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/lab_client.rs",
+    "apps/crewcraft/src/main.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t225_durable_lab.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t225_durable_lab",
+  "depends_on": [
+    "T210-mtls-transport",
+    "T215-chat-session",
+    "T219-lab-server",
+    "T220-lab-issuer-custody",
+    "T223-stored-device-auth",
+    "T224-lab-installation"
+  ],
+  "spec": "Initialize a private lab directory and activate two synthetic people and device certificates with the W6 account transaction. Use W2 mTLS admission backed by the store, the real stored device authentication and chat adapters, and the T219 loopback listener. Both users must sign in with a device and password plus fresh TOTP and exchange two acknowledged posts. Stop the listener, release every persistent server object, and reopen the account store, issuer and room journal with T224. Show old TOTP replay and a durably revoked device are refused while the other device signs in with a newer code and recovers both authors, bodies and cursors. The test enrolls fixtures directly in storage. The enrollment wire is a separate test. Use the signed-in client to edit a post, refuse deletion by the other participant, and delete as the author. Sync must remove the cached line, preserve the final cursor, and omit the original and edited bodies over TLS after restart. Expose edit and delete by original cursor in the interactive lab client.",
+  "status": "open"
+}

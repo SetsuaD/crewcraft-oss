@@ -1,0 +1,17 @@
+{
+  "id": "T201-totp-guard",
+  "title": "TOTP guard: one enrollment per person, codes accepted once",
+  "crate": "crewcraft-accounts",
+  "files": [
+    "crates/accounts/src/totp_guard.rs"
+  ],
+  "test_path": "crates/accounts/tests/t201_totp_guard.rs",
+  "test_cmd": "cargo test -p crewcraft-accounts --test t201_totp_guard",
+  "depends_on": [],
+  "spec": "Implement TotpGuard using crewcraft_totp::Totp with the default configuration and one step of skew. Keep one enrollment and counter per person. Enrollment can start with the independently verified activation counter and cannot replace an existing enrollment. Verify returns and records a fresh counter, leaving state unchanged on rejection. Credential reads expose the verifier and last accepted counter to the server without mutation, and record_counter accepts only a newer independently verified counter for an existing enrollment. Callers serialize verification, persistence and update before granting a session. Keep Debug secret-free.",
+  "status": "done",
+  "context": [
+    "crates/totp/src/lib.rs",
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

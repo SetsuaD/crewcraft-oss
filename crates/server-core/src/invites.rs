@@ -33,8 +33,17 @@ impl InviteBook {
     /// working; emails compare ASCII-case-insensitively. `KeyInUse` (and nothing changes) when a live invitation for a
     /// different email has the same bootstrap key; an expired one with that key is simply discarded.
     pub fn issue(&mut self, invite: Invite, now_ms: u64) -> Result<(), InviteError> {
+        self.check_issue(&invite, now_ms)?;
         let new_email_lower = invite.email.to_ascii_lowercase();
+        self.invites.retain(|i| i.email.to_ascii_lowercase() != new_email_lower && i.bootstrap_pub != invite.bootstrap_pub);
 
+        self.invites.push(invite);
+        Ok(())
+    }
+
+    /// What `issue` would refuse, without changing anything (the account store validates before it journals).
+    pub fn check_issue(&self, invite: &Invite, now_ms: u64) -> Result<(), InviteError> {
+        let new_email_lower = invite.email.to_ascii_lowercase();
         for existing in &self.invites {
             if existing.bootstrap_pub == invite.bootstrap_pub
                 && existing.expires_ms > now_ms
@@ -43,11 +52,19 @@ impl InviteBook {
                 return Err(InviteError::KeyInUse);
             }
         }
-
-        self.invites.retain(|i| i.email.to_ascii_lowercase() != new_email_lower && i.bootstrap_pub != invite.bootstrap_pub);
-
-        self.invites.push(invite);
         Ok(())
+    }
+
+    /// The live invitation with this bootstrap key, without redeeming it.
+    pub fn pending(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> Option<&Invite> {
+        self.invites.iter().find(|i| &i.bootstrap_pub == bootstrap_pub && now_ms < i.expires_ms)
+    }
+
+    /// Withdraw the invitation with this bootstrap key, live or expired; `true` when there was one.
+    pub fn revoke(&mut self, bootstrap_pub: &[u8; 32]) -> bool {
+        let before = self.invites.len();
+        self.invites.retain(|i| &i.bootstrap_pub != bootstrap_pub);
+        before != self.invites.len()
     }
 
     /// Single use: a live invitation is removed and returned; an expired one is removed and `Expired`; no match is
@@ -66,6 +83,16 @@ impl InviteBook {
     /// Whether a live invitation has this bootstrap key.
     pub fn is_pending(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> bool {
         self.invites.iter().any(|i| &i.bootstrap_pub == bootstrap_pub && now_ms < i.expires_ms)
+    }
+
+    /// Consume a checked invitation after activation's other writes succeeded under exclusive access.
+    pub(crate) fn consume(&mut self, bootstrap_pub: &[u8; 32]) {
+        self.revoke(bootstrap_pub);
+    }
+
+    /// The live invitation with this bootstrap key, without using it up.
+    pub fn get(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> Option<&Invite> {
+        self.pending(bootstrap_pub, now_ms)
     }
 
     /// Remove every expired invitation; returns how many.

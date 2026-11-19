@@ -5,6 +5,10 @@
 
 pub use crewcraft_proto::PROTOCOL_VERSION;
 
+pub mod account_journal;
+pub mod account_op;
+pub mod account_store;
+pub mod activation;
 pub mod admin;
 pub mod audit;
 pub mod cert_policy;
@@ -27,6 +31,7 @@ pub mod room;
 pub mod room_name;
 pub mod room_search;
 pub mod room_service;
+pub mod seal;
 pub mod search;
 pub mod server;
 pub mod session;

@@ -1,0 +1,11 @@
+{
+  "id": "T220-lab-issuer-custody",
+  "title": "Persist the loopback lab trust anchor and sealed issuing key",
+  "crate": "crewcraft-server",
+  "files": ["Cargo.lock", "apps/crewcraft-server/Cargo.toml", "apps/crewcraft-server/src/lib.rs", "apps/crewcraft-server/src/issuer_custody.rs"],
+  "test_path": "apps/crewcraft-server/tests/t220_lab_issuer_custody.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t220_lab_issuer_custody",
+  "depends_on": ["T218-issuing-authority-reload"],
+  "spec": "Explicit initial setup creates one bounded versioned file in the caller's private state directory. Use create-new and sync before reporting success. Store the public root and issuer DER and the issuing key encrypted by W6 ServiceKey, with the public chain as authenticated context. Loading is read-only and verifies the optional expected root fingerprint and T218 issuer validation. Refuse partial, oversized, corrupt or mismatched state without replacing it. The root key and clear issuing key are never written to this file.",
+  "status": "open"
+}

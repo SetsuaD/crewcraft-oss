@@ -1,0 +1,15 @@
+{
+  "id": "T222",
+  "title": "Hold exclusive ownership of the existing private lab state",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/lab_state.rs",
+    "apps/crewcraft-server/src/lib.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t222_lab_state.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t222_lab_state",
+  "depends_on": [
+    "T212"
+  ],
+  "status": "open"
+}

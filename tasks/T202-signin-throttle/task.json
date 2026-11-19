@@ -1,0 +1,17 @@
+{
+  "id": "T202-signin-throttle",
+  "title": "Sign-in throttle: doubling delay per wrong attempt, lock on the tenth",
+  "crate": "crewcraft-accounts",
+  "files": [
+    "crates/accounts/src/throttle.rs",
+    "crates/accounts/src/lib.rs"
+  ],
+  "test_path": "crates/accounts/tests/t202_signin_throttle.rs",
+  "test_cmd": "cargo test -p crewcraft-accounts --test t202_signin_throttle",
+  "depends_on": [],
+  "spec": "Track failed sign-ins per canonical person. Double the wait from one second after each admitted failure and lock attempts for fifteen minutes after ten failures. Attempts during the lock do not extend it. Reset on successful sign-in or administrator request. Use saturating arithmetic for timestamps and counts. No new dependencies.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

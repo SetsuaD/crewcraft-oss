@@ -1,0 +1,11 @@
+{
+  "id": "T223-stored-device-auth",
+  "title": "Authenticate the verified device and commit a durable chat session",
+  "crate": "crewcraft-server",
+  "files": ["apps/crewcraft-server/Cargo.toml", "apps/crewcraft-server/src/lib.rs", "apps/crewcraft-server/src/stored_device_auth.rs"],
+  "test_path": "apps/crewcraft-server/tests/t223_stored_device_auth.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t223_stored_device_auth",
+  "depends_on": ["T149-own-sign-in", "T202-signin-throttle", "T214-device-session"],
+  "spec": "Bind the W2-verified leaf to its exact enrolled certificate and canonical owner. Throttle credential checks by that owner and verify the T152 credentials with T149. Commit the TOTP counter and hashed session together before exposing a token. Keep only the session digest in the server-side handle. Require the exact active device and the live session for every chat frame. Hold account authorization through room operations and release it before socket I/O. An expired or revoked device or failed store closes without exposing private error details.",
+  "status": "open"
+}

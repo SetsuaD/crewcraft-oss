@@ -1,0 +1,70 @@
+//! Exclusive ownership for a private lab state directory. Task T222.
+
+use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
+use std::io;
+use std::path::{Path, PathBuf};
+
+const LOCK_FILE: &str = "state.lock";
+
+/// The lab server and offline administrative commands hold this for their entire use of the state directory.
+pub struct LabState {
+    path: PathBuf,
+    _lock: File,
+}
+
+impl LabState {
+    /// Create a new directory for explicit lab setup. An existing directory belongs to its current state.
+    pub fn create(path: &Path) -> io::Result<Self> {
+        let builder = &mut DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(path)?;
+        Self::open(path)
+    }
+
+    /// Open an existing private directory and obtain exclusive ownership before opening its journals.
+    pub fn open(path: &Path) -> io::Result<Self> {
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.is_dir() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "lab state path must be a directory"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "lab state directory must be private"));
+            }
+        }
+        // Offline and serving code use the same file. It stays in place when the handle closes.
+        let lock_path = path.join(LOCK_FILE);
+        let mut options = OpenOptions::new();
+        options.read(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let lock = match options.create_new(true).open(&lock_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                if !fs::symlink_metadata(&lock_path)?.is_file() {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "lab state lock must be a regular file"));
+                }
+                options.create_new(false).open(&lock_path)?
+            }
+            Err(error) => return Err(error),
+        };
+        lock.try_lock().map_err(|error| match error {
+            TryLockError::WouldBlock => io::Error::new(io::ErrorKind::WouldBlock, "lab state is in use"),
+            TryLockError::Error(error) => error,
+        })?;
+        Ok(Self { path: path.to_path_buf(), _lock: lock })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
