@@ -5,11 +5,12 @@
 //! enrolled device is saved, and how worker and enrollment events become window updates. Called by: `main.rs`, which
 //! runs `DesktopApp` in an eframe window. Calls: `enrollment`, `device_store`, `worker`, and a `Join` that turns an
 //! invitation link into a server endpoint and an enrollment code (`join_from_link`; tests pass their own). Task T311
-//! moved joining off the window's thread.
+//! moved joining off the window's thread. Task T313 seals the saved device with the key store (`key_vault`; tests
+//! pass an in-memory one), unless the person has opted out with `PLAIN_RECORD_SETTING`.
 //!
 //! Everything that does not need a window is in `Controller`, so it is tested without one.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -21,6 +22,7 @@ use crewcraft_enroll::{EnrollmentCode, InvitationLink};
 use crate::device::{DeviceError, StoredDevice};
 use crate::device_store::{DeviceStore, StoreError};
 use crate::enrollment::{Enrollment, EnrollmentEvent};
+use crate::key_vault::{OpenVault, SystemVault};
 use crate::lab_client::LabError;
 use crate::server_endpoint::ServerEndpoint;
 use crate::signed_in::Credentials;
@@ -28,6 +30,33 @@ use crate::worker::{Event, Worker, WorkerConfig};
 
 /// The one saved server profile of the first beta. Several servers come later.
 pub const PROFILE: &str = "default";
+
+/// A file in the data folder whose presence opts out of the key store: the enrollment is then kept in a plain file
+/// protected only by its permissions (docs/SECURITY-DESIGN.md section 2). Only for a computer with no key store; the
+/// person creates it by hand, and nothing in CrewCraft ever does.
+pub const PLAIN_RECORD_SETTING: &str = "plain-device-record";
+
+/// Whether the person has opted out of the key store for the data folder `dir` (`PLAIN_RECORD_SETTING`).
+pub fn plain_record_chosen(dir: &Path) -> bool {
+    std::fs::symlink_metadata(dir.join(PLAIN_RECORD_SETTING)).is_ok_and(|metadata| metadata.is_file())
+}
+
+/// The device store for the data folder `dir`: sealed with the key store, or plain if the person opted out. The
+/// error is shown to the person as written.
+fn open_store(dir: &Path, open_vault: OpenVault<'_>) -> Result<DeviceStore, String> {
+    if plain_record_chosen(dir) {
+        return DeviceStore::open(dir).map_err(store_problem);
+    }
+    let vault = match open_vault() {
+        Ok(vault) => vault,
+        Err(_) => {
+            // Make the (owner-only) folder the message names, so the person can opt out there. Nothing is saved in it.
+            let _ = DeviceStore::open(dir);
+            return Err(no_key_store(dir));
+        }
+    };
+    DeviceStore::open_sealed(dir, vault).map_err(store_problem)
+}
 
 /// The file in the data folder that remembers the email last used to sign in (not a secret; it fills the form).
 pub const LAST_EMAIL_FILE: &str = "last-email";
@@ -124,13 +153,21 @@ pub struct Controller {
 }
 
 impl Controller {
-    /// Open the device store in `dir` and start from what it holds: the saved device (sign-in) or none (enroll).
+    /// Open the device store in `dir`, sealed with the operating system's key store (`SystemVault`), and start from
+    /// what it holds: the saved device (sign-in) or none (enroll).
     pub fn start(dir: Option<PathBuf>, join: Join, wake: Wake, config: WorkerConfig) -> (Self, Vec<Update>) {
+        Self::start_with_vault(dir, SystemVault::opener(), join, wake, config)
+    }
+
+    /// `start` with the key store `open_vault` opens (tests pass an in-memory one). It is not opened when there is no
+    /// data folder or the person has opted out of the key store (`PLAIN_RECORD_SETTING`). When it cannot be opened, or
+    /// does not answer, the app says so and still starts; it never falls back to a plain file on its own.
+    pub fn start_with_vault(dir: Option<PathBuf>, open_vault: OpenVault<'_>, join: Join, wake: Wake, config: WorkerConfig) -> (Self, Vec<Update>) {
         let mut updates = Vec::new();
-        let store = match dir.as_deref().map(DeviceStore::open) {
+        let store = match dir.as_deref().map(|dir| open_store(dir, open_vault)) {
             Some(Ok(store)) => Some(store),
-            Some(Err(error)) => {
-                updates.push(Update::Failed(store_problem(error)));
+            Some(Err(problem)) => {
+                updates.push(Update::Failed(problem));
                 None
             }
             None => {
@@ -146,7 +183,16 @@ impl Controller {
                 updates.extend(controller.use_device(&device));
                 updates.extend(remembered.map(Update::LastEmail));
             }
-            Some(Err(StoreError::NotFound)) | None => updates.insert(0, Update::NeedsEnrollment),
+            Some(Err(StoreError::NotFound)) | None => {
+                updates.insert(0, Update::NeedsEnrollment);
+                // Say before anyone enrolls that the enrollment could not be kept. The store stays open: the key
+                // store may be unlocked by the time enrollment finishes, and a failed save is reported then.
+                if let (Some(store), Some(dir)) = (&controller.store, controller.dir.as_deref())
+                    && store.check_key_store(PROFILE) == Err(StoreError::KeyStoreUnavailable)
+                {
+                    updates.push(Update::Failed(no_key_store(dir)));
+                }
+            }
             Some(Err(error)) => {
                 updates.push(Update::NeedsEnrollment);
                 updates.push(Update::Failed(store_problem(error)));
@@ -347,8 +393,29 @@ pub fn store_problem(error: StoreError) -> String {
         StoreError::Permissions => "The saved enrollment's folder or file can be read by other users, so CrewCraft will not use it.".to_owned(),
         StoreError::Corrupt | StoreError::TooLarge => "The saved enrollment is damaged. Enroll this device again.".to_owned(),
         StoreError::NotFound => "No enrollment is saved on this computer.".to_owned(),
+        StoreError::KeyStoreUnavailable => "CrewCraft could not reach this computer's key store, which holds the key to its saved \
+                                            enrollment. Unlock or start the key store, then restart CrewCraft."
+            .to_owned(),
+        StoreError::KeyMissing => "The key to the saved enrollment is not in this computer's key store (it was removed, or the \
+                                   files came from another computer or user). Enroll this device again."
+            .to_owned(),
+        StoreError::Sealed => format!(
+            "The saved enrollment is sealed with a key from the key store, but CrewCraft is set to keep it in a plain file \
+             ({PLAIN_RECORD_SETTING}). Remove that setting, or enroll this device again."
+        ),
         StoreError::InvalidName | StoreError::Io(_) => "CrewCraft could not read or write its saved enrollment.".to_owned(),
     }
+}
+
+/// What to tell the person when the data folder `dir` has no key store to seal the enrollment with.
+pub fn no_key_store(dir: &Path) -> String {
+    format!(
+        "This computer has no key store CrewCraft can use (on Linux, a Secret Service such as GNOME Keyring or KWallet), so it \
+         cannot keep its enrollment sealed and will not save it. Start or unlock the key store, then restart CrewCraft. To keep \
+         the enrollment in a file protected only by its permissions instead, create an empty file named {PLAIN_RECORD_SETTING} \
+         in {}.",
+        dir.display()
+    )
 }
 
 /// The eframe app: the window plus the controller.

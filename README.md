@@ -118,8 +118,11 @@ Run `crewcraft` (no arguments) to open the window.
 
 The enrolled device is kept in your user data folder (`%APPDATA%\CrewCraft` on Windows,
 `~/Library/Application Support/CrewCraft` on macOS, `$XDG_DATA_HOME/crewcraft` or `~/.local/share/crewcraft` on
-Linux), so the next start goes straight to sign-in. On Unix the folder and file are owner-only; protecting the key with
-the system's key store is planned (docs/SECURITY-DESIGN.md).
+Linux), so the next start goes straight to sign-in. The file is sealed with a key kept in your system's key store
+(Credential Manager on Windows, the login Keychain on macOS, the Secret Service on Linux, such as GNOME Keyring or
+KWallet), and on Unix the folder and file are also owner-only. On a Linux desktop without a Secret Service the app says
+so and does not save the enrollment, unless you create an empty file named `plain-device-record` in that folder to
+keep it in a plain, owner-only file instead (docs/SECURITY-DESIGN.md section 2).
 
 ## Architecture
 

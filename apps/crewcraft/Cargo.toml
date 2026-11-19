@@ -8,6 +8,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Sealing the saved device record (T313): XChaCha20-Poly1305 under a random key from the OS key store.
+chacha20poly1305.workspace = true
 crewcraft-client-core.workspace = true
 crewcraft-desktop-ui.workspace = true
 # The window: wgpu first, glow (OpenGL) as the fallback. default_fonts stays off (docs/CLEAN-ROOM.md rule 3): crewcraft-desktop-ui installs the bundled Inter.
@@ -16,7 +18,10 @@ crewcraft-enroll.workspace = true
 crewcraft-proto.workspace = true
 crewcraft-tls.workspace = true
 crewcraft-ui-model.workspace = true
+# The OS key store behind one small API; each platform's store is its own crate below, so no other backend is built.
+keyring-core = "1.0.1"
 png = "0.18"
+rand_core.workspace = true
 rcgen.workspace = true
 rpassword = "7.5.4"
 rustls.workspace = true
@@ -27,6 +32,17 @@ zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.30.1", default-features = false, features = ["signal", "term"] }
+
+# The key store per platform (src/key_vault.rs): Credential Manager, the login Keychain, the Secret Service over zbus
+# (pure Rust, with RustCrypto for the session encryption; not the libdbus backend, which links C).
+[target.'cfg(windows)'.dependencies]
+windows-native-keyring-store = { version = "1.1.0", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1.0.2", default-features = false, features = ["keychain"] }
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+zbus-secret-service-keyring-store = { version = "1.0.1", default-features = false, features = ["rt-async-io-crypto-rust"] }
 
 [dev-dependencies]
 crewcraft-admission.workspace = true

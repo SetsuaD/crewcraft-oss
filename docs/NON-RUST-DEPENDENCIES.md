@@ -58,4 +58,7 @@ Each is decided when its milestone starts, and recorded here if it adds a row.
 - **Android push (M6).** The Google push library is Java; a held connection or a UnifiedPush distributor avoids it.
 - **Platform APIs.** Operating-system services (key stores, camera, notifications, call screens) are reached from Rust
   through bindings. Bindings that only declare the system's own functions, such as `libc` or `windows-sys`, compile no
-  C and need no row.
+  C and need no row. The key stores that seal the desktop's device record (T313) are reached this way: Credential
+  Manager through `windows-sys`, the macOS Keychain through `security-framework-sys`, and the Linux Secret Service
+  over D-Bus in Rust (`zbus`, with RustCrypto for the session encryption), not through `libdbus`, whose crates
+  would need `pkg-config` and the C library.
