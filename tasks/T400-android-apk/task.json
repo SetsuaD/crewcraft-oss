@@ -1,0 +1,33 @@
+{
+  "id": "T400-android-apk",
+  "title": "Android build lane: cargo xtask apk builds a signed APK around a NativeActivity, with no Java source",
+  "crate": "xtask",
+  "files": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "xtask/Cargo.toml",
+    "xtask/src/main.rs",
+    "xtask/src/lib.rs",
+    "xtask/src/android.rs",
+    "xtask/src/apk.rs",
+    "xtask/src/dist.rs",
+    "xtask/src/version.rs",
+    "apps/crewcraft-android/Cargo.toml",
+    "docs/RELEASE.md",
+    "docs/NON-RUST-DEPENDENCIES.md",
+    "docs/MOBILE.md"
+  ],
+  "test_path": "xtask/tests/t400_android_apk.rs",
+  "test_cmd": "cargo test -p xtask --test t400_android_apk",
+  "depends_on": [
+    "T307-release-packages"
+  ],
+  "spec": "`cargo xtask apk --version <v> --out <dir> [--target aarch64|x86_64] [--keystore <file> --key-alias <alias>]` builds apps/crewcraft-android (a cdylib, libcrewcraft_android.so) in release mode for aarch64-linux-android (the default) or x86_64-linux-android (the emulator) with the Android NDK's clang as linker and C compiler (API 29, 16 KiB max page size), checks the library is a 64-bit ELF shared object for that ABI that exports ANativeActivity_onCreate, defines android_main and links only NDK system libraries, and writes crewcraft-<v>-android-<arch>.apk. The manifest is generated text: package io.github.setsuad.crewcraft, versionCode MAJOR*10000000 + MINOR*100000 + PATCH*1000 + STAGE (STAGE as the MSI build number: 100+N alpha, 200+N beta, 300+N rc, 900 release; minor up to 99 and major up to 209, else refused), versionName the version, minSdk 29, targetSdk 34, the INTERNET permission only, an application labelled CrewCraft with icon @mipmap/crewcraft, hasCode false (no classes.dex), allowBackup false and extractNativeLibs false, and one exported android.app.NativeActivity with meta-data android.app.lib_name = crewcraft_android, windowSoftInputMode adjustResize, configChanges for rotation, size, keyboard and density, and the MAIN/LAUNCHER intent filter. The icon is rendered from assets/icon/crewcraft.svg to res/mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/crewcraft.png at 48, 72, 96, 144 and 192 px; aapt2 compiles the manifest and icons (aapt2 link --output-to-dir against platforms/android-34/android.jar). The APK zip is written in Rust: AndroidManifest.xml first, resources.arsc and the PNGs stored 4-byte aligned, the license files deflated under assets/licenses/, and lib/<abi>/libcrewcraft_android.so stored 16 KiB aligned, padded with the 0xd935 alignment extra field, with no folder entries and one fixed time. It is signed in Rust with APK Signature Scheme v2 (one ECDSA P-256 SHA-256 signer, ring): the APK Signing Block sits between the entries and the central directory and the end record points past it; the digest is SHA-256 over 0x5a, the chunk count and the 1 MiB chunk digests (each SHA-256 over 0xa5, the length and the chunk) of the entries, the central directory and the end record pointing at the block. xtask verifies every signature it writes. Without --keystore the key is a test key made on the first build with a self-signed certificate and kept under target/xtask-apk/test-signing-key/; with --keystore the unsigned APK is signed by the build-tools' apksigner with the password from CREWCRAFT_APK_KEYSTORE_PASS. All Rust except the NDK linker, aapt2 and (with --keystore) apksigner (docs/NON-RUST-DEPENDENCIES.md).",
+  "status": "done",
+  "context": [
+    "docs/MOBILE.md",
+    "docs/SPEC.md",
+    "xtask/src/dist.rs",
+    "xtask/src/icon.rs"
+  ]
+}

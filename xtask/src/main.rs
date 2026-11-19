@@ -8,6 +8,7 @@ usage: cargo xtask <command>
 
 commands:
   dist    build the release packages (cargo xtask dist --help)
+  apk     build the Android app (cargo xtask apk --help)
   icons   rewrite assets/icon/crewcraft.ico from assets/icon/crewcraft.svg";
 
 fn run(args: &[String]) -> xtask::Result<()> {
@@ -18,6 +19,13 @@ fn run(args: &[String]) -> xtask::Result<()> {
                 return Ok(());
             }
             xtask::dist::run(&xtask::dist::parse_args(rest)?)
+        }
+        Some((command, rest)) if command == "apk" => {
+            if rest.iter().any(|arg| arg == "--help" || arg == "-h") {
+                println!("{}", xtask::android::USAGE);
+                return Ok(());
+            }
+            xtask::android::run(&xtask::android::parse_args(rest)?)
         }
         Some((command, _)) if command == "icons" => {
             let root = xtask::dist::workspace_root()?;

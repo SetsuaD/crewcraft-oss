@@ -1,0 +1,48 @@
+[package]
+name = "crewcraft-android"
+description = "The CrewCraft Android app: the desktop window under Android's NativeActivity, with no Java source"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# `cargo xtask apk` builds the cdylib for Android (libcrewcraft_android.so, named in the APK manifest); the rlib is
+# what the T401 test links on the build machine.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+crewcraft-client-core.workspace = true
+# Only to read the frame's output (does a text field want the keyboard?); the same egui eframe uses.
+egui = { version = "0.37", default-features = false }
+
+[target.'cfg(target_os = "android")'.dependencies]
+crewcraft = { path = "../crewcraft" }
+# The window under NativeActivity, through android-activity (winit's Android backend); OpenGL ES through glow.
+eframe = { version = "0.37", default-features = false, features = ["glow", "android-native-activity"] }
+# Writes the app's log (and eframe's) to logcat.
+android_logger = { version = "0.15", default-features = false }
+log = "0.4"
+# The AndroidApp handle (winit's re-export of android-activity, the one eframe runs on): the data path and the
+# soft keyboard.
+winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
+
+[dev-dependencies]
+crewcraft-desktop-ui.workspace = true
+egui_kittest = "0.37"
+
+# The workspace lints, except `unsafe_code`: `deny` here instead of `forbid`, so that the one item that needs it can
+# say so. Android's NativeActivity glue (android-activity) calls the app through a symbol named `android_main`, and
+# exporting a function under a fixed symbol name (`#[unsafe(no_mangle)]`) counts as unsafe code. That attribute,
+# in src/shell.rs, is the only exception; everything else in this crate is checked as strictly as the workspace.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+unreachable = "warn"
