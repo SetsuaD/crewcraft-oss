@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,11 +37,13 @@ crewcraft-server first-run <new-data-directory> --name <server-name> --admin <em
     the administrator, shown as a crewcraft://enroll link. The server name is the DNS name or IP address clients
     use. The listen address defaults to 127.0.0.1:7443; use 0.0.0.0:7443 or [::]:7443 for every interface.
     Behind port forwarding, --public-port is the port people connect to; invitations carry it.
-    Run it in a private interactive terminal. An existing directory is never changed.
+    Run it in a private interactive terminal, or pass --invitation-file <new-file> for a scripted install: the
+    invitation is then written to that new file, readable by its owner only. An existing directory is never changed.
 crewcraft-server serve <data-directory>
     Serve with the recorded name and listen address until interrupted.
-crewcraft-server invite <data-directory> <email>
-    Invite a person; shows the code and link in a private interactive terminal only.
+crewcraft-server invite <data-directory> <email> [--invitation-file <new-file>]
+    Invite a person; shows the code and link in a private interactive terminal, or writes them to a new owner-only
+    file.
 crewcraft-server room <data-directory> <owner> <name>
 crewcraft-server add-member <data-directory> <room> <owner> <member>
 crewcraft-server lab init <new-state-directory>
@@ -69,7 +71,10 @@ fn run(args: &[OsString]) -> io::Result<()> {
         [flag] if flag == "--help" || flag == "help" => print!("{USAGE}"),
         [command, data, rest @ ..] if command == "first-run" => first_run(Path::new(data), rest)?,
         [command, data] if command == "serve" => serve(Path::new(data))?,
-        [command, data, email] if command == "invite" => invite(Path::new(data), text_arg(email)?)?,
+        [command, data, email] if command == "invite" => invite(Path::new(data), text_arg(email)?, None)?,
+        [command, data, email, flag, path] if command == "invite" && flag == "--invitation-file" => {
+            invite(Path::new(data), text_arg(email)?, Some(Path::new(path)))?
+        }
         [command, data, owner, name] if command == "room" => {
             let (mut installation, _) = server_install::open(Path::new(data), now_ms())?;
             let slug = installation.rooms.create_room(&lab_email(owner)?, text_arg(name)?).map_err(lab_error)?;
@@ -176,10 +181,11 @@ struct FirstRun {
     admin: String,
     listen: SocketAddr,
     public_port: Option<u16>,
+    invitation_file: Option<PathBuf>,
 }
 
 fn parse_first_run(flags: &[OsString]) -> io::Result<FirstRun> {
-    let (mut name, mut admin, mut listen, mut public_port) = (None, None, None, None);
+    let (mut name, mut admin, mut listen, mut public_port, mut invitation_file) = (None, None, None, None, None);
     let mut flags = flags.iter();
     while let Some(flag) = flags.next() {
         let value = text_arg(flags.next().ok_or_else(|| usage("every first-run option takes a value"))?)?;
@@ -192,7 +198,8 @@ fn parse_first_run(flags: &[OsString]) -> io::Result<FirstRun> {
                     value.parse::<u16>().ok().filter(|port| *port != 0).ok_or_else(|| usage("--public-port takes a port number (1 to 65535)"))?;
                 public_port.replace(port).is_some()
             }
-            _ => return Err(usage("first-run takes --name, --admin, --listen and --public-port")),
+            "--invitation-file" => invitation_file.replace(PathBuf::from(value)).is_some(),
+            _ => return Err(usage("first-run takes --name, --admin, --listen, --public-port and --invitation-file")),
         };
         if given_twice {
             return Err(usage("a first-run option was given twice"));
@@ -200,16 +207,27 @@ fn parse_first_run(flags: &[OsString]) -> io::Result<FirstRun> {
     }
     let name = name.ok_or_else(|| usage("first-run needs --name <server-name>"))?;
     let admin = admin.ok_or_else(|| usage("first-run needs --admin <email>"))?;
-    Ok(FirstRun { name, admin, listen: listen.unwrap_or_else(ServerConfig::default_listen), public_port })
+    Ok(FirstRun { name, admin, listen: listen.unwrap_or_else(ServerConfig::default_listen), public_port, invitation_file })
 }
 
 fn first_run(data: &Path, flags: &[OsString]) -> io::Result<()> {
-    let FirstRun { name, admin, listen, public_port } = parse_first_run(flags)?;
+    let FirstRun { name, admin, listen, public_port, invitation_file } = parse_first_run(flags)?;
     // Creating the directory refuses an existing one atomically; this only refuses before asking for a terminal.
     if fs::symlink_metadata(data).is_ok() {
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, "an installation already exists there; first-run never changes one"));
     }
-    require_private_terminal("run first-run in a private interactive terminal: it shows the administrator's invitation")?;
+    let out = match &invitation_file {
+        Some(path) => {
+            server_install::check_invitation_file(path)?;
+            InvitationOut::File(path.clone())
+        }
+        None => {
+            require_private_terminal(
+                "run first-run in a private interactive terminal (it shows the administrator's invitation), or pass --invitation-file",
+            )?;
+            InvitationOut::Terminal(io::stdout())
+        }
+    };
     let config = ServerConfig { name, listen };
     let (mut installation, root) = server_install::create(data, &config, now_ms())?;
     if let Some(port) = public_port.filter(|port| *port != config.listen.port()) {
@@ -220,20 +238,35 @@ fn first_run(data: &Path, flags: &[OsString]) -> io::Result<()> {
     println!("Listening on {}", config.listen);
     println!("Trusted root {}", data.join(PUBLIC_ROOT).display());
     println!("Root SHA-256 {}", RootFingerprint::from_der(&root.certificate_der));
-    let mut display = LinkTerminal { out: io::stdout(), server, root_sha256: root.sha256 };
+    let mut display = LinkTerminal { out, server, root_sha256: root.sha256 };
     lab_admin::invite(&mut installation.accounts, &admin, None, now_ms(), &mut display).map_err(|error| {
         io::Error::other(format!("the server was created but the administrator was not invited ({error}); run invite to try again"))
     })?;
+    if let Some(path) = invitation_file {
+        println!("Invitation for {admin} written to {} (readable by its owner only)", path.display());
+    }
     Ok(())
 }
 
-fn invite(data: &Path, email: &str) -> io::Result<()> {
-    require_private_terminal("show invitations in a private interactive terminal")?;
+fn invite(data: &Path, email: &str, invitation_file: Option<&Path>) -> io::Result<()> {
+    let out = match invitation_file {
+        Some(path) => {
+            server_install::check_invitation_file(path)?;
+            InvitationOut::File(path.to_path_buf())
+        }
+        None => {
+            require_private_terminal("show invitations in a private interactive terminal, or pass --invitation-file")?;
+            InvitationOut::Terminal(io::stdout())
+        }
+    };
     let (mut installation, config) = server_install::open(data, now_ms())?;
     let root_sha256 = server_install::root_sha256(data)?;
     let server = server_install::link_server(&config, server_install::read_public_port(data)?);
-    let mut display = LinkTerminal { out: io::stdout(), server, root_sha256 };
+    let mut display = LinkTerminal { out, server, root_sha256 };
     lab_admin::invite(&mut installation.accounts, email, None, now_ms(), &mut display).map_err(lab_error)?;
+    if let Some(path) = invitation_file {
+        println!("Invitation for {email} written to {} (readable by its owner only)", path.display());
+    }
     Ok(())
 }
 
@@ -254,8 +287,14 @@ fn serve(data: &Path) -> io::Result<()> {
 }
 
 /// Shows an invitation as the link a client opens, and its parts for typing in by hand.
+/// Where an invitation is shown: the private terminal, or a new owner-only file for scripted installs (T237).
+enum InvitationOut {
+    Terminal(io::Stdout),
+    File(PathBuf),
+}
+
 struct LinkTerminal {
-    out: io::Stdout,
+    out: InvitationOut,
     server: String,
     root_sha256: [u8; 32],
 }
@@ -266,8 +305,14 @@ impl ProtectedDisplay for LinkTerminal {
         let link = server_install::invitation(&self.server, issued.code(), &self.root_sha256).map_err(|_| DisplayFailed)?;
         let root = server_install::hex(&self.root_sha256);
         let (email, server, code) = (issued.email(), &self.server, issued.code());
-        writeln!(self.out, "Private invitation for {email}\n{link}\nServer {server}\nCode {code}\nRoot SHA-256 {root}").map_err(|_| DisplayFailed)?;
-        self.out.flush().map_err(|_| DisplayFailed)
+        let text = format!("Private invitation for {email}\n{link}\nServer {server}\nCode {code}\nRoot SHA-256 {root}\n");
+        match &mut self.out {
+            InvitationOut::Terminal(out) => {
+                out.write_all(text.as_bytes()).map_err(|_| DisplayFailed)?;
+                out.flush().map_err(|_| DisplayFailed)
+            }
+            InvitationOut::File(path) => server_install::write_invitation_file(path, &text).map_err(|_| DisplayFailed),
+        }
     }
 }
 
