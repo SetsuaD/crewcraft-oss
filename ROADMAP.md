@@ -32,17 +32,19 @@ DONE_WHEN: a release `v0.1.0-beta.1` carries the desktop client for Windows (MSI
 (DMG), the server for Linux, Windows and macOS, and `SHA256SUMS.txt`, and the two-client flow passes on a clean machine
 per platform.
 
-| Due | Piece | Tasks |
-|---|---|---|
-| 2026-11-19 | M2: dark TLS server, device certificates, TOTP activation, wire enrollment, loopback lab (#45) | done |
-| 2026-11-21 | Window model: room list, composer, feed rows | T300, T301, T302 |
-| 2026-11-28 | Client: connection worker that runs the chat session for the window; enrolled device saved between runs | T303, T304 |
-| 2026-11-28 | Server: serve on a chosen address and server name, not only loopback; `first-run` creates the installation and prints the first invitation | T230, T231 |
-| 2026-11-28 | Protocol for the window: fetch the root from an invitation's fingerprint, list a person's rooms, one invitation-link type | T232, T233, T234 |
-| 2026-12-12 | Desktop window (egui): enroll, sign in, room list, feed and composer; bundled OFL font; original app icon | T305, T306 |
-| 2026-12-19 | Packages: MSI, AppImage, deb, DMG, server archives per platform, `SHA256SUMS.txt` | T307 |
-| 2026-12-26 | Acceptance: the two-client flow on a clean machine per platform; a client without a certificate gets zero bytes | T308 |
-| 2026-12-31 | Release `v0.1.0-beta.1` | |
+| Due | Piece | Tasks | Status |
+|---|---|---|---|
+| 2026-11-19 | M2: dark TLS server, device certificates, TOTP activation, wire enrollment, loopback lab | | done (#45) |
+| 2026-11-21 | Window model: room list, composer, feed rows | T300, T301, T302 | done (#46) |
+| 2026-11-28 | Client: connection worker that runs the chat session for the window; enrolled device saved between runs | T303, T304 | done (#52) |
+| 2026-11-28 | Server: serve on a chosen address and server name, not only loopback; `first-run` creates the installation and prints the first invitation | T230, T231 | done (#50) |
+| 2026-11-28 | Protocol for the window: fetch the root from an invitation's fingerprint, list a person's rooms, one invitation-link type | T232, T233, T234 | done (#59) |
+| 2026-12-12 | Desktop window (egui): enroll, sign in, room list, feed and composer; bundled OFL font; original app icon | T305, T306 | done (#48, #49, #56) |
+| 2026-12-12 | Desktop app wired up: controller, joining from a link off the window thread, Enter to send, remembered email; wgpu with an OpenGL fallback | T309, T311, T312 | done (#55, #59, #62, #63) |
+| 2026-12-12 | System test: a network server and two full app stacks enroll, sign in and chat | T310 | done (#57) |
+| 2026-12-19 | Packages: MSI, AppImage, deb, DMG, server archives per platform, `SHA256SUMS.txt`; server stops cleanly on SIGTERM | T307, T235 | in review (#66) |
+| 2026-12-26 | Acceptance: the two-client flow on a clean machine per platform; a client without a certificate gets zero bytes | T308 | partly run ([ACCEPTANCE.md](docs/ACCEPTANCE.md)): the Windows MSI installs, upgrades, refuses a downgrade and uninstalls on Windows 10; the deb and AppImage open the window on Ubuntu 24.04; the macOS DMG builds universal and runs |
+| 2026-12-31 | Release `v0.1.0-beta.1` | | |
 
 Fonts are decided: `OFL-1.1` is allowed for fonts only (docs/CLEAN-ROOM.md rule 3). The window turns off egui's
 `default_fonts` feature, which also needs `Ubuntu-font-1.0`, and bundles one OFL font with its license text.
