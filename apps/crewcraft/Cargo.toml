@@ -34,5 +34,9 @@ crewcraft-pki.workspace = true
 crewcraft-server-core.workspace = true
 crewcraft-totp.workspace = true
 
+[build-dependencies]
+# Embeds the icon and version resource in crewcraft.exe on Windows (build.rs); uses the target's resource compiler.
+embed-resource = "3"
+
 [lints]
 workspace = true

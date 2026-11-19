@@ -1,0 +1,33 @@
+// The Windows resource of crewcraft.exe: the app icon and its version. build.rs fills in the @...@ fields and
+// compiles the result; edit this template, not the generated copy.
+#include <winver.h>
+
+1 ICON "@ICON@"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION @VERSION_NUMBER@
+PRODUCTVERSION @VERSION_NUMBER@
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "CrewCraft contributors"
+            VALUE "FileDescription", "CrewCraft"
+            VALUE "FileVersion", "@VERSION_TEXT@"
+            VALUE "ProductName", "CrewCraft"
+            VALUE "ProductVersion", "@VERSION_TEXT@"
+            VALUE "LegalCopyright", "CrewCraft contributors, MIT OR Apache-2.0"
+            VALUE "OriginalFilename", "crewcraft.exe"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
