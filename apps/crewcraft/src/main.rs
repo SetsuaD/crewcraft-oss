@@ -1,4 +1,8 @@
-//! CrewCraft client executable. The interactive trial is confined to the numeric loopback lab.
+//! CrewCraft client executable: with no arguments it opens the desktop window (`app`, task T309); `--version` and the
+//! loopback `lab chat` terminal client stay for development.
+
+// A release build on Windows is a GUI program: no console window opens behind it.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use std::env;
 use std::ffi::OsString;
@@ -33,7 +37,7 @@ fn main() -> ExitCode {
 
 fn run(args: &[OsString]) -> io::Result<()> {
     match args {
-        [] => version(),
+        [] => window()?,
         [flag] if flag == "--version" => version(),
         [lab, chat, address, root_path, fingerprint, email, room] if lab == "lab" && chat == "chat" => {
             if !io::stdin().is_terminal() || !io::stdout().is_terminal() || !io::stderr().is_terminal() {
@@ -70,6 +74,31 @@ fn run(args: &[OsString]) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The app's icon, decoded for the window title bar and task bar.
+fn icon() -> Option<eframe::egui::IconData> {
+    let decoder = png::Decoder::new(Cursor::new(&include_bytes!("../../../assets/icon/crewcraft.png")[..]));
+    let mut reader = decoder.read_info().ok()?;
+    let mut rgba = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut rgba).ok()?;
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    rgba.truncate(info.buffer_size());
+    Some(eframe::egui::IconData { rgba, width: info.width, height: info.height })
+}
+
+fn window() -> io::Result<()> {
+    let mut viewport =
+        eframe::egui::ViewportBuilder::default().with_title("CrewCraft").with_inner_size([960.0, 640.0]).with_min_inner_size([520.0, 360.0]);
+    if let Some(icon) = icon() {
+        viewport = viewport.with_icon(icon);
+    }
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let join: crewcraft::app::Join = Box::new(|_link: &str| Err("Joining from an invitation link arrives with the next build.".to_owned()));
+    eframe::run_native("CrewCraft", options, Box::new(move |creation| Ok(Box::new(crewcraft::app::DesktopApp::new(&creation.egui_ctx, join)))))
+        .map_err(|error| io::Error::other(error.to_string()))
 }
 
 fn version() {

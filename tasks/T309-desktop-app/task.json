@@ -1,0 +1,23 @@
+{
+  "id": "T309-desktop-app",
+  "title": "Desktop app: the window wired to enrollment, the saved device and the connection worker",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/src/main.rs",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft/Cargo.toml",
+    "Cargo.toml"
+  ],
+  "test_path": "apps/crewcraft/tests/t309_desktop_app.rs",
+  "test_cmd": "cargo test -p crewcraft --test t309_desktop_app",
+  "depends_on": ["T303-connection-worker", "T304-device-store", "T305-desktop-window"],
+  "spec": "A Controller that starts from the device store (saved device: start the worker and show sign-in; none: ask for enrollment; no data folder or an unreadable record: say why), turns window Actions into Enrollment, Worker and store calls, and turns enrollment and worker events into window Updates (a lost connection signs out and asks for a new code). An invitation link is resolved by a Join supplied by main. The eframe DesktopApp polls the controller, draws the window and forwards its actions each frame; main opens it when run with no arguments.",
+  "status": "done",
+  "context": [
+    "crates/desktop-ui/src/lib.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/enrollment.rs",
+    "apps/crewcraft/src/device_store.rs"
+  ]
+}

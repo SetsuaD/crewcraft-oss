@@ -1,5 +1,6 @@
 //! Authenticated chat transport for the CrewCraft client.
 
+pub mod app;
 pub mod bootstrap_transport;
 pub mod chat_session;
 mod connect;
