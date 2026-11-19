@@ -12,7 +12,7 @@
   "test_cmd": "cargo test -p crewcraft-proto --test t204_bootstrap_codec",
   "depends_on": [],
   "spec": "Encode and decode the two bootstrap requests and their responses with distinct tags and bounded fields. Setup contains only the TOTP setup URI. After the exact device and enrollment state are committed, Activated carries the leaf and issuing certificate. Keep credentials and the TOTP setup URI out of Debug output. Reject chat, malformed and trailing data. No new dependencies.",
-  "status": "open",
+  "status": "done",
   "context": [
     "crates/proto/src/request.rs",
     "crates/proto/src/message.rs",

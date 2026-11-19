@@ -12,5 +12,5 @@
   "test_cmd": "cargo test -p crewcraft-server --test t212_lab_listener",
   "depends_on": [],
   "spec": "Bind only loopback addresses, including port zero. Serve concurrent peers up to a positive configured limit and drop additional connections without writing data. Run blocking socket handlers on separate owned threads. Reclaim finished handlers even if one panics. On shutdown close the listener and join remaining handlers before returning. Socket handshake and application deadlines belong to the handler.",
-  "status": "open"
+  "status": "done"
 }

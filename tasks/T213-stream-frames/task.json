@@ -2,10 +2,14 @@
   "id": "T213-stream-frames",
   "title": "Read bounded protocol frames from a connection",
   "crate": "crewcraft-proto",
-  "files": ["crates/proto/src/frame.rs"],
+  "files": [
+    "crates/proto/src/frame.rs"
+  ],
   "test_path": "crates/proto/tests/t213_stream_frames.rs",
   "test_cmd": "cargo test -p crewcraft-proto --test t213_stream_frames",
-  "depends_on": ["T100-frame"],
+  "depends_on": [
+    "T100-frame"
+  ],
   "spec": "Read exactly one length-prefixed frame from a reader. Expose the original wire frame and its payload without a second copy. Limit allocation and consumption to the smaller of the phase limit and MAX_FRAME. An empty stream returns None, a partial frame is UnexpectedEof, and an excessive length is InvalidData without reading the body. Coalesced later frames remain readable. Debug output never includes frame contents. No new dependencies.",
-  "status": "open"
+  "status": "done"
 }

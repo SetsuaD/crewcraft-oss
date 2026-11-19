@@ -16,5 +16,5 @@
     "T213-stream-frames"
   ],
   "spec": "Use one verified and bounded bootstrap stream to send Redeem and Confirm and consume the matching Setup and Activated replies. Pass a redacted typed authenticator setup URI to a protected prompt that returns a validated first TOTP code. Setup refusal and cancellation send no confirmation; explicit confirmation refusal is distinct from an unknown outcome after sending confirmation. Verify complete DER, issuer signing path to the caller's pinned root, leaf client authentication under WebPKI, and exact signer SPKI before returning the verified leaf and issuing intermediate. Never log credentials, persist data, or retry the exchange.",
-  "status": "open"
+  "status": "done"
 }
