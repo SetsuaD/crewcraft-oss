@@ -1,0 +1,20 @@
+{
+  "id": "T231-first-run",
+  "title": "First-run setup and server commands that read the recorded settings",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/lib.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs",
+    "README.md",
+    "ROADMAP.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t231_first_run.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t231_first_run",
+  "depends_on": [
+    "T230-network-serve",
+    "T224-lab-installation"
+  ],
+  "spec": "crewcraft-server first-run <data-dir> --name <server-name> --admin <email> [--listen <address:port>] creates a new installation (never an existing directory, refused before anything else is asked), writes trust-root.der and server.conf (name and listen address, owner-only on Unix), then invites the administrator. The code is shown only in a private interactive terminal, so without one first-run refuses before creating anything. It prints the root SHA-256 and the invitation as crewcraft://enroll?server=<name:port>&code=<code>&root_sha256=<hex> (values percent-encoded for a query, so IPv6 brackets are %5B and %5D) and the parts separately. The default listen address is 127.0.0.1:7443; port 0 is refused because invitations carry the port. server.conf is key = value lines with # comments; both keys are required once and any other key is refused. serve <data-dir> serves with the recorded name and address until interrupted; invite <data-dir> <email>, room <data-dir> <owner> <name> and add-member <data-dir> <room> <owner> <member> open the same installation, pinned to trust-root.der. The lab commands are unchanged.",
+  "status": "done"
+}
