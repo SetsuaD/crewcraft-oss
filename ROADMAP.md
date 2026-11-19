@@ -42,7 +42,7 @@ per platform.
 | 2026-12-12 | Desktop window (egui): enroll, sign in, room list, feed and composer; bundled OFL font; original app icon | T305, T306 | done (#48, #49, #56) |
 | 2026-12-12 | Desktop app wired up: controller, joining from a link off the window thread, Enter to send, remembered email; wgpu with an OpenGL fallback | T309, T311, T312 | done (#55, #59, #62, #63) |
 | 2026-12-12 | System test: a network server and two full app stacks enroll, sign in and chat | T310 | done (#57) |
-| 2026-12-19 | Packages: MSI, AppImage, deb, DMG, server archives per platform, `SHA256SUMS.txt`; server stops cleanly on SIGTERM | T307, T235 | in review (#66) |
+| 2026-12-19 | Packages: MSI, AppImage, deb, DMG, server archives per platform, `SHA256SUMS.txt`; server stops cleanly on SIGTERM | T307, T235 | done (#66) |
 | 2026-12-26 | Acceptance: the two-client flow on a clean machine per platform; a client without a certificate gets zero bytes | T308 | partly run ([ACCEPTANCE.md](docs/ACCEPTANCE.md)): the Windows MSI installs, upgrades, refuses a downgrade and uninstalls on Windows 10; the deb and AppImage open the window on Ubuntu 24.04; the macOS DMG builds universal and runs |
 | 2026-12-31 | Release `v0.1.0-beta.1` | | |
 
