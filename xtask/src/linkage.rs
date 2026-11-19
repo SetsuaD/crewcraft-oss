@@ -138,13 +138,19 @@ pub fn check_windows_imports(dlls: &[String]) -> Result<()> {
     }
 }
 
-/// Fails unless `data` is a Mach-O binary for the architecture of the Rust target `triple` (`x86_64-apple-darwin` or
-/// `aarch64-apple-darwin`), checked before the two builds are joined.
+/// Fails unless `data` is a 64-bit Mach-O binary for the architecture of the Rust target `triple`
+/// (`x86_64-apple-darwin` or `aarch64-apple-darwin`), checked before the two builds are joined. Only the header is read
+/// (magic `MH_MAGIC_64`, then the CPU type): a full parse refused real linker output ("Invalid Mach-O number of
+/// sections") although `file` and `otool` read it fine, and the header is all this check needs.
 pub fn check_macho(data: &[u8], triple: &str) -> Result<()> {
-    let want = if triple.starts_with("aarch64") { Architecture::Aarch64 } else { Architecture::X86_64 };
-    let file = object::File::parse(data).map_err(|error| Error::new(format!("reading the macOS binary: {error}")))?;
-    if file.format() != BinaryFormat::MachO || file.architecture() != want {
-        return Err(Error::new(format!("expected a {want:?} Mach-O binary for {triple}, found {:?} {:?}", file.format(), file.architecture())));
+    const MH_MAGIC_64: u32 = 0xfeed_facf;
+    const CPU_TYPE_X86_64: u32 = 0x0100_0007;
+    const CPU_TYPE_ARM64: u32 = 0x0100_000c;
+    let (want, name) = if triple.starts_with("aarch64") { (CPU_TYPE_ARM64, "arm64") } else { (CPU_TYPE_X86_64, "x86_64") };
+    let word = |at: usize| data.get(at..at + 4).and_then(|bytes| bytes.try_into().ok()).map(u32::from_le_bytes);
+    match (word(0), word(4)) {
+        (Some(MH_MAGIC_64), Some(cpu)) if cpu == want => Ok(()),
+        (Some(MH_MAGIC_64), Some(cpu)) => Err(Error::new(format!("expected an {name} Mach-O binary for {triple}, found CPU type {cpu:#x}"))),
+        _ => Err(Error::new(format!("expected a 64-bit Mach-O binary for {triple}"))),
     }
-    Ok(())
 }

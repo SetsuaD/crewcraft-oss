@@ -568,6 +568,14 @@ fn macos_app_bundle_and_staging() {
         assert!(macos::require_macos().is_err());
     }
     assert!(linkage::check_macho(b"\x7fELF not a Mach-O file", "aarch64-apple-darwin").is_err());
+    // Real 64-bit Mach-O headers as the Apple linker writes them: MH_MAGIC_64, then the CPU type.
+    let x86 = [0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00];
+    let arm = [0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
+    assert!(linkage::check_macho(&x86, "x86_64-apple-darwin").is_ok());
+    assert!(linkage::check_macho(&arm, "aarch64-apple-darwin").is_ok());
+    assert!(linkage::check_macho(&x86, "aarch64-apple-darwin").is_err());
+    assert!(linkage::check_macho(&arm, "x86_64-apple-darwin").is_err());
+    assert!(linkage::check_macho(&arm[..6], "aarch64-apple-darwin").is_err());
 }
 
 // ---------------------------------------------------------------- Depends and Windows imports
