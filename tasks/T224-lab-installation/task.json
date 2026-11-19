@@ -1,0 +1,16 @@
+{
+  "id": "T224",
+  "title": "Initialize and open the loopback lab state as one installation",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/lab_installation.rs",
+    "apps/crewcraft-server/src/lib.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t224_lab_installation.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t224_lab_installation",
+  "depends_on": [
+    "T220",
+    "T222"
+  ],
+  "status": "open"
+}

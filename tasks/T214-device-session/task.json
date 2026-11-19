@@ -1,0 +1,11 @@
+{
+  "id": "T214-device-session",
+  "title": "Serve durable chat after sign-in on an enrolled device connection",
+  "crate": "crewcraft-server",
+  "files": ["apps/crewcraft-server/src/device_session.rs", "apps/crewcraft-server/src/lib.rs"],
+  "test_path": "apps/crewcraft-server/tests/t214_device_session.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t214_device_session",
+  "depends_on": ["T146-durable-session", "T152-signin-codec", "T213-stream-frames"],
+  "spec": "Read a single bounded T152 login before the T138 handshake on a transport that has verified an enrolled device. Failed credentials get one uniform refusal. Malformed login, an ineligible device, or an unavailable account store closes without a reply. Use the committed canonical account session for each frame and prevent room operations after expiry or revocation. Lock account state before room state for each durable operation, release both before writing, and let the transport enforce a deadline per frame or reply. Persist authorized room operations through T146 and replay them after reopening.",
+  "status": "open"
+}

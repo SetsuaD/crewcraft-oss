@@ -3,7 +3,7 @@
 // The helpers here are test code too, but clippy's `allow-unwrap-in-tests` only covers `#[test]` bodies.
 #![allow(clippy::unwrap_used)]
 
-use crewcraft_pki::{Authority, Claims, DEVICE_LIFETIME_SECS, PkiError, Status, key_id_of_certificate, serial_of_certificate};
+use crewcraft_pki::{Authority, Claims, DEVICE_LIFETIME_SECS, PkiError, Status, csr_key_id, key_id_of_certificate, serial_of_certificate};
 use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P384_SHA384, PKCS_ED25519,
     PublicKeyData,
@@ -223,4 +223,36 @@ fn the_server_certificate_names_the_host_and_nothing_else() {
     let (_, issuing) = parse_x509_certificate(ca.certificate()).unwrap();
     assert!(issuing.basic_constraints().unwrap().unwrap().value.ca);
     assert_eq!(issuing.basic_constraints().unwrap().unwrap().value.path_len_constraint, Some(0));
+}
+
+#[test]
+fn prepare_builds_without_recording_and_the_key_id_is_known_from_the_request() {
+    let mut ca = authority();
+    let key = KeyPair::generate().unwrap();
+    let csr = plain_csr(&key);
+    // The identity of the key is known before any certificate exists, and is the one the certificate will carry.
+    let staged = csr_key_id(&csr).unwrap();
+    let prepared = ca.prepare_device(&csr, &ALICE, NOW_MS).unwrap();
+    assert_eq!(prepared.key_id, staged);
+    // Not recorded: the ledger does not know it, so it is not a good device yet.
+    assert_eq!(ca.status(&prepared.certificate, NOW_MS).unwrap(), Status::Unknown);
+    assert!(!ca.revoke(&prepared.serial));
+    // Recorded after whatever had to be durable first.
+    ca.record_issued(&prepared, &ALICE);
+    assert!(matches!(ca.status(&prepared.certificate, NOW_MS).unwrap(), Status::Good(info) if info.key_id == staged));
+}
+
+#[test]
+fn csr_key_id_applies_the_same_checks_as_issuing() {
+    let key = KeyPair::generate().unwrap();
+    let mut damaged = plain_csr(&key);
+    let last = damaged.len() - 1;
+    damaged[last] ^= 0xff;
+    assert!(matches!(csr_key_id(&damaged), Err(PkiError::Csr(_))));
+    assert!(matches!(csr_key_id(b"not a request"), Err(PkiError::Csr(_))));
+    let ed = KeyPair::generate_for(&PKCS_ED25519).unwrap();
+    assert!(matches!(csr_key_id(&plain_csr(&ed)), Err(PkiError::NotP256)));
+    // Two requests for the same key have the same identity; another key has another.
+    assert_eq!(csr_key_id(&plain_csr(&key)).unwrap(), csr_key_id(&greedy_csr(&key)).unwrap());
+    assert_ne!(csr_key_id(&plain_csr(&key)).unwrap(), csr_key_id(&plain_csr(&KeyPair::generate().unwrap())).unwrap());
 }
