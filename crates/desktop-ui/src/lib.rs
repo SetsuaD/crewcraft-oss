@@ -18,7 +18,7 @@ use crewcraft_ui_model::composer::Composer;
 use crewcraft_ui_model::feed::feed_rows;
 use crewcraft_ui_model::room_list::RoomList;
 use crewcraft_ui_model::{Command, DraftError, FeedRow};
-use egui::{Align, Color32, FontData, FontDefinitions, FontFamily, Key, Layout, RichText, ScrollArea, TextEdit, Ui};
+use egui::{Align, Color32, FontData, FontDefinitions, FontFamily, Key, Layout, Modifiers, RichText, ScrollArea, TextEdit, Ui};
 use zeroize::Zeroizing;
 
 /// The width of the enrollment and sign-in forms.
@@ -99,6 +99,8 @@ pub enum Update {
         room: String,
         unread: u32,
     },
+    /// The email address last used to sign in on this device, to fill in the sign-in form.
+    LastEmail(String),
     /// Something failed; the text is shown to the person as written.
     Failed(String),
     SignedOut,
@@ -113,6 +115,7 @@ impl fmt::Debug for Update {
             Self::SignedIn { email, rooms } => f.debug_struct("SignedIn").field("email", email).field("rooms", rooms).finish(),
             Self::Snapshot { room, shown } => f.debug_struct("Snapshot").field("room", room).field("rows", &shown.len()).finish(),
             Self::Unread { room, unread } => f.debug_struct("Unread").field("room", room).field("unread", unread).finish(),
+            Self::LastEmail(email) => f.debug_tuple("LastEmail").field(email).finish(),
             Self::Failed(text) => f.debug_tuple("Failed").field(text).finish(),
             Self::SignedOut => f.write_str("SignedOut"),
         }
@@ -196,6 +199,11 @@ impl Window {
             }
             Update::Unread { room, unread } => {
                 self.rooms.set_unread(&room, unread);
+            }
+            Update::LastEmail(email) => {
+                if self.email.is_empty() {
+                    self.email = email;
+                }
             }
             Update::Failed(text) => self.notice = Some(text),
             Update::SignedOut => {
@@ -348,10 +356,22 @@ impl Window {
     fn composer_ui(&mut self, ui: &mut Ui, room: &str) {
         ui.horizontal(|ui| {
             let label = ui.label("Message");
-            let edit = TextEdit::multiline(&mut self.draft).desired_rows(2).hint_text("Write a message").desired_width(ui.available_width() - 80.0);
-            let response = ui.add(edit).labelled_by(label.id);
+            // Enter sends, as in other chat apps; Shift+Enter starts a new line. The key is taken before the text box
+            // sees it, so the draft never gets a stray newline. Ctrl+Enter (Cmd+Enter on macOS) also sends.
+            let id = ui.make_persistent_id("crewcraft-composer");
+            let focused = ui.memory(|memory| memory.has_focus(id));
+            // `consume_key` compares modifiers loosely (it ignores Shift), so Shift is checked here first.
+            let enter = focused
+                && ui.input_mut(|input| {
+                    !input.modifiers.shift && (input.consume_key(Modifiers::NONE, Key::Enter) || input.consume_key(Modifiers::COMMAND, Key::Enter))
+                });
+            let edit = TextEdit::multiline(&mut self.draft)
+                .id(id)
+                .desired_rows(2)
+                .hint_text("Write a message (Enter sends, Shift+Enter for a new line)")
+                .desired_width(ui.available_width() - 80.0);
+            ui.add(edit).labelled_by(label.id);
             self.composer.set(room, &self.draft);
-            let enter = response.has_focus() && ui.input(|input| input.key_pressed(Key::Enter) && input.modifiers.command);
             if ui.button("Send").clicked() || enter {
                 match self.composer.submit(room) {
                     Ok(command) => {
