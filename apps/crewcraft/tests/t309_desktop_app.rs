@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crewcraft::app::{Controller, Join, PROFILE, Wake, enrollment_problem, worker_update};
 use crewcraft::device::DeviceError;
 use crewcraft::device_store::DeviceStore;
+use crewcraft::key_vault::MemoryVault;
 use crewcraft::server_endpoint::ServerEndpoint;
 use crewcraft::worker::{Event, Problem, WorkerConfig};
 use crewcraft_admission::{Admission, Admitted, admit, server_config};
@@ -165,7 +166,8 @@ fn enroll_action() -> Action {
 #[test]
 fn first_start_asks_for_enrollment_and_a_bad_link_is_explained() {
     let scratch = Scratch::new("first");
-    let (mut controller, updates) = Controller::start(Some(scratch.0.clone()), refused_join(), no_wake(), quick());
+    let (mut controller, updates) =
+        Controller::start_with_vault(Some(scratch.0.clone()), MemoryVault::new().opener(), refused_join(), no_wake(), quick());
     assert_eq!(updates, vec![Update::NeedsEnrollment]);
     // Joining runs off the window's thread (T311): the refusal arrives with the next poll.
     assert!(controller.act(enroll_action()).is_empty());
@@ -192,7 +194,9 @@ fn no_data_folder_still_starts_and_says_why_nothing_is_saved() {
 fn enrolls_saves_the_device_and_a_restart_goes_straight_to_sign_in() {
     let scratch = Scratch::new("enroll");
     let mut server = Server::start();
-    let (mut controller, updates) = Controller::start(Some(scratch.0.clone()), server.join(), no_wake(), quick());
+    // The key store outlives the app, as the operating system's does (T313).
+    let vault = MemoryVault::new();
+    let (mut controller, updates) = Controller::start_with_vault(Some(scratch.0.clone()), vault.opener(), server.join(), no_wake(), quick());
     assert_eq!(updates, vec![Update::NeedsEnrollment]);
     assert!(controller.act(enroll_action()).is_empty());
 
@@ -211,7 +215,7 @@ fn enrolls_saves_the_device_and_a_restart_goes_straight_to_sign_in() {
     assert_eq!(DeviceStore::open(&scratch.0).unwrap().profiles().unwrap(), [PROFILE]);
     drop(controller);
 
-    let (_restarted, updates) = Controller::start(Some(scratch.0.clone()), refused_join(), no_wake(), quick());
+    let (_restarted, updates) = Controller::start_with_vault(Some(scratch.0.clone()), vault.opener(), refused_join(), no_wake(), quick());
     assert_eq!(updates, vec![Update::Enrolled { server: server.address.clone() }]);
 }
 

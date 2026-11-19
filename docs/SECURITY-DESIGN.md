@@ -27,26 +27,59 @@
 | Device key | The client's OS key store (Windows CNG/TPM, macOS Keychain, Linux kernel keyring or an encrypted file, Android Keystore, iOS Secure Enclave), generated there, never exportable | TLS client handshakes |
 | Bootstrap key | Derived in memory from an enrollment code, discarded after enrollment | one enrollment handshake |
 
-> **Implementation status (first beta).** The desktop client does not use an OS key store yet. It generates the
-> device key in the process (`crewcraft::device::NewDevice`) and saves it, with the device certificate and the
-> server's pinned root, in one record file per server profile (`crewcraft::device_store`, task T304). What protects
-> the key at rest is file permissions only:
+> **Implementation status (first beta).** The desktop client does not keep the device key itself in an OS key store
+> yet. It generates the key in the process (`crewcraft::device::NewDevice`) and saves it, with the device certificate
+> and the server's pinned root, in one record file per server profile (`crewcraft::device_store`, task T304). Since
+> task T313 that file is **sealed**: the whole record is encrypted with XChaCha20-Poly1305 under a random 32-byte key
+> per profile, and that key lives in the OS key store (`crewcraft::key_vault`):
 >
-> - On Unix the record directory is `0700` and each record `0600`. The client refuses to load a record, or to read
->   from a directory, that grants any group or other permission, and refuses a symbolic link in place of a record.
-> - On Windows the record lives under the per-user data directory and relies on that directory's inherited access
->   list. The client does not check or set it.
-> - The key is not encrypted. Anyone who can read the file as the user, or as an administrator or root, can copy the
->   device key. A copied key alone does not open a session: signing in still needs the email, the password and a
->   current TOTP code, and an administrator can revoke the device's certificate.
-> - A backup of the user's data directory contains the key.
+> | Platform | Where the sealing key lives |
+> |---|---|
+> | Windows | A generic credential in the person's Credential Manager, which Windows encrypts under their logon (DPAPI) |
+> | macOS | A generic password in the person's login Keychain |
+> | Linux and the BSDs | An item in the default collection of the Secret Service (GNOME Keyring, KWallet, KeePassXC and others), reached over the session D-Bus |
+>
+> The sealed file holds a version line, a random nonce and the ciphertext with its tag. The version line and the
+> profile name are authenticated, so a changed byte, a record copied to another profile's name or a record opened
+> with another key is refused. The private key is never written to disk in the clear, temporary files included. A
+> record written before T313 is read once and saved again sealed, replacing the old file. That happens only while
+> the key store holds no key for the profile: once a sealed record has been written, an unsealed file in its place
+> is refused, so it cannot be swapped back in to point the app at another server.
+>
+> What that changes:
+>
+> - **Someone with the person's files but not their session** (a copied home folder or data folder, a backup, a
+>   synced folder, a stolen disk read from another system, another non-administrator user who can read the file)
+>   gets ciphertext only: not the device key, not the certificate, not even the server's address. To open it they
+>   also need the key from the key store, which the platform protects with the person's login (DPAPI on Windows,
+>   the login keychain's password on macOS, the keyring password on Linux; a GNOME Keyring or KWallet whose
+>   password is empty, or that is set to unlock without one, protects nothing). A backup restored on another
+>   computer or user account cannot be opened there; the person enrolls that device again.
+> - **Unchanged with a compromised session.** Any program running as the person can ask the key store for the key
+>   (Credential Manager and the Secret Service do not tell apps apart; the macOS Keychain may ask the person first)
+>   and read the file, so it can copy the device key, as it could read it from the process. An administrator or
+>   root can do the same. A copied key alone still does not open a session: signing in needs the email, the password
+>   and a current TOTP code, and an administrator can revoke the device's certificate.
+> - **The file permissions stay** as a second layer. On Unix the record directory is `0700` and each record `0600`;
+>   the client refuses to load a record, or to read from a directory, that grants any group or other permission,
+>   and refuses a symbolic link in place of a record. On Windows the record relies on the per-user data directory's
+>   inherited access list, which the client does not check.
+>
+> **No key store.** When the client cannot open or reach a key store (for example a Linux desktop with no Secret
+> Service on its session bus, or a locked key store the person does not unlock), it says so and does not save the
+> enrollment; it never falls back to an unsealed file on its own. A person who accepts the weaker protection can opt
+> in by creating an empty file named `plain-device-record` in the client's data folder. The client then keeps the
+> record unsealed, protected by the file permissions above only, and does not open the key store; a sealed record is
+> then refused, not decrypted.
 >
 > Records are written to a new file, synced, then renamed over the old one, so a crash leaves the old record or the
-> new one. Each record carries a SHA-256 checksum, and on load its root must match its fingerprint and its key must
-> match its certificate. The key bytes are wiped from memory when a record is dropped and never printed.
+> new one. Each record carries a SHA-256 checksum inside the seal, and on load its root must match its fingerprint
+> and its key must match its certificate. The key bytes are wiped from memory when a record is dropped and never
+> printed.
 >
-> Moving the key into the OS key store (non-exportable where the platform allows) is the planned replacement. Until
-> then this is the beta's honest limit.
+> Generating the device key inside the OS key store, non-exportable where the platform allows (Windows CNG or the
+> TPM, the Secure Enclave), is still the planned replacement. Until then a session running as the person can export
+> the key, which is the beta's honest limit.
 
 Device keys are ECDSA P-256 because it is the one algorithm every hardware key store supports (the Secure Enclave
 supports nothing else). The bootstrap key is Ed25519 (software only, short-lived).

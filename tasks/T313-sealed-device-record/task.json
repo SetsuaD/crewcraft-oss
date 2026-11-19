@@ -1,0 +1,37 @@
+{
+  "id": "T313-sealed-device-record",
+  "title": "Seal the saved device record with a random key from the operating system's key store",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/src/key_vault.rs",
+    "apps/crewcraft/src/device_store.rs",
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft/Cargo.toml",
+    "Cargo.lock",
+    "apps/crewcraft/tests/t309_desktop_app.rs",
+    "tasks/T309-desktop-app/test.rs",
+    "apps/crewcraft-server/tests/t310_system_chat.rs",
+    "tasks/T310-system-chat/test.rs",
+    "apps/crewcraft-server/tests/t311_join_from_link.rs",
+    "tasks/T311-join-from-link/test.rs",
+    "docs/SECURITY-DESIGN.md",
+    "docs/NON-RUST-DEPENDENCIES.md",
+    "README.md"
+  ],
+  "test_path": "apps/crewcraft/tests/t313_sealed_device_record.rs",
+  "test_cmd": "cargo test -p crewcraft --test t313_sealed_device_record",
+  "depends_on": [
+    "T304-device-store",
+    "T309-desktop-app"
+  ],
+  "spec": "A KeyVault keeps one random 32-byte key per profile: load (None when there is none), store (replaces), remove (false when there was none); errors are Unavailable (no key store, locked, refused) and Damaged. MemoryVault is an in-process vault whose clones share keys, with set_unavailable for tests; SystemVault is the operating system's per-user store (Windows Credential Manager, the macOS login Keychain, the Secret Service over zbus on Linux and the BSDs) and opening it fails as Unavailable where there is none. DeviceStore::open_sealed(dir, vault) writes format version 2: the magic line 'crewcraft device v2', a 24-byte random nonce, and the version 1 record encrypted with XChaCha20-Poly1305 under the profile's key, with the magic line and the length-prefixed profile name as associated data. Saving keeps an existing key and otherwise stores a new random one before writing; the private key is never written in the clear, temporary files included. Loading refuses a wrong key, any changed byte and a record renamed to another profile (Corrupt), a sealed record whose key is gone (KeyMissing), and an unreachable key store (KeyStoreUnavailable). An unsealed version 1 record is sealed on its first load and replaces the old file, only while the vault has no key for the profile (otherwise Corrupt, and the file is left alone). remove deletes the file, then the key. DeviceStore::open stays the plain, permission-protected store and refuses a sealed record (Sealed). Controller::start opens SystemVault; Controller::start_with_vault takes the vault to open (tests pass a MemoryVault). Without a usable key store the app says so (naming the opt-out file) and does not fall back; a file named plain-device-record in the data folder opts into the plain store, and then the key store is not opened.",
+  "status": "done",
+  "context": [
+    "apps/crewcraft/src/device.rs",
+    "apps/crewcraft/tests/t304_device_store.rs",
+    "crates/server-core/src/seal.rs",
+    "docs/NON-RUST-DEPENDENCIES.md",
+    "deny.toml"
+  ]
+}

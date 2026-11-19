@@ -14,6 +14,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crewcraft::app::{Controller, Wake, join_from_link};
+use crewcraft::key_vault::MemoryVault;
 use crewcraft::worker::WorkerConfig;
 use crewcraft_bootstrap::Environment;
 use crewcraft_desktop_ui::{Action, Update};
@@ -117,7 +118,8 @@ fn poll_until(controller: &mut Controller, want: impl Fn(&Update) -> bool) -> Ve
 
 fn enroll_from(link: &str, data: PathBuf) -> (Controller, Vec<Update>) {
     let wake: Wake = Arc::new(|| {});
-    let (mut controller, updates) = Controller::start(Some(data), join_from_link(WAIT), wake, WorkerConfig::default());
+    let (mut controller, updates) =
+        Controller::start_with_vault(Some(data), MemoryVault::new().opener(), join_from_link(WAIT), wake, WorkerConfig::default());
     assert_eq!(updates, vec![Update::NeedsEnrollment]);
     let action = Action::Enroll { link: Zeroizing::new(link.to_owned()), password: Zeroizing::new("synthetic join test password".to_owned()) };
     assert!(controller.act(action).is_empty(), "joining must not block the window");
