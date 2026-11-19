@@ -20,5 +20,5 @@
     "T215-chat-session"
   ],
   "spec": "Generate a synthetic authority and two device certificates in a test. Use the real admission verifier, loopback listener, absolute stream deadlines, and sign-in and chat sessions to refuse a certless peer with zero application bytes and refuse an enrolled device that claims a different account. Both correctly signed-in clients post and receive messages with preserved authors and cursors. Close the listener, reopen the same message journal, and assert a freshly signed-in client can sync both messages. Keep all account and certificate fixture logic in the test. Fixture state may stay in memory across the journal restart.",
-  "status": "open"
+  "status": "done"
 }

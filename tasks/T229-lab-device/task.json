@@ -2,10 +2,18 @@
   "id": "T229-lab-device",
   "title": "Enroll and reuse an in-process loopback lab device",
   "crate": "crewcraft",
-  "files": ["apps/crewcraft/src/lab_device.rs", "apps/crewcraft/src/bootstrap_transport.rs", "apps/crewcraft/src/lib.rs"],
+  "files": [
+    "apps/crewcraft/src/lab_device.rs",
+    "apps/crewcraft/src/bootstrap_transport.rs",
+    "apps/crewcraft/src/lib.rs"
+  ],
   "test_path": "apps/crewcraft/tests/t229_lab_device.rs",
   "test_cmd": "cargo test -p crewcraft --test t229_lab_device",
-  "depends_on": ["T217-lab-client", "T221-enroll-client", "T226-bootstrap-transport"],
+  "depends_on": [
+    "T217-lab-client",
+    "T221-enroll-client",
+    "T226-bootstrap-transport"
+  ],
   "spec": "Generate a fresh P-256 key and signed CSR in memory for a synthetic loopback-only lab device. Use the T226 connection and T221 verification to attach the issued chain to the exact key. Keep the signer private and bind all reconnects to the same pinned root, server name and loopback address, including across server restarts while the client stays open. Never persist or export private key bytes. This is an in-process lab provider with no native or release credential integration.",
-  "status": "open"
+  "status": "done"
 }

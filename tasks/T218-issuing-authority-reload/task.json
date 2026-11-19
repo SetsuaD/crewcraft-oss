@@ -2,10 +2,14 @@
   "id": "T218-issuing-authority-reload",
   "title": "Restore the issuing authority from protected storage",
   "crate": "crewcraft-pki",
-  "files": ["crates/pki/Cargo.toml", "crates/pki/src/lib.rs", "crates/pki/src/issuing_state.rs"],
+  "files": [
+    "crates/pki/Cargo.toml",
+    "crates/pki/src/lib.rs",
+    "crates/pki/src/issuing_state.rs"
+  ],
   "test_path": "crates/pki/tests/t218_issuing_authority_reload.rs",
   "test_cmd": "cargo test -p crewcraft-pki --test t218_issuing_authority_reload",
   "depends_on": [],
   "spec": "Allow a callback to borrow only the issuing authority's PKCS#8 bytes for encrypted custody. Reopen an issuer from its exact DER certificate, a pinned root DER and the decrypted PKCS#8 in memory. Reject malformed DER, inappropriate authority constraints, certificates outside their validity periods, a bad root or chain signature, and a private key that is malformed, uses the wrong algorithm or fails to match the issuer. Newly signed server and device certificates still chain under the same root after a restart. Keep key bytes out of Debug and leave filesystem custody and durable device admission to callers.",
-  "status": "open"
+  "status": "done"
 }

@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use crewcraft_tls::{Accepted, DeadlineSocket, Identity, TlsError, accept, client_config, connect, server_config};
 use rcgen::{BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, KeyUsagePurpose};
-use rustls::{RootCertStore, StreamOwned};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
+use rustls::{RootCertStore, StreamOwned};
 
 const HANDSHAKE: Duration = Duration::from_secs(3);
 const IO: Duration = Duration::from_secs(3);
