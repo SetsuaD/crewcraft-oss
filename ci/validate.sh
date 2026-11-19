@@ -31,8 +31,8 @@ if [ "${1:-}" = "--tasks" ]; then
     cmd=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["test_cmd"])' "$d/task.json")
     # A task's test_cmd comes from a file a pull request can change, so only the one expected shape is ever run.
     task_cmd_re='^cargo test -p [a-z0-9-]+ --test t[0-9]+_[a-z0-9_]+$'
-    task_path_re='^(crates|apps)/[a-z0-9-]+/tests/t[0-9]+_[a-z0-9_]+\.rs$'
-    if ! [[ "$tp" =~ $task_path_re ]]; then echo "REFUSED $id: test_path is not under crates/ or apps/ with a task test name"; continue; fi
+    task_path_re='^((crates|apps)/[a-z0-9-]+|xtask)/tests/t[0-9]+_[a-z0-9_]+\.rs$'
+    if ! [[ "$tp" =~ $task_path_re ]]; then echo "REFUSED $id: test_path is not under crates/, apps/ or xtask/ with a task test name"; continue; fi
     if ! [[ "$cmd" =~ $task_cmd_re ]]; then echo "REFUSED $id: test_cmd is not 'cargo test -p <crate> --test t<n>_<name>'"; continue; fi
     mkdir -p "$scratch/$(dirname "$tp")"; cp "$d/test.rs" "$scratch/$tp"
     if (cd "$scratch" && export CARGO_TARGET_DIR="$repo/target/tasks" && eval "$cmd" >/dev/null 2>&1); then echo "pass  $id"; else echo "open  $id"; fi

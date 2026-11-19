@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=CrewCraft
+GenericName=Team chat
+Comment=Self-hosted team chat
+Exec=crewcraft
+Icon=crewcraft
+Terminal=false
+Categories=Network;Chat;InstantMessaging;
+Keywords=chat;team;messages;
+StartupWMClass=crewcraft

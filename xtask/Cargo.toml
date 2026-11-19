@@ -1,0 +1,32 @@
+[package]
+name = "xtask"
+description = "CrewCraft build tasks: `cargo xtask dist` builds the release packages (docs/RELEASE.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Every dependency is pure Rust and used only to write (and, in the tests, read back) the package formats.
+[dependencies]
+# The cabinet embedded in the MSI (MSZIP compression).
+cab = "0.6"
+# gzip for the .tar.gz files and deflate for the .zip files, with the pure-Rust backend.
+flate2 = "1"
+# md5sums in the .deb control archive, which `dpkg --verify` checks (RustCrypto).
+md-5 = "0.10"
+# The Windows Installer database.
+msi = "0.11"
+# Reads the built executables: the ELF libraries a Linux binary links (for the .deb Depends) and the DLLs a
+# Windows binary imports, and checks each macOS build is the expected architecture.
+object = { version = "0.37", default-features = false, features = ["read_core", "elf", "macho", "pe", "std"] }
+# Renders the app icon's PNG sizes from assets/icon/crewcraft.svg at build time.
+resvg = { version = "0.50", default-features = false }
+sha2.workspace = true
+# The cabinet's file times.
+time.workspace = true
+# Name-based (v5) GUIDs: the MSI ProductCode, PackageCode and component GUIDs.
+uuid = { version = "1", default-features = false, features = ["v5"] }
+
+[lints]
+workspace = true

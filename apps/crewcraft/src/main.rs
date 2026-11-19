@@ -90,8 +90,11 @@ fn icon() -> Option<eframe::egui::IconData> {
 }
 
 fn window() -> io::Result<()> {
-    let mut viewport =
-        eframe::egui::ViewportBuilder::default().with_title("CrewCraft").with_inner_size([960.0, 640.0]).with_min_inner_size([520.0, 360.0]);
+    let mut viewport = eframe::egui::ViewportBuilder::default()
+        .with_title("CrewCraft")
+        .with_app_id("crewcraft")
+        .with_inner_size([960.0, 640.0])
+        .with_min_inner_size([520.0, 360.0]);
     if let Some(icon) = icon() {
         viewport = viewport.with_icon(icon);
     }
