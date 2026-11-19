@@ -8,8 +8,26 @@ use crate::FeedRow;
 /// html and edited copied over) and `Shown::Pending` becomes `FeedRow::Pending` (id, body and failed copied over).
 /// `first_of_group` is true unless the row directly above is a `Message` by the same author (exact comparison); the
 /// first row is always true, and a `Pending` row above breaks a group.
-#[allow(clippy::todo, reason = "stub until task T302 lands; remove this allow with it")]
 pub fn feed_rows(shown: &[Shown]) -> Vec<FeedRow> {
-    let _ = shown;
-    todo!("T302: feed_rows")
+    let mut rows = Vec::with_capacity(shown.len());
+    let mut previous_author: Option<&str> = None;
+    for entry in shown {
+        match entry {
+            Shown::Line(line) => {
+                rows.push(FeedRow::Message {
+                    cursor: line.cursor,
+                    author: line.author.clone(),
+                    html: line.html.clone(),
+                    edited: line.edited,
+                    first_of_group: previous_author != Some(line.author.as_str()),
+                });
+                previous_author = Some(line.author.as_str());
+            }
+            Shown::Pending { id, body, failed } => {
+                rows.push(FeedRow::Pending { id: *id, body: body.clone(), failed: *failed });
+                previous_author = None;
+            }
+        }
+    }
+    rows
 }

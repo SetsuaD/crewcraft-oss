@@ -1,31 +1,35 @@
 //! The composer at the bottom of the main pane: one draft per room, kept while the user switches rooms, and the
 //! rules for when a draft may be sent. Task T301.
 
-use crate::{Command, DraftError};
+use std::collections::HashMap;
+
+use crate::{Command, DraftError, MAX_DRAFT_CHARS};
 
 /// The user's unsent text, per room.
 #[derive(Debug, Default)]
 pub struct Composer {
-    _todo: (),
+    /// Room name -> draft exactly as typed. A room with no draft has no entry.
+    drafts: HashMap<String, String>,
 }
 
-#[allow(clippy::todo, reason = "stubs until task T301 lands; remove this allow with them")]
 impl Composer {
     /// No drafts.
     pub fn new() -> Self {
-        Self { _todo: () }
+        Self::default()
     }
 
     /// Replace the room's draft with `text`, exactly as typed (no trimming here). An empty `text` clears it.
     pub fn set(&mut self, room: &str, text: &str) {
-        let _ = (room, text);
-        todo!("T301: Composer::set")
+        if text.is_empty() {
+            self.drafts.remove(room);
+        } else {
+            self.drafts.insert(room.to_owned(), text.to_owned());
+        }
     }
 
     /// The room's draft, or "" when it has none.
     pub fn draft(&self, room: &str) -> &str {
-        let _ = room;
-        todo!("T301: Composer::draft")
+        self.drafts.get(room).map_or("", String::as_str)
     }
 
     /// Send the room's draft. The text sent is the draft with leading and trailing whitespace removed (inner
@@ -33,7 +37,15 @@ impl Composer {
     /// when more than `MAX_DRAFT_CHARS` characters are left; a refusal keeps the draft unchanged. On success the
     /// room's draft is cleared and `Command::Post` is returned; other rooms' drafts are untouched.
     pub fn submit(&mut self, room: &str) -> Result<Command, DraftError> {
-        let _ = room;
-        todo!("T301: Composer::submit")
+        let text = self.draft(room).trim();
+        if text.is_empty() {
+            return Err(DraftError::Empty);
+        }
+        if text.chars().count() > MAX_DRAFT_CHARS {
+            return Err(DraftError::TooLong);
+        }
+        let command = Command::Post { room: room.to_owned(), text: text.to_owned() };
+        self.drafts.remove(room);
+        Ok(command)
     }
 }
