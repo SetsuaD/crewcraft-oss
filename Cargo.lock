@@ -875,17 +875,20 @@ dependencies = [
  "crewcraft-admission",
  "crewcraft-bootstrap",
  "crewcraft-client-core",
+ "crewcraft-desktop-ui",
  "crewcraft-enroll",
  "crewcraft-pki",
  "crewcraft-proto",
  "crewcraft-server-core",
  "crewcraft-tls",
  "crewcraft-totp",
+ "crewcraft-ui-model",
  "rand_core",
  "rcgen",
  "rustls",
  "sha2",
  "x509-parser",
+ "zeroize",
 ]
 
 [[package]]
