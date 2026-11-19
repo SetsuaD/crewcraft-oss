@@ -223,7 +223,8 @@ fn two_people_enroll_sign_in_and_chat_through_the_desktop_app_stack() {
     drop(alice_app);
     let wake: Wake = Arc::new(|| {});
     let (_again, updates) = Controller::start(Some(scratch.0.join("alice")), join_for(&alice), wake, WorkerConfig::default());
-    assert_eq!(updates, vec![Update::Enrolled { server: running.address.to_string() }]);
+    // ... and fills in the email Alice last signed in with (T312).
+    assert_eq!(updates, vec![Update::Enrolled { server: running.address.to_string() }, Update::LastEmail(ALICE.to_owned())]);
     drop(bob_app);
     drop(running);
 }

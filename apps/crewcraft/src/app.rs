@@ -29,6 +29,35 @@ use crate::worker::{Event, Worker, WorkerConfig};
 /// The one saved server profile of the first beta. Several servers come later.
 pub const PROFILE: &str = "default";
 
+/// The file in the data folder that remembers the email last used to sign in (not a secret; it fills the form).
+pub const LAST_EMAIL_FILE: &str = "last-email";
+const MAX_EMAIL_FILE: u64 = 512;
+
+/// The email last used to sign in, if one was saved in `dir`.
+pub fn read_last_email(dir: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut text = String::new();
+    std::fs::File::open(dir.join(LAST_EMAIL_FILE)).ok()?.take(MAX_EMAIL_FILE).read_to_string(&mut text).ok()?;
+    let email = text.trim();
+    (!email.is_empty() && email.len() < MAX_EMAIL_FILE as usize && !email.chars().any(char::is_control)).then(|| email.to_owned())
+}
+
+/// Remember `email` in `dir` for the next start. Best effort: a failure only means the form starts empty.
+pub fn write_last_email(dir: &std::path::Path, email: &str) {
+    let path = dir.join(LAST_EMAIL_FILE);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    if let Ok(mut file) = options.open(path) {
+        use std::io::Write;
+        let _ = file.write_all(email.as_bytes());
+    }
+}
+
 /// Turns an invitation link into the endpoint to enroll at and the invitation code. It may connect to the server
 /// (to fetch its root certificate against the link's fingerprint). The error is shown to the person as written.
 pub type Join = Box<dyn Fn(&str) -> Result<(ServerEndpoint, EnrollmentCode), String> + Send>;
@@ -83,6 +112,8 @@ pub fn device_name() -> String {
 /// The app without its window: it takes the window's actions and gives back window updates.
 pub struct Controller {
     store: Option<DeviceStore>,
+    /// The data folder, for the remembered email.
+    dir: Option<PathBuf>,
     /// Runs on a short-lived thread for each enrollment, so reaching the server never blocks the window.
     join: Arc<Mutex<Join>>,
     joining: Option<Receiver<Started>>,
@@ -107,10 +138,14 @@ impl Controller {
                 None
             }
         };
-        let mut controller = Self { store, join: Arc::new(Mutex::new(join)), joining: None, wake, config, enrollment: None, worker: None };
+        let remembered = store.as_ref().and(dir.as_deref()).and_then(read_last_email);
+        let mut controller = Self { store, dir, join: Arc::new(Mutex::new(join)), joining: None, wake, config, enrollment: None, worker: None };
         let saved = controller.store.as_ref().map(|store| store.load(PROFILE));
         match saved {
-            Some(Ok(device)) => updates.extend(controller.use_device(&device)),
+            Some(Ok(device)) => {
+                updates.extend(controller.use_device(&device));
+                updates.extend(remembered.map(Update::LastEmail));
+            }
             Some(Err(StoreError::NotFound)) | None => updates.insert(0, Update::NeedsEnrollment),
             Some(Err(error)) => {
                 updates.push(Update::NeedsEnrollment);
@@ -232,7 +267,12 @@ impl Controller {
         if let Some((_, events)) = &self.worker {
             loop {
                 match events.try_recv() {
-                    Ok(event) => updates.extend(worker_update(event)),
+                    Ok(event) => {
+                        if let (Event::SignedIn { email, .. }, Some(dir)) = (&event, self.dir.as_deref()) {
+                            write_last_email(dir, email);
+                        }
+                        updates.extend(worker_update(event));
+                    }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         updates.push(Update::SignedOut);
