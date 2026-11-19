@@ -53,14 +53,53 @@ and a new layout.
 
 ## iOS (due 2027-03-31)
 
-| Task | Piece |
-|---|---|
-| T420 | Build lane on a Mac: `aarch64-apple-ios` (and the simulator targets), an Xcode-free app bundle where possible, otherwise a minimal generated Xcode project with no Swift source |
-| T421 | The egui window on iOS (winit's iOS backend), keyboard handling, safe areas |
-| T422 | Device key in the Secure Enclave (P-256, non-exportable), used for enrollment and TLS client signatures |
-| T423 | App storage, lifecycle, and `crewcraft://` links (a URL type) |
-| T424 | Distribution through TestFlight, then the App Store |
-| T425 | Acceptance on a real iPhone (iOS 17+) |
+| Task | Piece | Status |
+|---|---|---|
+| T420 | Build lane on a Mac: `cargo xtask ios` builds `apps/crewcraft` for the iOS Simulator and writes `CrewCraft.app` in Rust (`xtask/src/ios.rs`): no Xcode project, asset catalog, storyboard, Swift or Objective-C. The device target (`aarch64-apple-ios`) waits for a signing identity (T424) | done for the simulator |
+| T421 | The egui window on iOS (winit's iOS backend through eframe, wgpu on Metal), the bundled font and the phone layout, the on-screen keyboard for text fields, safe areas | done |
+| T422 | Device key in the Secure Enclave (P-256, non-exportable), used for enrollment and TLS client signatures | |
+| T423 | App storage, lifecycle, and `crewcraft://` links (a URL type) | |
+| T424 | Distribution through TestFlight, then the App Store | |
+| T425 | Acceptance on a real iPhone (iOS 17+) | |
+
+### How the iOS app is put together (T420, T421)
+
+`cargo xtask ios --version <v> --out <dir>` ([RELEASE.md](RELEASE.md#ios-simulator)) builds the same `crewcraft` program
+as the desktop for `x86_64-apple-ios` or `aarch64-apple-ios-sim`, linked for iOS 17, and writes a flat `CrewCraft.app`:
+the program, an `Info.plist` (identifier `io.github.setsuad.crewcraft`, `MinimumOSVersion` 17.0, an empty
+`UILaunchScreen` so the app fills the screen, iPhone, portrait), the home-screen icons rendered from
+`assets/icon/crewcraft.svg` and the license files, sealed ad hoc with `codesign --sign -`.
+
+On iOS, `crewcraft` opens `DesktopApp` through `crewcraft::ios` (`apps/crewcraft/src/ios.rs`):
+
+- **Window.** eframe runs winit's iOS backend, which starts UIKit's application loop from Rust's `main`. Only wgpu
+  (Metal) is built for iOS; glow and the screen reader stay desktop-only (glutin has no iOS backend, and AccessKit has
+  no iOS adapter yet).
+- **Keyboard.** Tapping a text field gives it the focus; egui then asks for text input, and winit makes its view the
+  first responder, which raises the keyboard; typed characters and Backspace arrive as key events. The enrollment and
+  sign-in forms are as wide as the screen at most, so their fields always have a visible cursor (a field pushed past
+  the screen's edges never asks for the keyboard).
+- **Safe areas and the keyboard's frame.** `PhoneApp` reads the safe area and the keyboard layout guide of winit's
+  view from UIKit (`objc2-ui-kit`, safe calls only) before every frame and lays the window out inside them, raising the
+  bottom to the keyboard's top edge, so nothing sits under the status bar, the Dynamic Island, the home indicator or
+  the keyboard.
+- **GPU limits and the log.** The wgpu device is asked for exactly the limits the GPU offers (the simulator's Metal
+  falls short of wgpu's defaults, and the window would not open). Warnings and errors from eframe, winit and wgpu go
+  to standard error, which `xcrun simctl launch --console-pty` shows.
+- **Data folder.** `Library/Application Support/CrewCraft` in the app's container (T423 decides what is kept there
+  and whether it goes into device backups). Until T422 and T423 there is no key store on iOS, so the app shows its
+  screens and says it cannot keep an enrollment yet.
+
+Known gaps, each for a later task: the keyboard's Return key does nothing (winit 0.30 sends it as a `"\n"` character,
+which egui does not treat as Enter; the forms' buttons and the composer's Send button work), there is no VoiceOver
+yet, the app is iPhone-only and portrait-only, and it uses the app-delegate lifecycle that winit 0.30 has, not
+UIScene. The App Store also needs a 1024-pixel icon in an asset catalog (T424).
+
+**Checking it on a simulator.** Nothing can tap a simulator from a script, so `crewcraft --focus-first-field` (a
+launch argument, `xcrun simctl launch <device> io.github.setsuad.crewcraft --focus-first-field`) gives the first text
+field the focus and its cursor once the window is up, exactly as a tap would; the keyboard then comes up through the
+same path. To try it by hand, open Simulator.app, turn off **I/O, Keyboard, Connect Hardware Keyboard** so the
+on-screen keyboard shows, and tap a field.
 
 ## Prerequisites outside the code
 
