@@ -4,19 +4,24 @@
 //! Owns: the app's lifecycle (enroll, authenticator setup, sign in, chat, sign out, connection lost), where the
 //! enrolled device is saved, and how worker and enrollment events become window updates. Called by: `main.rs`, which
 //! runs `DesktopApp` in an eframe window. Calls: `enrollment`, `device_store`, `worker`, and a `Join` that turns an
-//! invitation link into a server endpoint and an enrollment code.
+//! invitation link into a server endpoint and an enrollment code (`join_from_link`; tests pass their own). Task T311
+//! moved joining off the window's thread.
 //!
 //! Everything that does not need a window is in `Controller`, so it is tested without one.
 
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use crewcraft_desktop_ui::{Action, Update, Window};
-use crewcraft_enroll::EnrollmentCode;
+use crewcraft_enroll::{EnrollmentCode, InvitationLink};
 
 use crate::device::{DeviceError, StoredDevice};
 use crate::device_store::{DeviceStore, StoreError};
 use crate::enrollment::{Enrollment, EnrollmentEvent};
+use crate::lab_client::LabError;
 use crate::server_endpoint::ServerEndpoint;
 use crate::signed_in::Credentials;
 use crate::worker::{Event, Worker, WorkerConfig};
@@ -29,7 +34,27 @@ pub const PROFILE: &str = "default";
 pub type Join = Box<dyn Fn(&str) -> Result<(ServerEndpoint, EnrollmentCode), String> + Send>;
 
 /// Called after any event is queued for the app, to wake the window. Must not block.
-pub type Wake = std::sync::Arc<dyn Fn() + Send + Sync>;
+pub type Wake = Arc<dyn Fn() + Send + Sync>;
+
+/// How long joining from a link may take to reach the server and fetch its root certificate.
+pub const JOIN_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The `Join` the app uses: parse the invitation link, fetch the server's root certificate over TLS and accept it
+/// only if it matches the link's fingerprint (`ServerEndpoint::from_invitation`), and hand back the invitation code.
+pub fn join_from_link(timeout: Duration) -> Join {
+    Box::new(move |text: &str| {
+        let link = InvitationLink::parse(text.trim())
+            .map_err(|_| "That is not a CrewCraft invitation link. Copy the whole link your administrator sent.".to_owned())?;
+        let endpoint = ServerEndpoint::from_invitation(&link, timeout).map_err(|error| match error {
+            LabError::Trust => "The server did not prove it is the one in the invitation, so CrewCraft did not connect.".to_owned(),
+            LabError::Address => "The server address in the invitation is not valid.".to_owned(),
+            _ => "The server in the invitation could not be reached. Check the network and try again.".to_owned(),
+        })?;
+        Ok((endpoint, link.code().clone()))
+    })
+}
+
+type Started = Result<(Enrollment, Receiver<EnrollmentEvent>), String>;
 
 /// Where the enrolled device is kept: the platform's per-user data folder plus `CrewCraft`. `None` when the
 /// environment names no home folder.
@@ -58,7 +83,9 @@ pub fn device_name() -> String {
 /// The app without its window: it takes the window's actions and gives back window updates.
 pub struct Controller {
     store: Option<DeviceStore>,
-    join: Join,
+    /// Runs on a short-lived thread for each enrollment, so reaching the server never blocks the window.
+    join: Arc<Mutex<Join>>,
+    joining: Option<Receiver<Started>>,
     wake: Wake,
     config: WorkerConfig,
     enrollment: Option<(Enrollment, Receiver<EnrollmentEvent>)>,
@@ -80,7 +107,7 @@ impl Controller {
                 None
             }
         };
-        let mut controller = Self { store, join, wake, config, enrollment: None, worker: None };
+        let mut controller = Self { store, join: Arc::new(Mutex::new(join)), joining: None, wake, config, enrollment: None, worker: None };
         let saved = controller.store.as_ref().map(|store| store.load(PROFILE));
         match saved {
             Some(Ok(device)) => updates.extend(controller.use_device(&device)),
@@ -96,19 +123,27 @@ impl Controller {
     /// Act on one window action.
     pub fn act(&mut self, action: Action) -> Vec<Update> {
         match action {
-            Action::Enroll { link, password } => match (self.join)(link.as_str()) {
-                Ok((endpoint, code)) => {
-                    let wake = self.wake.clone();
-                    match Enrollment::start(endpoint, code, &device_name(), &password, move || wake()) {
-                        Ok(started) => {
-                            self.enrollment = Some(started);
-                            Vec::new()
-                        }
-                        Err(_) => vec![Update::NeedsEnrollment, Update::Failed("Enrollment could not start.".to_owned())],
+            Action::Enroll { link, password } => {
+                let (sender, receiver) = mpsc::channel();
+                let (join, wake) = (self.join.clone(), self.wake.clone());
+                let spawned = thread::Builder::new().name("crewcraft-join".into()).spawn(move || {
+                    let joined = join.lock().map_err(|_| "Enrollment could not start.".to_owned()).and_then(|join| (*join)(link.as_str()));
+                    let started = joined.and_then(|(endpoint, code)| {
+                        let notify = wake.clone();
+                        Enrollment::start(endpoint, code, &device_name(), &password, move || notify()).map_err(|_| "Enrollment could not start.".to_owned())
+                    });
+                    if sender.send(started).is_ok() {
+                        wake();
                     }
+                });
+                match spawned {
+                    Ok(_) => {
+                        self.joining = Some(receiver);
+                        Vec::new()
+                    }
+                    Err(_) => vec![Update::NeedsEnrollment, Update::Failed("Enrollment could not start.".to_owned())],
                 }
-                Err(problem) => vec![Update::NeedsEnrollment, Update::Failed(problem)],
-            },
+            }
             Action::ConfirmAuthenticator { code } => match &self.enrollment {
                 Some((enrollment, _)) if enrollment.confirm(code.trim()) => Vec::new(),
                 Some(_) => vec![Update::Failed("Type the six-digit code your authenticator shows now.".to_owned())],
@@ -139,6 +174,25 @@ impl Controller {
     /// Everything the enrollment and the worker reported since the last call.
     pub fn poll(&mut self) -> Vec<Update> {
         let mut updates = Vec::new();
+        if let Some(joining) = &self.joining {
+            match joining.try_recv() {
+                Ok(Ok(started)) => {
+                    self.enrollment = Some(started);
+                    self.joining = None;
+                }
+                Ok(Err(problem)) => {
+                    updates.push(Update::NeedsEnrollment);
+                    updates.push(Update::Failed(problem));
+                    self.joining = None;
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    updates.push(Update::NeedsEnrollment);
+                    updates.push(Update::Failed("Enrollment could not start.".to_owned()));
+                    self.joining = None;
+                }
+            }
+        }
         let mut enrolled = None;
         if let Some((_, events)) = &self.enrollment {
             loop {
@@ -266,7 +320,7 @@ impl DesktopApp {
     pub fn new(context: &eframe::egui::Context, join: Join) -> Self {
         context.set_fonts(crewcraft_desktop_ui::fonts());
         let repaint = context.clone();
-        let wake: Wake = std::sync::Arc::new(move || repaint.request_repaint());
+        let wake: Wake = Arc::new(move || repaint.request_repaint());
         let (controller, updates) = Controller::start(data_dir(), join, wake, WorkerConfig::default());
         let mut window = Window::new();
         for update in updates {

@@ -167,7 +167,10 @@ fn first_start_asks_for_enrollment_and_a_bad_link_is_explained() {
     let scratch = Scratch::new("first");
     let (mut controller, updates) = Controller::start(Some(scratch.0.clone()), refused_join(), no_wake(), quick());
     assert_eq!(updates, vec![Update::NeedsEnrollment]);
-    assert_eq!(controller.act(enroll_action()), vec![Update::NeedsEnrollment, Update::Failed("That is not a CrewCraft invitation link.".to_owned())]);
+    // Joining runs off the window's thread (T311): the refusal arrives with the next poll.
+    assert!(controller.act(enroll_action()).is_empty());
+    let seen = poll_until(&mut controller, |update| matches!(update, Update::Failed(_)));
+    assert_eq!(seen, vec![Update::NeedsEnrollment, Update::Failed("That is not a CrewCraft invitation link.".to_owned())]);
     assert_eq!(controller.act(Action::ConfirmAuthenticator { code: Zeroizing::new("123456".to_owned()) }), vec![Update::NeedsEnrollment]);
     assert!(matches!(
         controller

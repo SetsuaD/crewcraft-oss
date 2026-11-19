@@ -96,7 +96,7 @@ fn window() -> io::Result<()> {
         viewport = viewport.with_icon(icon);
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    let join: crewcraft::app::Join = Box::new(|_link: &str| Err("Joining from an invitation link arrives with the next build.".to_owned()));
+    let join = crewcraft::app::join_from_link(crewcraft::app::JOIN_TIMEOUT);
     eframe::run_native("CrewCraft", options, Box::new(move |creation| Ok(Box::new(crewcraft::app::DesktopApp::new(&creation.egui_ctx, join)))))
         .map_err(|error| io::Error::other(error.to_string()))
 }
