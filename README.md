@@ -104,6 +104,9 @@ invitations carry it. For a scripted install (no terminal), add `--invitation-fi
 link over a channel you trust: it is their invitation. `crewcraft-server --help` lists every command, including the
 loopback-only `lab` ones.
 
+[docs/SERVER.md](docs/SERVER.md) covers running the server as a service (systemd), scripted installs and checking that it
+is dark.
+
 ## Use the desktop app
 
 Run `crewcraft` (no arguments) to open the window.
