@@ -1,4 +1,8 @@
-//! CrewCraft server binary. The network command runs only on IPv4 loopback.
+//! CrewCraft server binary.
+//!
+//! `first-run`, `serve`, `invite`, `room` and `add-member` run a network server from one data directory whose recorded
+//! settings (`server.conf`) name the server and the address it listens on (task T231). The `lab` commands keep the
+//! loopback-only lab, which pins its root from a separate file.
 
 use std::env;
 use std::ffi::OsString;
@@ -17,18 +21,39 @@ use crewcraft_proto::handshake::ServerSide;
 use crewcraft_server::lab_admin::{self, DisplayFailed, IssuedCode, ProtectedDisplay};
 use crewcraft_server::lab_runtime::LabRuntime;
 use crewcraft_server::lab_server::{LabOptions, Timeouts};
+use crewcraft_server::server_install::{self, ServerConfig};
+use crewcraft_server::server_name::ServerName;
 use crewcraft_server_core::room::Role;
 use sha2::{Digest, Sha256};
 
 const MAX_ROOT_DER: u64 = 16 * 1024;
-const PUBLIC_ROOT: &str = "trust-root.der";
+const PUBLIC_ROOT: &str = server_install::PUBLIC_ROOT;
+
+const USAGE: &str = "\
+crewcraft-server first-run <new-data-directory> --name <server-name> --admin <email> [--listen <address:port>]
+    Create a server: its certificate authority, settings and public root (trust-root.der), and an invitation for
+    the administrator, shown as a crewcraft://enroll link. The server name is the DNS name or IP address clients
+    use. The listen address defaults to 127.0.0.1:7443; use 0.0.0.0:7443 or [::]:7443 for every interface.
+    Run it in a private interactive terminal. An existing directory is never changed.
+crewcraft-server serve <data-directory>
+    Serve with the recorded name and listen address until interrupted.
+crewcraft-server invite <data-directory> <email>
+    Invite a person; shows the code and link in a private interactive terminal only.
+crewcraft-server room <data-directory> <owner> <name>
+crewcraft-server add-member <data-directory> <room> <owner> <member>
+crewcraft-server lab init <new-state-directory>
+crewcraft-server lab invite <state-directory> <trusted-root.der> <email>
+crewcraft-server lab serve <state-directory> <trusted-root.der> <port>
+crewcraft-server lab room <state-directory> <trusted-root.der> <owner> <name>
+crewcraft-server lab add-member <state-directory> <trusted-root.der> <room> <owner> <member>
+";
 
 fn main() -> ExitCode {
     let args: Vec<_> = env::args_os().skip(1).collect();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("CrewCraft lab: {error}");
+            eprintln!("crewcraft-server: {error}");
             ExitCode::FAILURE
         }
     }
@@ -38,6 +63,20 @@ fn run(args: &[OsString]) -> io::Result<()> {
     match args {
         [] => version(),
         [flag] if flag == "--version" => version(),
+        [flag] if flag == "--help" || flag == "help" => print!("{USAGE}"),
+        [command, data, rest @ ..] if command == "first-run" => first_run(Path::new(data), rest)?,
+        [command, data] if command == "serve" => serve(Path::new(data))?,
+        [command, data, email] if command == "invite" => invite(Path::new(data), text_arg(email)?)?,
+        [command, data, owner, name] if command == "room" => {
+            let (mut installation, _) = server_install::open(Path::new(data), now_ms())?;
+            let slug = installation.rooms.create_room(&lab_email(owner)?, text_arg(name)?).map_err(lab_error)?;
+            println!("Room {slug}");
+        }
+        [command, data, room, owner, member] if command == "add-member" => {
+            let (mut installation, _) = server_install::open(Path::new(data), now_ms())?;
+            installation.rooms.add_member(text_arg(room)?, &lab_email(owner)?, &lab_email(member)?, Role::Member).map_err(lab_error)?;
+            println!("Member added.");
+        }
         [lab, init, state] if lab == "lab" && init == "init" => init_lab(Path::new(state))?,
         [lab, invite, state, root, email] if lab == "lab" && invite == "invite" => {
             let email = email.to_str().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid email"))?;
@@ -63,11 +102,7 @@ fn run(args: &[OsString]) -> io::Result<()> {
             println!("Member added.");
         }
         _ => {
-            eprintln!("crewcraft-server lab init <new-state-directory>");
-            eprintln!("crewcraft-server lab invite <state-directory> <trusted-root.der> <email>");
-            eprintln!("crewcraft-server lab serve <state-directory> <trusted-root.der> <port>");
-            eprintln!("crewcraft-server lab room <state-directory> <trusted-root.der> <owner> <name>");
-            eprintln!("crewcraft-server lab add-member <state-directory> <trusted-root.der> <room> <owner> <member>");
+            eprint!("{USAGE}");
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "unknown command"));
         }
     }
@@ -131,6 +166,98 @@ fn root_fingerprint(path: &Path) -> io::Result<[u8; 32]> {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid trusted root certificate size"));
     }
     Ok(Sha256::digest(root_der).into())
+}
+
+struct FirstRun {
+    name: ServerName,
+    admin: String,
+    listen: SocketAddr,
+}
+
+fn parse_first_run(flags: &[OsString]) -> io::Result<FirstRun> {
+    let (mut name, mut admin, mut listen) = (None, None, None);
+    let mut flags = flags.iter();
+    while let Some(flag) = flags.next() {
+        let value = text_arg(flags.next().ok_or_else(|| usage("every first-run option takes a value"))?)?;
+        let given_twice = match text_arg(flag)? {
+            "--name" => name.replace(ServerName::parse(value).map_err(|error| usage_owned(error.to_string()))?).is_some(),
+            "--admin" => admin.replace(normalize_email(value).map_err(|_| usage("--admin takes an email address"))?).is_some(),
+            "--listen" => listen.replace(server_install::parse_listen(value).map_err(|error| usage_owned(error.to_string()))?).is_some(),
+            _ => return Err(usage("first-run takes --name, --admin and --listen")),
+        };
+        if given_twice {
+            return Err(usage("a first-run option was given twice"));
+        }
+    }
+    let name = name.ok_or_else(|| usage("first-run needs --name <server-name>"))?;
+    let admin = admin.ok_or_else(|| usage("first-run needs --admin <email>"))?;
+    Ok(FirstRun { name, admin, listen: listen.unwrap_or_else(ServerConfig::default_listen) })
+}
+
+fn first_run(data: &Path, flags: &[OsString]) -> io::Result<()> {
+    let FirstRun { name, admin, listen } = parse_first_run(flags)?;
+    // Creating the directory refuses an existing one atomically; this only refuses before asking for a terminal.
+    if fs::symlink_metadata(data).is_ok() {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "an installation already exists there; first-run never changes one"));
+    }
+    require_private_terminal("run first-run in a private interactive terminal: it shows the administrator's invitation")?;
+    let config = ServerConfig { name, listen };
+    let (mut installation, root) = server_install::create(data, &config, now_ms())?;
+    println!("Server {}", config.public_server());
+    println!("Listening on {}", config.listen);
+    println!("Trusted root {}", data.join(PUBLIC_ROOT).display());
+    println!("Root SHA-256 {}", RootFingerprint::from_der(&root.certificate_der));
+    let mut display = LinkTerminal { out: io::stdout(), server: config.public_server(), root_sha256: root.sha256 };
+    lab_admin::invite(&mut installation.accounts, &admin, None, now_ms(), &mut display).map_err(|error| {
+        io::Error::other(format!("the server was created but the administrator was not invited ({error}); run invite to try again"))
+    })?;
+    Ok(())
+}
+
+fn invite(data: &Path, email: &str) -> io::Result<()> {
+    require_private_terminal("show invitations in a private interactive terminal")?;
+    let (mut installation, config) = server_install::open(data, now_ms())?;
+    let root_sha256 = server_install::root_sha256(data)?;
+    let mut display = LinkTerminal { out: io::stdout(), server: config.public_server(), root_sha256 };
+    lab_admin::invite(&mut installation.accounts, email, None, now_ms(), &mut display).map_err(lab_error)?;
+    Ok(())
+}
+
+fn serve(data: &Path) -> io::Result<()> {
+    let (installation, config) = server_install::open(data, now_ms())?;
+    let runtime = LabRuntime::bind_network(installation, config.serve_options(), &config.name, now_ms)?;
+    println!("CrewCraft listening on {} as {}", runtime.local_addr()?, config.public_server());
+    io::stdout().flush()?;
+    runtime.serve_enrolled(&AtomicBool::new(false))
+}
+
+/// Shows an invitation as the link a client opens, and its parts for typing in by hand.
+struct LinkTerminal {
+    out: io::Stdout,
+    server: String,
+    root_sha256: [u8; 32],
+}
+
+impl ProtectedDisplay for LinkTerminal {
+    fn show(&mut self, issued: &IssuedCode<'_>) -> Result<(), DisplayFailed> {
+        let link = server_install::enrollment_link(&self.server, issued.code(), &self.root_sha256);
+        let root = server_install::hex(&self.root_sha256);
+        let (email, server, code) = (issued.email(), &self.server, issued.code());
+        writeln!(self.out, "Private invitation for {email}\n{link}\nServer {server}\nCode {code}\nRoot SHA-256 {root}").map_err(|_| DisplayFailed)?;
+        self.out.flush().map_err(|_| DisplayFailed)
+    }
+}
+
+fn require_private_terminal(message: &'static str) -> io::Result<()> {
+    if io::stdin().is_terminal() && io::stdout().is_terminal() { Ok(()) } else { Err(io::Error::new(io::ErrorKind::PermissionDenied, message)) }
+}
+
+fn usage(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+fn usage_owned(message: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
 fn serve_lab(state: &Path, trusted_root: &Path, port: u16) -> io::Result<()> {

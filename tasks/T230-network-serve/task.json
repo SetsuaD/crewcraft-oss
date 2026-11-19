@@ -1,0 +1,23 @@
+{
+  "id": "T230-network-serve",
+  "title": "Serve on any address with a certificate for the configured server name",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/lib.rs",
+    "apps/crewcraft-server/src/listener.rs",
+    "apps/crewcraft-server/src/lab_server.rs",
+    "apps/crewcraft-server/src/lab_runtime.rs",
+    "apps/crewcraft-server/src/lab_bootstrap.rs",
+    "apps/crewcraft-server/src/server_name.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t230_network_serve.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t230_network_serve",
+  "depends_on": [
+    "T212-lab-listener",
+    "T219-lab-server",
+    "T224-lab-installation",
+    "T226-bootstrap-transport"
+  ],
+  "spec": "Add a network path beside the loopback-only lab path, changing no existing signature. Listener::bind_network binds any local address, including every interface, while Listener::bind keeps refusing non-loopback addresses. LabServer::bind_network and LabRuntime::bind_network use it, and the runtime signs the TLS server certificate for a ServerName instead of localhost. ServerName accepts a lowercase-normalised DNS name (labels of 1 to 63 letters, digits or inner hyphens, at most 253 characters, no trailing dot, a last label that is not all digits) or an IP literal (IPv6 with or without brackets, IPv4-mapped IPv6 as IPv4), and refuses wildcards, Unicode, ports, and unspecified, multicast and broadcast addresses. The peer's IP is read from the TCP socket before admission and exposed as BootstrapStream::peer_ip. The enrollment handler counts its per-source limit against source_key(peer): an IPv4 address on its own, an IPv6 address by its /64. A client pinned to the configured name completes enrollment and sign-in; a client expecting another name refuses the server; a client without a device certificate gets no application bytes.",
+  "status": "done"
+}

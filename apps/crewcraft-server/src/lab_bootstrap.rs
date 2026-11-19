@@ -1,6 +1,7 @@
 //! Drive the durable enrollment handler on the listener's admitted bootstrap stream.
 
 use std::io::Write;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
 use crewcraft_accounts::password;
@@ -22,8 +23,7 @@ pub fn bootstrap_handler(
 ) -> impl Fn([u8; 32], &mut BootstrapStream) + Send + Sync + 'static {
     let handler = Mutex::new(Enroller::new(authority, StoreServices::new_shared(accounts, environment)));
     move |key, stream| {
-        // Every peer on the lab listener comes from the IPv4 loopback address.
-        let mut connection = BootstrapConnection::new(key, "127.0.0.1");
+        let mut connection = BootstrapConnection::new(key, &source_key(stream.peer_ip()));
         while let Ok(Some(frame)) = read_frame(stream, MAX_BOOTSTRAP_REQUEST) {
             let reply = receive_shared(&mut connection, &handler, &|secret| password::hash(secret).ok(), frame.as_bytes());
             if !reply.bytes.is_empty() && stream.write_all(&reply.bytes).and_then(|()| stream.flush()).is_err() {
@@ -32,6 +32,19 @@ pub fn bootstrap_handler(
             if !reply.open {
                 return;
             }
+        }
+    }
+}
+
+/// The bucket a peer's enrollment calls are counted in: an IPv4 address on its own, an IPv6 address by its /64
+/// prefix, because a single IPv6 host is usually given a whole /64 and could otherwise pick a new address per guess.
+/// An IPv4 address carried in IPv6 (`::ffff:a.b.c.d`) counts as that IPv4 address.
+pub fn source_key(peer: IpAddr) -> String {
+    match peer.to_canonical() {
+        IpAddr::V4(address) => address.to_string(),
+        IpAddr::V6(address) => {
+            let [a, b, c, d, ..] = address.segments();
+            format!("{a:x}:{b:x}:{c:x}:{d:x}::/64")
         }
     }
 }
