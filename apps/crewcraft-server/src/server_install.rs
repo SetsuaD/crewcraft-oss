@@ -148,6 +148,40 @@ pub fn root_sha256(dir: &Path) -> io::Result<[u8; 32]> {
 /// `crewcraft://enroll?server=<name:port>&code=<code>&root_sha256=<hex>`, with each value percent-encoded where a
 /// query needs it (an IPv6 server's brackets are written `%5B` and `%5D`). The text comes from the client's own
 /// format (`crewcraft_enroll::InvitationLink`, task T234), so the server and the client can never disagree on it.
+/// The file that records the port invitations carry when it differs from the listen port (a server behind port
+/// forwarding). Absent when they are the same. Task T236.
+pub const PUBLIC_PORT_FILE: &str = "public-port";
+const MAX_PUBLIC_PORT_FILE: u64 = 16;
+
+/// The recorded public port, or `None` when invitations use the listen port.
+pub fn read_public_port(dir: &Path) -> io::Result<Option<u16>> {
+    match read_file(&dir.join(PUBLIC_PORT_FILE), MAX_PUBLIC_PORT_FILE, true) {
+        Ok(bytes) => {
+            let text = std::str::from_utf8(&bytes).map_err(|_| invalid("the recorded public port is not text"))?;
+            match text.trim().parse::<u16>() {
+                Ok(port) if port != 0 => Ok(Some(port)),
+                _ => Err(invalid("the recorded public port is not a port number")),
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Record the public port once, at first-run (owner-only on Unix; never overwritten).
+pub fn write_public_port(dir: &Path, port: u16) -> io::Result<()> {
+    if port == 0 {
+        return Err(invalid("the public port cannot be 0"));
+    }
+    write_new(&dir.join(PUBLIC_PORT_FILE), format!("{port}\n").as_bytes())
+}
+
+/// The server as invitations write it: the recorded name with the public port when one is recorded, else the listen
+/// port.
+pub fn link_server(config: &ServerConfig, public_port: Option<u16>) -> String {
+    config.name.with_port(public_port.unwrap_or(config.listen.port()))
+}
+
 pub fn enrollment_link(server: &str, code: &str, root_sha256: &[u8; 32]) -> String {
     write_link(server, code, RootFingerprint::from_bytes(*root_sha256))
 }
