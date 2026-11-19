@@ -102,15 +102,32 @@ impl Version {
         }
     }
 
-    /// The MSI ProductVersion (see the module comment): `0.1.0-beta.1` is `0.1.201`.
-    pub fn msi_product_version(&self) -> String {
-        let stage = match self.pre {
+    /// The stage number the MSI build number and the Android version code end in: `100 + N` for alpha, `200 + N`
+    /// for beta, `300 + N` for rc and `900` for the release.
+    pub fn stage_number(&self) -> u32 {
+        match self.pre {
             None => 900,
             Some((Stage::Alpha, n)) => 100 + n,
             Some((Stage::Beta, n)) => 200 + n,
             Some((Stage::Rc, n)) => 300 + n,
-        };
-        format!("{}.{}.{}", self.major, self.minor, self.patch * 1000 + stage)
+        }
+    }
+
+    /// The MSI ProductVersion (see the module comment): `0.1.0-beta.1` is `0.1.201`.
+    pub fn msi_product_version(&self) -> String {
+        format!("{}.{}.{}", self.major, self.minor, self.patch * 1000 + self.stage_number())
+    }
+
+    /// The Android `versionCode`, the number Android compares to decide whether an APK is an upgrade:
+    /// `MAJOR * 10_000_000 + MINOR * 100_000 + PATCH * 1000 + STAGE` (STAGE as in [`Version::stage_number`]), so
+    /// `0.1.0-beta.1` is `100201` and `1.2.3` is `10203900`, and a later release always has a larger code. The digits
+    /// leave room for a minor number up to 99 and a major number up to 209 (Google Play takes codes up to
+    /// 2100000000); a version outside that is refused.
+    pub fn android_version_code(&self) -> Result<u32> {
+        if self.minor > 99 || self.major > 209 {
+            return Err(Error::new(format!("version {self}: an Android version code needs a minor number up to 99 and a major number up to 209")));
+        }
+        Ok(self.major * 10_000_000 + self.minor * 100_000 + self.patch * 1000 + self.stage_number())
     }
 }
 

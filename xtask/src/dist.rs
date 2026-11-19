@@ -99,7 +99,7 @@ pub fn source_date_epoch(root: &Path) -> Result<u64> {
     text.trim().parse().map_err(|_| Error::new(format!("git printed {:?} as the commit time; set SOURCE_DATE_EPOCH", text.trim())))
 }
 
-fn target_dir(root: &Path) -> PathBuf {
+pub(crate) fn target_dir(root: &Path) -> PathBuf {
     match env::var_os("CARGO_TARGET_DIR") {
         Some(dir) => root.join(dir),
         None => root.join("target"),
@@ -108,7 +108,7 @@ fn target_dir(root: &Path) -> PathBuf {
 
 /// The rustc flags for a release build: the caller's flags, plus path remapping so that no folder of the machine
 /// that ran the build (the checkout, the cargo home) is written into the binaries.
-fn release_rustflags(root: &Path) -> OsString {
+pub(crate) fn release_rustflags(root: &Path) -> OsString {
     let mut flags: Vec<OsString> = match (env::var_os("CARGO_ENCODED_RUSTFLAGS"), env::var("RUSTFLAGS")) {
         (Some(encoded), _) if !encoded.is_empty() => encoded.to_string_lossy().split('\u{1f}').map(OsString::from).collect(),
         (_, Ok(plain)) => plain.split_whitespace().map(OsString::from).collect(),
@@ -180,13 +180,13 @@ fn cargo_build(root: &Path, target: Target, epoch: u64) -> Result<(PathBuf, Path
     }
 }
 
-fn read(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn read(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).context(|| format!("reading {}", path.display()))
 }
 
 /// The license and notice files every package carries, as `(file name, contents)`. `with_font` adds the font
 /// license when the client bundles a font. `txt` gives each name a `.txt` extension, for Windows.
-fn license_files(root: &Path, with_font: bool, txt: bool) -> Result<Vec<(String, Vec<u8>)>> {
+pub(crate) fn license_files(root: &Path, with_font: bool, txt: bool) -> Result<Vec<(String, Vec<u8>)>> {
     let mut files = Vec::new();
     for name in ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE"] {
         files.push((name.to_string(), read(&root.join(name))?));
@@ -215,7 +215,7 @@ pub fn server_files(binary_name: &str, binary: &[u8], docs: &[(String, Vec<u8>)]
 /// The README that ships in the server archives.
 pub const SERVER_README: &str = include_str!("../assets/server-README.txt");
 
-fn write_asset(out: &Path, name: &str, data: &[u8], executable: bool) -> Result<()> {
+pub(crate) fn write_asset(out: &Path, name: &str, data: &[u8], executable: bool) -> Result<()> {
     let partial = out.join(format!(".{name}.partial"));
     fs::write(&partial, data).context(|| format!("writing {}", partial.display()))?;
     if executable {
@@ -244,7 +244,7 @@ fn appimage_runtime(options: &Options) -> Result<Vec<u8>> {
 }
 
 /// A new, empty work folder under the target folder.
-fn work_dir(root: &Path, name: &str) -> Result<PathBuf> {
+pub(crate) fn work_dir(root: &Path, name: &str) -> Result<PathBuf> {
     let dir = target_dir(root).join("xtask-dist").join(name);
     if dir.exists() {
         fs::remove_dir_all(&dir).context(|| format!("clearing {}", dir.display()))?;

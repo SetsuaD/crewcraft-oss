@@ -3,8 +3,8 @@
 `cargo xtask dist` builds the release binaries and writes the release assets plus `SHA256SUMS.txt`: the Linux and
 Windows assets on one Linux x86_64 machine, the macOS assets on a Mac ([below](#macos)). The packages are written in
 Rust (`xtask/`). These are not: the MinGW-w64 linker for the Windows binaries, `mksquashfs` for the AppImage's image,
-the prebuilt AppImage runtime at the front of the AppImage, and Apple's `lipo` and `hdiutil` on the Mac
-([NON-RUST-DEPENDENCIES.md](NON-RUST-DEPENDENCIES.md)).
+the prebuilt AppImage runtime at the front of the AppImage, Apple's `lipo` and `hdiutil` on the Mac, and the Android
+NDK's linker and `aapt2` for the Android app ([below](#android)) ([NON-RUST-DEPENDENCIES.md](NON-RUST-DEPENDENCIES.md)).
 
 ## Build the release packages
 
@@ -119,6 +119,61 @@ To publish one release with every platform, run `dist` on Linux and on the Mac i
 one folder and run `sha256sum *.AppImage *.deb *.dmg *.msi *.tar.gz *.zip > SHA256SUMS.txt` there. The plist, the icon and the
 bundle layout are checked on Linux by `cargo test -p xtask`; on any other system `--target macos-universal` stops
 before building, with an error.
+
+## Android
+
+`cargo xtask apk` builds the Android app (`apps/crewcraft-android`, task T400) as one APK per ABI, on Linux x86_64 or
+a Mac, with Rust 1.95 and the Android SDK and NDK from Google's command-line tools:
+
+```sh
+rustup target add aarch64-linux-android x86_64-linux-android
+sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;27.3.13750724"
+export ANDROID_HOME=/path/to/android-sdk     # the NDK is found under $ANDROID_HOME/ndk, or set ANDROID_NDK_HOME
+
+cargo xtask apk --version 0.1.0-beta.1 --out dist                   # phones: crewcraft-<v>-android-aarch64.apk
+cargo xtask apk --version 0.1.0-beta.1 --out dist --target x86_64   # the emulator: ...-android-x86_64.apk
+```
+
+It builds the library with the NDK's clang as linker (API 29, 16 KiB pages), checks it exports
+`ANativeActivity_onCreate` and links only Android system libraries, renders the launcher icon from the SVG at five
+densities, compiles the generated `AndroidManifest.xml` and the icons with `aapt2`, and writes the APK in Rust:
+
+| Entry | Contents |
+|---|---|
+| `AndroidManifest.xml` | Package `io.github.setsuad.crewcraft`, `versionName` the version, `versionCode` as below, Android 10 (API 29) or later, target API 34, the INTERNET permission only, no Java code (`hasCode="false"`), no backups, one `android.app.NativeActivity` that loads `libcrewcraft_android.so` and is the launcher entry |
+| `resources.arsc`, `res/mipmap-*/crewcraft.png` | The app label and the icon at 48 to 192 px; stored, 4-byte aligned |
+| `assets/licenses/` | `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE` and the font's `OFL.txt` |
+| `lib/<abi>/libcrewcraft_android.so` | The app; stored and 16 KiB aligned, so Android maps it from the APK (`extractNativeLibs="false"`) |
+
+The `versionCode` is `MAJOR * 10000000 + MINOR * 100000 + PATCH * 1000 + STAGE`, with STAGE as in the MSI version
+(`100 + N` alpha, `200 + N` beta, `300 + N` rc, `900` release): `0.1.0-beta.1` is `100201`, and every later release
+has a larger code, which Android needs to install it as an update. The minor number can be at most 99.
+
+**Signing.** Without `--keystore` the APK is signed in Rust with APK Signature Scheme v2 (ECDSA P-256) by a test
+key that the first build makes and keeps in `target/xtask-apk/test-signing-key/` (it is never committed), so later
+test builds install over earlier ones; a new checkout makes a new key, and Android then needs the old app removed
+first. xtask verifies every signature it writes. A test-signed APK is for emulators and test phones, not a release.
+Which identity signs released APKs is decided before task T406; the hook for it is a keystore:
+
+```sh
+export CREWCRAFT_APK_KEYSTORE_PASS=...        # read by apksigner from the environment, never on the command line
+cargo xtask apk --version 0.1.0 --out dist --keystore release.p12 --key-alias upload
+```
+
+which signs the same APK with the build-tools' `apksigner` (a Java program; it needs a Java runtime) instead.
+
+Check an APK independently, install it and read its log:
+
+```sh
+$ANDROID_HOME/build-tools/34.0.0/apksigner verify --verbose dist/crewcraft-*-android-x86_64.apk
+$ANDROID_HOME/build-tools/34.0.0/zipalign -c -p 4 dist/crewcraft-*-android-x86_64.apk
+$ANDROID_HOME/build-tools/34.0.0/aapt2 dump badging dist/crewcraft-*-android-x86_64.apk
+adb install -r dist/crewcraft-*-android-x86_64.apk
+adb shell am start -n io.github.setsuad.crewcraft/android.app.NativeActivity
+adb logcat -s CrewCraft      # crewcraft <version> (protocol <n>) on Android
+```
+
+`cargo test -p xtask --test t400_android_apk` checks the manifest, icons, zip layout and signature without the SDK.
 
 ## Unsigned beta builds
 
