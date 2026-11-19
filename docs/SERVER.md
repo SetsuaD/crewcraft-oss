@@ -96,15 +96,20 @@ A port below 1024 needs `AmbientCapabilities=CAP_NET_BIND_SERVICE`; forwarding a
 Run these as the server's account. `invite` prints a new invitation (or writes it with `--invitation-file`):
 
 ```sh
-crewcraft-server invite /var/lib/crewcraft person@example.org
-crewcraft-server room /var/lib/crewcraft admin@example.org General         # prints the room's name
-crewcraft-server add-member /var/lib/crewcraft <room> admin@example.org person@example.org
+sudo -u crewcraft crewcraft-server invite /var/lib/crewcraft person@example.org --invitation-file /var/lib/crewcraft-setup/person.txt
+sudo -u crewcraft crewcraft-server room /var/lib/crewcraft admin@example.org General         # prints the room's name
+sudo -u crewcraft crewcraft-server add-member /var/lib/crewcraft <room> admin@example.org person@example.org
 ```
 
-In this beta these commands need the data folder's lock, which the running server holds: stop the service, run them,
-and start it again (`sudo systemctl stop crewcraft-server`, the commands, `sudo systemctl start crewcraft-server`).
-Otherwise they say the folder is in use. Managing people while the server runs comes with the admin console (ROADMAP
-M4).
+They work while the server runs; there is no need to stop it. A running server listens on a control socket in its data
+folder (`control.sock`), which only the server's own account can use, and the commands hand it their request: the
+person can enroll at once, and a new member sees the room the next time their app lists rooms. With the server stopped,
+the commands open the data folder themselves, as before. Run them as any other account and they are refused.
+
+On Windows the server has no control socket yet: stop the service, run the commands, and start it again. Otherwise they
+say the folder is in use. The same message on Linux or macOS means the server could not open its control socket (it
+says why when it starts; a data folder path longer than about 100 characters is too long for one) or another command
+is running.
 
 ## 5. Check that it is dark
 

@@ -83,7 +83,7 @@ pub struct LabServer {
     protocol: ServerSide,
     config: Arc<ServerConfig>,
     admission: Arc<dyn Admission>,
-    rooms: Mutex<DurableServer>,
+    rooms: Arc<Mutex<DurableServer>>,
 }
 
 impl LabServer {
@@ -124,11 +124,16 @@ impl LabServer {
         }
         let config = server_config(identity, device_roots, admission.clone()).map_err(io::Error::other)?;
         let listener = listen(options.address, options.capacity)?;
-        Ok(Self { listener, timeouts: options.timeouts, protocol: options.protocol, config, admission, rooms: Mutex::new(rooms) })
+        Ok(Self { listener, timeouts: options.timeouts, protocol: options.protocol, config, admission, rooms: Arc::new(Mutex::new(rooms)) })
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.listener.local_addr()
+    }
+
+    /// The room journal the device sessions use, for changes made beside them (the control socket, task T238).
+    pub(crate) fn rooms(&self) -> Arc<Mutex<DurableServer>> {
+        self.rooms.clone()
     }
 
     /// The server supplies the trusted Unix clock (milliseconds). Device auth is bound to the verified leaf's DER.
