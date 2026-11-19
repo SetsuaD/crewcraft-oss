@@ -120,6 +120,8 @@ pub fn data_dir() -> Option<PathBuf> {
     let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty()).map(PathBuf::from);
     if cfg!(windows) {
         var("APPDATA").map(|dir| dir.join("CrewCraft"))
+    } else if cfg!(target_os = "ios") {
+        crate::ios::data_dir(var("HOME"))
     } else if cfg!(target_os = "macos") {
         var("HOME").map(|home| home.join("Library").join("Application Support").join("CrewCraft"))
     } else {
@@ -134,6 +136,7 @@ pub fn device_name() -> String {
         "macos" => "macOS",
         "linux" => "Linux",
         "android" => return "CrewCraft on Android".to_owned(),
+        "ios" => return "CrewCraft on iOS".to_owned(),
         other => other,
     };
     format!("CrewCraft desktop on {os}")
@@ -413,6 +416,13 @@ pub fn no_key_store(dir: &Path) -> String {
     if cfg!(target_os = "android") {
         // The Android Keystore comes with task T403; until then the phone app can show its screens but not enroll.
         return "This version of CrewCraft cannot use this phone's key store yet, so it cannot keep an enrollment and will not \
+                save one."
+            .to_owned();
+    }
+    if cfg!(target_os = "ios") {
+        // The Secure Enclave and the Keychain come with tasks T422 and T423; until then the iPhone app shows its
+        // screens but cannot keep an enrollment.
+        return "This version of CrewCraft cannot use this iPhone's key store yet, so it cannot keep an enrollment and will not \
                 save one."
             .to_owned();
     }

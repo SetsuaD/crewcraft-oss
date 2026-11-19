@@ -21,7 +21,7 @@ use crewcraft_ui_model::{Command, DraftError, FeedRow};
 use egui::{Align, Color32, FontData, FontDefinitions, FontFamily, Key, Layout, Modifiers, RichText, ScrollArea, TextEdit, Ui};
 use zeroize::Zeroizing;
 
-/// The width of the enrollment and sign-in forms.
+/// The width of the enrollment and sign-in forms, or the window's width when that is narrower (a phone).
 const FORM_WIDTH: f32 = 460.0;
 
 /// Inter (OFL-1.1, assets/fonts/OFL.txt), the window's only font.
@@ -254,9 +254,11 @@ impl Window {
         egui::CentralPanel::default_margins().show(ui, |ui| {
             ui.add_space((ui.available_height() * 0.12).min(80.0));
             ui.vertical_centered(|ui| {
-                ui.set_max_width(FORM_WIDTH);
+                // On a phone the form is as wide as the screen: a wider one would push its fields past both edges,
+                // where egui shows no text cursor and so never asks for the on-screen keyboard.
+                ui.set_max_width(ui.available_width().min(FORM_WIDTH));
                 egui::Frame::group(ui.style()).inner_margin(24.0).corner_radius(8.0).show(ui, |ui| {
-                    ui.set_width(FORM_WIDTH - 48.0);
+                    ui.set_width(ui.available_width().min(FORM_WIDTH - 48.0));
                     ui.with_layout(Layout::top_down(Align::Min), |ui| {
                         ui.spacing_mut().item_spacing.y = 8.0;
                         if let Some(notice) = &self.notice {

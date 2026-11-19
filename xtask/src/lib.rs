@@ -2,7 +2,7 @@
 //!
 //! Each package format is a module that turns bytes into bytes, so a test can check the layout from a fake
 //! binary without building a release: [`deb`] (Debian package), [`archive`] (`.tar.gz`, `.zip` and the `ar`
-//! container), [`appimage`] (AppImage), [`macos`] (the app bundle, icon and disk image), [`windows_msi`] (Windows Installer database), [`icon`] (PNG sizes and the `.ico`), [`linkage`]
+//! container), [`appimage`] (AppImage), [`macos`] (the app bundle, icon and disk image), [`ios`] (the iOS app bundle, `cargo xtask ios`), [`windows_msi`] (Windows Installer database), [`icon`] (PNG sizes and the `.ico`), [`linkage`]
 //! (what a built binary links), [`sums`] (`SHA256SUMS.txt`), [`names`] (asset names) and [`version`].
 //! [`dist`] runs cargo and puts the pieces together. `cargo xtask apk` builds the Android app: [`android`] (the
 //! manifest, icons and build) and [`apk`] (the APK zip and its v2 signature).
@@ -17,6 +17,7 @@ pub mod archive;
 pub mod deb;
 pub mod dist;
 pub mod icon;
+pub mod ios;
 pub mod linkage;
 pub mod macos;
 pub mod names;

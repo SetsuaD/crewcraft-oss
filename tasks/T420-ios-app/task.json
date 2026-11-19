@@ -1,0 +1,28 @@
+{
+  "id": "T420-ios-app",
+  "title": "iOS build lane: cargo xtask ios writes CrewCraft.app for the iOS Simulator, with no Xcode project",
+  "crate": "xtask",
+  "files": [
+    "xtask/src/ios.rs",
+    "xtask/src/lib.rs",
+    "xtask/src/main.rs",
+    "xtask/src/dist.rs",
+    "docs/RELEASE.md",
+    "docs/MOBILE.md",
+    "docs/NON-RUST-DEPENDENCIES.md"
+  ],
+  "test_path": "xtask/tests/t420_ios_app.rs",
+  "test_cmd": "cargo test -p xtask --test t420_ios_app",
+  "depends_on": [
+    "T307-release-packages",
+    "T421-ios-window"
+  ],
+  "spec": "On macOS only, `cargo xtask ios --version <v> --out <dir> [--target sim-x86_64|sim-arm64]` builds apps/crewcraft in release mode for the iOS Simulator (x86_64-apple-ios or aarch64-apple-ios-sim; the default is the Mac's own architecture) with IPHONEOS_DEPLOYMENT_TARGET=17.0, checks the program is a 64-bit Mach-O for that CPU whose LC_BUILD_VERSION names the simulator platform (7) and iOS 17.0, and writes <dir>/CrewCraft.app, replacing an earlier one, signed ad hoc with `codesign --sign -` and verified. The bundle is flat and written in Rust, with no Xcode project, asset catalog, Swift or Objective-C: the program `crewcraft` (0755), `Info.plist`, `PkgInfo` (APPL????), the home-screen icons AppIcon60x60 at @2x (120 px) and @3x (180 px), as PNG files named for their scale, rendered from assets/icon/crewcraft.svg, and the license files in licenses/. The Info.plist (XML) has CFBundleIdentifier io.github.setsuad.crewcraft, CFBundleExecutable crewcraft, CFBundleName and CFBundleDisplayName CrewCraft, CFBundlePackageType APPL, CFBundleInfoDictionaryVersion 6.0, CFBundleShortVersionString the release's three numbers (the App Store form), CFBundleVersion the macOS/MSI numbering (0.1.0-beta.1 is 0.1.201), MinimumOSVersion 17.0 (SPEC D5), CFBundleIcons with CFBundleIconFiles AppIcon60x60, CFBundleSupportedPlatforms iPhoneSimulator, LSRequiresIPhoneOS true, UIDeviceFamily [1], an empty UILaunchScreen dict, UIRequiresFullScreen true and portrait orientation. A device target (aarch64-apple-ios) is refused with a message naming the missing signing identity (task T424). Elsewhere the command fails before building. The arguments, plist, icons, bundle layout and the Mach-O check are pure functions tested on Linux.",
+  "status": "done",
+  "context": [
+    "docs/MOBILE.md",
+    "docs/SPEC.md",
+    "xtask/src/macos.rs",
+    "assets/icon/crewcraft.svg"
+  ]
+}
