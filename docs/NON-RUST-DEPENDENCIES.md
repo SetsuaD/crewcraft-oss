@@ -10,8 +10,9 @@ same change that adds the dependency; the security contributor reviews it (CODEO
 
 | Helper | Pulled in by | Why it is needed | Pure-Rust option considered | Approved |
 |---|---|---|---|---|
+| `cc` | `ring` 0.17 (through `rustls`, crate `crewcraft-tls`) | ring compiles its C and assembly routines with `cc`. It is the crypto provider of the first owned TLS proof (M2, work item W0). | `rustls-graviola` (no C, but x86_64 and aarch64 only and very new), `rustls-rustcrypto` (pre-release), `aws-lc-rs` (audited, but also needs `cmake`) | No: waits for the security contributor's review (CODEOWNERS) |
 
-There are none: today every dependency is pure Rust.
+Only the helper in the table is native; every other dependency is pure Rust.
 
 ## Expected decisions
 

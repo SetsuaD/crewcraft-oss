@@ -1,0 +1,21 @@
+{
+  "id": "T217-lab-client",
+  "title": "Run client chat commands with pinned loopback mutual TLS",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/Cargo.toml",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft/src/lab_client.rs",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft/tests/t217_lab_client.rs",
+  "test_cmd": "cargo test -p crewcraft --test t217_lab_client",
+  "depends_on": ["T151-enrollment-trust", "T210-mtls-transport", "T215-chat-session"],
+  "spec": "A loopback-only lab CLI driver takes an already enrolled certificate resolver and prepared non-echoing input. Require a trusted expected server name, the invitation root's exact SHA-256 fingerprint, and a verified TLS 1.3 handshake with client certificate selection before reading credentials. Use bounded LF or CRLF email, password and TOTP lines, with one additional message line in the single-command post wrapper, and reject incomplete or trailing input. The public argument parser accepts sign-in, post room and sync room. Use ChatSession for sign-in, post acknowledgement and room history replay. A caller can also open a session once and send multiple commands on that same connection without collecting credentials again. Return operation results without retaining or showing credentials. Use the workspace's existing TLS and test dependencies. The driver has no native secret input or device signer implementation.",
+  "status": "open",
+  "context": [
+    "apps/crewcraft/src/chat_session.rs",
+    "crates/enroll/src/server_trust.rs",
+    "crates/tls/src/deadline.rs"
+  ]
+}
