@@ -1,5 +1,7 @@
 //! Transport adapters for the CrewCraft server binary.
 
+#[cfg(unix)]
+pub mod control;
 pub mod device_session;
 pub mod issuer_custody;
 pub mod lab_admin;

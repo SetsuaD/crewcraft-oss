@@ -1,0 +1,20 @@
+{
+  "id": "T238-admin-while-serving",
+  "title": "invite, room and add-member work while serve runs, through an owner-only control socket",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/control.rs",
+    "apps/crewcraft-server/src/lib.rs",
+    "apps/crewcraft-server/src/lab_runtime.rs",
+    "apps/crewcraft-server/src/lab_server.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "docs/SERVER.md",
+    "docs/SECURITY-DESIGN.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t238_admin_while_serving.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t238_admin_while_serving",
+  "depends_on": ["T231-first-run", "T235-clean-stop", "T237-invitation-file"],
+  "spec": "On Unix, `serve <data>` listens on `<data>/control.sock`, created inside the private data directory and made 0600, owned by the directory's owner, so only the server's own account can connect. A socket left by a crash (nothing answers on it) is replaced; anything else at that path is left alone and the server serves without one. `invite`, `room` and `add-member` first connect to it: when a server answers they send the request and print or write the result exactly as offline (including `--invitation-file`, created by the command with the same rules), and a request the server cannot do fails with the offline command's error text; when none answers they open the directory themselves as before. The running server applies the change to its live account store and room journal under the same locks as the device sessions, so an invited person enrolls without a restart and a member sees the room in ListRooms. The code of an invitation travels once, server to command, over the socket; if the command does not confirm it was shown, the invitation is withdrawn. Messages are framed (u32 length up to 4096 bytes, a field count up to 8, u16-length UTF-8 fields) with a 10 s budget per exchange. The socket is removed when serving stops. Windows keeps the offline-only behaviour.",
+  "status": "done",
+  "context": ["apps/crewcraft-server/src/lab_state.rs", "apps/crewcraft-server/src/lab_admin.rs", "docs/SECURITY-DESIGN.md"]
+}

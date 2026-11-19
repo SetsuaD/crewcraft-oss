@@ -130,6 +130,30 @@ The honest limit: whoever holds the email holds the invitation, until it is rede
 expiry, single use, administrators see each invitation's state and can revoke it, and an optional "administrator
 approves each new device" step.
 
+### Administration while serving
+
+`invite`, `room` and `add-member` reach a running server over a Unix domain socket, `control.sock`, inside its data
+directory (Linux and macOS; task T238). It is a local channel for the server's own account, never a network listener:
+
+- The data directory must be private (`0700`; the server refuses to open one that is not). The server creates the
+  socket inside it, makes it `0600` and checks it belongs to the directory's owner. Connecting needs search permission
+  on the directory and write permission on the socket, so the kernel refuses every other account (the superuser, who
+  can read the directory's keys anyway, is the exception). The standard library has no stable call to read the peer's
+  credentials, so the server does not check them itself; the file permissions are the gate. A command trusts a socket
+  only in a private directory and only when it belongs to the directory's owner.
+- A request is applied to the live account store and room journal under the same locks, and with the same checks, as
+  offline: the same invitation rules, and the same refusals with the same text.
+- An invitation's code goes from the server to the command once, over the socket, and the command shows it or writes
+  it to a new owner-only file. If the command does not confirm it was shown, the server withdraws the invitation, as
+  a failed display does offline. Nothing logs a request or a code.
+- Messages are small and strict: a 4-byte length up to 4096, at most 8 length-prefixed UTF-8 fields, one exchange per
+  connection within 10 seconds, answered one at a time.
+- A socket left behind by a crash is replaced only once connecting to it is refused; anything else at that path is
+  left alone. The socket is removed when the server stops.
+
+On Windows the Rust standard library offers neither Unix domain sockets nor named pipes, and CrewCraft's crates use no
+`unsafe` code, so a Windows server has no control socket: there, these commands still need the server stopped.
+
 ## 4. TOTP
 
 RFC 6238, SHA-1, 6 digits, 30-second steps (what every authenticator app supports), a skew of one step either side,

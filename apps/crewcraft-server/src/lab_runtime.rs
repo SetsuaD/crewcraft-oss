@@ -5,8 +5,9 @@
 use std::fmt;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use crewcraft_accounts::throttle::Throttle;
 use crewcraft_admission::Admission;
@@ -18,6 +19,8 @@ use crewcraft_tls::Identity;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
+#[cfg(unix)]
+use crate::control::ControlSocket;
 use crate::lab_bootstrap::bootstrap_handler;
 use crate::lab_installation::LabInstallation;
 use crate::lab_server::{BootstrapStream, LabOptions, LabServer};
@@ -81,21 +84,71 @@ impl LabRuntime {
         self.serve(shutdown, |accounts, issuer| Ok(bootstrap_handler(accounts, issuer, SystemEnvironment)))
     }
 
+    /// As `serve_enrolled`, and answer `invite`, `room` and `add-member` on `control` while serving (task T238). The
+    /// requests change the same live account store and room journal as the device sessions, under the same locks.
+    /// The socket is removed when serving stops, before the data directory is released.
+    #[cfg(unix)]
+    pub fn serve_enrolled_with_control(self, shutdown: &AtomicBool, control: ControlSocket) -> io::Result<()> {
+        let beside = move |stopped: &dyn Fn() -> bool, accounts: &Mutex<AccountStore>, rooms: &Mutex<DurableServer>, now_ms: &dyn Fn() -> u64| {
+            control.serve(stopped, accounts, rooms, now_ms)
+        };
+        self.serve_beside(shutdown, |accounts, issuer| Ok(bootstrap_handler(accounts, issuer, SystemEnvironment)), Some(beside))
+    }
+
     /// Build the handler with the same account store used by TLS admission and chat authentication.
     /// The listener owns the connection deadlines and joins its handlers before returning.
     pub fn serve<B>(self, shutdown: &AtomicBool, make_bootstrap: impl FnOnce(Arc<Mutex<AccountStore>>, Authority) -> io::Result<B>) -> io::Result<()>
     where
         B: Fn([u8; 32], &mut BootstrapStream) + Send + Sync + 'static,
     {
+        self.serve_beside(shutdown, make_bootstrap, None::<Beside>)
+    }
+
+    /// Serve, with `beside` (if any) running on its own thread over the live stores until serving stops. It is told
+    /// to stop by its first argument and is joined before the data directory is released.
+    fn serve_beside<B, S>(
+        self,
+        shutdown: &AtomicBool,
+        make_bootstrap: impl FnOnce(Arc<Mutex<AccountStore>>, Authority) -> io::Result<B>,
+        beside: Option<S>,
+    ) -> io::Result<()>
+    where
+        B: Fn([u8; 32], &mut BootstrapStream) + Send + Sync + 'static,
+        S: FnOnce(&dyn Fn() -> bool, &Mutex<AccountStore>, &Mutex<DurableServer>, &dyn Fn() -> u64) + Send,
+    {
         let Self { server, accounts, issuer, now_ms, ownership } = self;
         let bootstrap = make_bootstrap(accounts.clone(), issuer)?;
         let throttle = Arc::new(Mutex::new(Throttle::new()));
-        let result =
-            server.serve(shutdown, move || now_ms(), move |der, now| StoredDeviceAuth::bind(accounts.clone(), throttle.clone(), der, now), bootstrap);
+        let rooms = server.rooms();
+        let finished = AtomicBool::new(false);
+        let result = thread::scope(|scope| {
+            let side = match beside {
+                Some(beside) => {
+                    let (accounts, rooms, now_ms, finished) = (&accounts, &rooms, &now_ms, &finished);
+                    let stopped = move || shutdown.load(Ordering::Acquire) || finished.load(Ordering::Acquire);
+                    Some(thread::Builder::new().name("control".into()).spawn_scoped(scope, move || beside(&stopped, accounts, rooms, &**now_ms))?)
+                }
+                None => None,
+            };
+            let (device_accounts, clock) = (accounts.clone(), now_ms.clone());
+            let result = server.serve(
+                shutdown,
+                move || clock(),
+                move |der, now| StoredDeviceAuth::bind(device_accounts.clone(), throttle.clone(), der, now),
+                bootstrap,
+            );
+            finished.store(true, Ordering::Release);
+            if let Some(side) = side {
+                let _ = side.join();
+            }
+            result
+        });
         drop(ownership);
         result
     }
 }
+
+type Beside = fn(&dyn Fn() -> bool, &Mutex<AccountStore>, &Mutex<DurableServer>, &dyn Fn() -> u64);
 
 struct InstalledAdmission {
     accounts: Arc<Mutex<AccountStore>>,
