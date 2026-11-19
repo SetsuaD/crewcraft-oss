@@ -64,8 +64,10 @@ Libraries, each proven by the tests in `crates/*/tests`:
 - **Client core:** timeline, room view, inbox, outbox, notifications and the client session.
 
 - **Server binary:** a dark TLS server with a `first-run` setup; see "Run a server" below.
+- **Desktop app** (`crewcraft`, egui): enroll this device from an invitation link, set up an authenticator, sign in,
+  see your rooms with unread counts, read and send messages. See "Use the desktop app" below.
 
-There is no client app or installer yet: the desktop client is milestone M3.
+Installers come with the first beta (`0.1.0-beta.1`, due 2026-12-31; see ROADMAP.md). Until then, build from source.
 
 ## Quick start
 
@@ -96,8 +98,23 @@ crewcraft-server add-member /srv/crewcraft <room> admin@example.org person@examp
 
 `--name` is the DNS name or IP address clients connect to; the server certificate is signed for it. `--listen`
 defaults to `127.0.0.1:7443`. Each invitation is shown as a
-`crewcraft://enroll?server=<name:port>&code=<code>&root_sha256=<hex>` link and as its parts. Hand the person
-`trust-root.der` with it. `crewcraft-server --help` lists every command, including the loopback-only `lab` ones.
+`crewcraft://enroll?server=<name:port>&code=<code>&root_sha256=<hex>` link and as its parts. Send the person the
+link over a channel you trust: it is their invitation. `crewcraft-server --help` lists every command, including the
+loopback-only `lab` ones.
+
+## Use the desktop app
+
+Run `crewcraft` (no arguments) to open the window.
+
+1. **Join:** paste the invitation link and choose a password. The app fetches the server's root certificate and
+   accepts it only if it matches the fingerprint in the link, so a link copied from a trusted message is all it needs.
+2. **Authenticator:** add the entry the app shows to any authenticator app, then type its current code.
+3. **Sign in** with your email, password and a fresh code. Every sign-in asks for a code.
+
+The enrolled device is kept in your user data folder (`%APPDATA%\CrewCraft` on Windows,
+`~/Library/Application Support/CrewCraft` on macOS, `$XDG_DATA_HOME/crewcraft` or `~/.local/share/crewcraft` on
+Linux), so the next start goes straight to sign-in. On Unix the folder and file are owner-only; protecting the key with
+the system's key store is planned (docs/SECURITY-DESIGN.md).
 
 ## Architecture
 
@@ -133,8 +150,10 @@ a parity sweep and 1.0.
 
 ## Downloads
 
-None yet. Desktop releases will be signed and published on this repository's Releases page with a `SHA256SUMS.txt`,
-starting at milestone M3.
+None yet. The first beta, `0.1.0-beta.1` (due 2026-12-31), will be published on this repository's Releases page: the
+desktop app for Windows (MSI), Linux (AppImage and deb) and macOS (DMG), and the server for each, with a
+`SHA256SUMS.txt`. The beta builds are not code-signed: Windows warns before running them, and macOS needs the app
+opened from the context menu the first time. `docs/ACCEPTANCE.md` lists what each release must pass first.
 
 ## Secrets & access
 
