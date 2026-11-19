@@ -10,5 +10,4 @@ fonts.
 
 | Asset | Author | Source | License | Notes |
 |---|---|---|---|---|
-
-There are no assets yet. The app icon will be the first row.
+| `assets/icon/crewcraft.svg`, `assets/icon/crewcraft.png` | CrewCraft contributors | Original work, drawn for this repository | MIT OR Apache-2.0 | The app icon: a speech bubble holding three people on a coral tile. The PNG is the SVG rendered at 512 px with `resvg`; packages render their other sizes from the SVG |
