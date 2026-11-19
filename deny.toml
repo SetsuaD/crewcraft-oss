@@ -23,6 +23,13 @@ confidence-threshold = 0.9
 
 [advisories]
 yanked = "deny"
+# Unmaintained notices only (no vulnerability): zbus 5's helper crates, merged into zbus 6. They reach the tree through
+# the window toolkit (winit and accesskit on Linux); drop these once that stack moves to zbus 6. Added 2026-11-19.
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "unmaintained helper of zbus 5, pulled in by the window toolkit; no vulnerability" },
+    { id = "RUSTSEC-2026-0371", reason = "unmaintained helper of zbus 5, pulled in by the window toolkit; no vulnerability" },
+    { id = "RUSTSEC-2026-0372", reason = "unmaintained helper of zbus 5, pulled in by the window toolkit; no vulnerability" },
+]
 
 [bans]
 multiple-versions = "warn"

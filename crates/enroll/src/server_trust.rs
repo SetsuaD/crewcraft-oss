@@ -14,6 +14,11 @@ impl RootFingerprint {
         Self(Sha256::digest(root_der).into())
     }
 
+    /// A fingerprint the caller already holds as bytes (for example the server's own record of its root).
+    pub const fn from_bytes(sha256: [u8; 32]) -> Self {
+        Self(sha256)
+    }
+
     /// Parse 64 ASCII hexadecimal characters with either case and no separators.
     pub fn parse(text: &str) -> Option<Self> {
         if text.len() != 64 {

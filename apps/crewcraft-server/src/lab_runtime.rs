@@ -1,5 +1,6 @@
 //! Wire installed state to the server: the lab's loopback listener with a `localhost` certificate (task T227), or a
-//! listener on any address with a certificate for the configured server name (task T230).
+//! listener on any address with a certificate for the configured server name (task T230). Either way the server
+//! presents the chain leaf, issuing authority, root, so a client can fetch the root it pins by fingerprint (T232).
 
 use std::fmt;
 use std::io;
@@ -56,8 +57,11 @@ impl LabRuntime {
     fn bind_as(installation: LabInstallation, options: LabOptions, name: &str, bind: Bind, now_ms: Clock) -> io::Result<Self> {
         let LabInstallation { ownership, issuer, accounts, rooms } = installation;
         let (root, issuer) = issuer.into_parts();
-        let ServerIdentity { chain, key_pkcs8 } =
+        let ServerIdentity { mut chain, key_pkcs8 } =
             issuer.server_certificate(name, now_ms()).map_err(|_| io::Error::other("could not sign the server certificate"))?;
+        // The chain ends with the root, so a client holding only the invitation's root fingerprint can fetch the root
+        // it pins (task T232). The root is public; a client still accepts it only by that fingerprint.
+        chain.push(root.clone());
         let mut roots = RootCertStore::empty();
         roots.add(CertificateDer::from(root)).map_err(io::Error::other)?;
         let identity = (chain.into_iter().map(CertificateDer::from).collect(), PrivatePkcs8KeyDer::from(key_pkcs8).into());

@@ -1,8 +1,8 @@
 //! A network server's installation: `first-run` creates it and the other server commands open it. Task T231.
 //!
 //! Owns: the recorded settings (`server.conf`: the server name and the listen address), the public root next to
-//! them (`trust-root.der`, which also pins the state when it is opened again), the serving options, and the
-//! invitation link format.
+//! them (`trust-root.der`, which also pins the state when it is opened again) and the serving options. The
+//! invitation link format is `crewcraft_enroll::invitation`'s, shared with the client.
 //! Does not own: the state itself (`lab_installation`, `lab_admin`), the name rules (`server_name`), serving
 //! (`lab_runtime`).
 //!
@@ -16,7 +16,11 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::time::Duration;
 
+use crewcraft_enroll::EnrollmentCode;
+use crewcraft_enroll::invitation::{InvitationLink, LinkError, write_link};
+use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_proto::handshake::ServerSide;
+use crewcraft_proto::request::FEATURE_LIST_ROOMS;
 use sha2::{Digest, Sha256};
 
 use crate::lab_admin::{self, AdminError, LabRoot};
@@ -93,7 +97,7 @@ impl ServerConfig {
                 signed_in_frame: Duration::from_secs(120),
                 bootstrap: Duration::from_secs(120),
             },
-            protocol: ServerSide { min_version: 1, max_version: 1, features: 0, name: "CrewCraft".into() },
+            protocol: ServerSide { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS, name: "CrewCraft".into() },
         }
     }
 }
@@ -142,26 +146,22 @@ pub fn root_sha256(dir: &Path) -> io::Result<[u8; 32]> {
 }
 
 /// `crewcraft://enroll?server=<name:port>&code=<code>&root_sha256=<hex>`, with each value percent-encoded where a
-/// query needs it (an IPv6 server's brackets are written `%5B` and `%5D`).
+/// query needs it (an IPv6 server's brackets are written `%5B` and `%5D`). The text comes from the client's own
+/// format (`crewcraft_enroll::InvitationLink`, task T234), so the server and the client can never disagree on it.
 pub fn enrollment_link(server: &str, code: &str, root_sha256: &[u8; 32]) -> String {
-    format!("crewcraft://enroll?server={}&code={}&root_sha256={}", query_value(server), query_value(code), hex(root_sha256))
+    write_link(server, code, RootFingerprint::from_bytes(*root_sha256))
+}
+
+/// The invitation for an issued code, checked as a client will read it: `server` must be `name:port` and `code` an
+/// enrollment code.
+pub fn invitation(server: &str, code: &str, root_sha256: &[u8; 32]) -> Result<InvitationLink, LinkError> {
+    let code = EnrollmentCode::parse(code).map_err(|_| LinkError::Code)?;
+    InvitationLink::new(server, code, RootFingerprint::from_bytes(*root_sha256))
 }
 
 /// Lowercase hexadecimal, as `RootFingerprint` prints it.
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn query_value(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b':') {
-            out.push(char::from(byte));
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
 }
 
 fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {

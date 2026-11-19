@@ -1,14 +1,15 @@
 //! One signed-in client's connection on the server: bytes in, bytes out. Frames (`proto::frame`, T100) carry requests
 //! (`proto::request`, T124); each request is applied with `dispatch::handle` (T128) and answered with exactly one
-//! response frame; after a successful `Sync`, the room's events follow as push frames (`proto::push`, T131). Task T135.
+//! response frame; after a successful `Sync`, the room's events follow as push frames (`proto::push`, T131), and after
+//! a `ListRooms` the room-list frame follows (`proto::request::encode_rooms`, T233). Task T135.
 
 use crewcraft_proto::frame::{Decoder, FrameError, encode};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{MAX_MENTIONS, Push, encode_push};
-use crewcraft_proto::request::{Request, Response, decode_request, encode_response};
+use crewcraft_proto::request::{Request, Response, decode_request, encode_response, encode_rooms};
 
 use crate::cursor_log::Since;
-use crate::dispatch::{Backend, handle, handle_backend};
+use crate::dispatch::{Backend, handle, handle_backend, listed_rooms};
 use crate::durable::{DurableError, DurableServer};
 use crate::room_service::{Event, EventKind};
 use crate::server::Server;
@@ -75,7 +76,9 @@ impl Connection {
     ///    request's id), framed;
     /// 3. if it was a `Sync` and the response is `Ok`: append, framed, one push per event the room still holds after
     ///    the requested cursor (`RoomService::sync`), oldest first, using `to_push`. If the log no longer holds them
-    ///    (`Since::Gap`), no pushes follow: the client sees from the response's head that it must resync.
+    ///    (`Since::Gap`), no pushes follow: the client sees from the response's head that it must resync;
+    /// 4. if it was a `ListRooms` and the response is `Ok`: append, framed, the room-list frame for this user
+    ///    (`dispatch::listed_rooms`, which the response's cursor counts), with the request's id.
     ///
     /// Returns everything to send, in that order. On a fatal error, returns only the error: no bytes from this call
     /// are sent and the caller closes the connection.
@@ -128,6 +131,12 @@ impl Connection {
                     let framed_push = encode(&push_bytes).map_err(ConnError::Frame)?;
                     out.extend_from_slice(&framed_push);
                 }
+            }
+            if let Request::ListRooms = request
+                && matches!(response, Response::Ok { .. })
+            {
+                let rooms = encode_rooms(id, &listed_rooms(read(server), &self.user)).map_err(ConnError::Request)?;
+                out.extend_from_slice(&encode(&rooms).map_err(ConnError::Frame)?);
             }
         }
 

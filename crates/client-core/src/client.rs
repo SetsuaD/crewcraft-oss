@@ -5,7 +5,7 @@
 use crewcraft_proto::frame::{Decoder, FrameError};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{Push, decode_push};
-use crewcraft_proto::request::Request;
+use crewcraft_proto::request::{ROOMS_TAG, Request, decode_rooms};
 
 use crate::inbox::Inbox;
 use crate::notify::{Notify, Settings};
@@ -20,6 +20,8 @@ pub enum ClientEvent {
     Pushed { room: String, apply: Apply, notify: Notify },
     /// A push for a room not followed (nothing changed).
     Ignored { room: String },
+    /// The room list that follows the `Ok` answering `ListRooms` request `id`.
+    Rooms { id: u32, rooms: Vec<String> },
 }
 
 /// A fatal error: the connection must be closed.
@@ -28,7 +30,8 @@ pub enum ClientError {
     /// The frame layer refused the bytes.
     Frame(FrameError),
     /// A frame is neither a response nor a push, or does not decode: `Truncated` for an empty frame, `BadKind(byte)` when
-    /// its first byte is neither a response tag (128, 129) nor a push tag (64 to 67), otherwise the decoder's error.
+    /// its first byte is neither a response tag (128, 129), a push tag (64 to 67) nor the room-list tag (131), otherwise the
+    /// decoder's error.
     Malformed(CodecError),
 }
 
@@ -57,7 +60,8 @@ impl Client {
     /// Feed received bytes. They are buffered until they form whole frames. Each complete frame, in order, is told apart
     /// by its first byte: a response goes to `Requests::on_reply` (`Reply`; a `Reply::Malformed` is fatal, as
     /// `Malformed` with its error); a push is decoded (`decode_push`) and goes to `Inbox::on_push` at `now_ms` and
-    /// `local_minute` (`Pushed`, or `Ignored` for a room not followed). Returns the events in order. On a fatal error,
+    /// `local_minute` (`Pushed`, or `Ignored` for a room not followed); a room list is decoded (`decode_rooms`) and
+    /// reported as `Rooms`. Returns the events in order. On a fatal error,
     /// returns only the error.
     pub fn receive(&mut self, bytes: &[u8], now_ms: u64, local_minute: u16) -> Result<Vec<ClientEvent>, ClientError> {
         self.decoder.push(bytes);
@@ -94,6 +98,9 @@ impl Client {
                     Some((apply, notify)) => events.push(ClientEvent::Pushed { room, apply, notify }),
                     None => events.push(ClientEvent::Ignored { room }),
                 }
+            } else if first == ROOMS_TAG {
+                let (id, rooms) = decode_rooms(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Rooms { id, rooms });
             } else {
                 return Err(ClientError::Malformed(CodecError::BadKind(first)));
             }

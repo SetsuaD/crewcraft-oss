@@ -33,7 +33,10 @@ All new users are onboarded by an **emailed enrollment code**. The client enroll
    and SHA-256 fingerprint of its root certificate. The code itself is never stored, only a key derived from it
    (SECURITY-DESIGN.md "Dark enrollment").
 2. The person installs a client (D2, D4 or D5), opens the link or enters the server address, code and root fingerprint.
-   The administrator supplies the root certificate with the invitation or through the organization's trust setup.
+   The administrator supplies the root certificate with the invitation or through the organization's trust setup,
+   or the client fetches it: the server presents its root at the end of its certificate chain, and the client
+   accepts it only when its SHA-256 equals the invitation's fingerprint and the whole chain verifies against it for
+   the server's name (`crewcraft::server_endpoint::fetch_root`). The link format is `crewcraft_enroll::InvitationLink`.
 3. The client does all certificate work itself: it derives the **bootstrap key** from the code, connects with it
    (the server recognises it, see SECURITY-DESIGN.md "Dark enrollment"), generates the real **device key** inside the OS
    key store (never exportable), and sends a certificate signing request. The server verifies the request and
@@ -71,6 +74,11 @@ CrewCraft implements REQUIREMENTS.md sections 2.1 to 2.7 and 2.9 to 2.21 as writ
   external authorizer configured, CrewCraft's admin console stops managing roles and shows them read-only.
 - **Live updates** use a WebSocket per client with the **cursor log as the source of truth**: a reconnecting client asks
   "everything after cursor N" and is always made whole (REQUIREMENTS principle 2).
+- **A person's rooms.** After signing in, a client asks for the rooms the person is a member of (`ListRooms`, request
+  tag 8) and follows those. The server answers `Ok` with the count, then one room-list frame (tag 131) with at most
+  512 room names, as `Sync`'s events follow its answer. The server lists only the caller's own memberships. It is an addition to protocol version 1 announced by handshake feature bit 1
+  (`FEATURE_LIST_ROOMS`): a client sends it only to a server that agreed to the bit, so older servers keep working,
+  and the client then keeps the rooms it already follows. Wire details: `crates/proto/src/request.rs`.
 - **Server-side sessions and authorization state**, never in a cookie or token alone (principles 3 and 15).
 - **Every security-relevant write is read back** after commit before the request reports success (principle 4).
 - **One documented lock order** for membership changes, with tests that observe the lock (principle 5).

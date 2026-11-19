@@ -11,6 +11,8 @@ publish.workspace = true
 ed25519-dalek.workspace = true
 hkdf.workspace = true
 sha2.workspace = true
+# Wipes the enrollment code and the decoded text of an invitation link (docs/SECURITY-DESIGN.md section 1).
+zeroize.workspace = true
 
 [lints]
 workspace = true

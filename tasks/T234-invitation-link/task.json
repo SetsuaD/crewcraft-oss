@@ -1,0 +1,24 @@
+{
+  "id": "T234-invitation-link",
+  "title": "One invitation-link type shared by the server and the client",
+  "crate": "crewcraft-server",
+  "files": [
+    "crates/enroll/src/invitation.rs",
+    "crates/enroll/src/lib.rs",
+    "crates/enroll/src/server_trust.rs",
+    "crates/enroll/Cargo.toml",
+    "apps/crewcraft-server/src/server_install.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "Cargo.lock",
+    "ROADMAP.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t234_invitation_link.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t234_invitation_link",
+  "depends_on": [
+    "T005-enrollment-code",
+    "T151-enrollment-trust",
+    "T231-first-run"
+  ],
+  "spec": "crewcraft_enroll::invitation::InvitationLink is the one invitation-link type: crewcraft://enroll?server=<host:port>&code=<code>&root_sha256=<hex>. parse(&str) compares the scheme and path exactly, needs server, code and root_sha256 each exactly once and nothing else (no empty parameter, no fragment), allows only unreserved characters, ':' and percent escapes in values and decodes them once to UTF-8, reads the server as host:port (a lowercase DNS name, an IPv4 address or an IPv6 address in brackets; port 1 to 65535 with no sign or leading zero; unspecified, multicast and broadcast refused), the code with EnrollmentCode::parse and the fingerprint as 64 hex digits. Display writes the same form (values percent-encoded, brackets as %5B and %5D, the code in display form, the fingerprint in lowercase). Debug never prints the code; the decoded code text is wiped, and EnrollmentCode wipes its bytes on drop. The server's enrollment_link writes through the same writer, and invitation commands show a link built as InvitationLink, so a link the client would refuse is never shown. The test round-trips links, refuses every malformed variant with its reason, and parses links from the server's writer.",
+  "status": "done"
+}

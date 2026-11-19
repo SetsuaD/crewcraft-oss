@@ -1,0 +1,21 @@
+{
+  "id": "T232-root-fetch",
+  "title": "Fetch the server's root certificate from an invitation's fingerprint",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft/src/server_endpoint.rs",
+    "apps/crewcraft-server/src/lab_runtime.rs",
+    "docs/SPEC.md",
+    "docs/SECURITY-DESIGN.md",
+    "ROADMAP.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t232_root_fetch.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t232_root_fetch",
+  "depends_on": [
+    "T230-network-serve",
+    "T226-bootstrap-transport",
+    "T234-invitation-link"
+  ],
+  "spec": "An invitation carries the server, the code and the root's SHA-256, but a client pins the root's DER. The server presents the chain leaf, issuing authority, root on both the lab and the network paths. crewcraft::server_endpoint::fetch_root(address, server_name, RootFingerprint, timeout) opens TLS 1.3 with no client certificate and a verifier that accepts the chain only when its last certificate's SHA-256 is the pinned fingerprint and the whole chain verifies against that one root for server_name (webpki), with every certificate at most MAX_PRESENTED_CERT bytes and at most three after the leaf. It returns the root's DER only after the server's handshake signature verified and its handshake finished, and it never writes the client's last flight, so no application byte is sent and the server's refusal of a missing certificate costs nothing. A refused chain, a bad name, a wrong pin, a chain without the root or from another authority, and an oversized certificate are LabError::Trust; a malformed address is LabError::Address. ServerEndpoint::fetch combines fetch_root and ServerEndpoint::new, and ServerEndpoint::from_invitation does it for a parsed InvitationLink (T234). The test runs the real network server: the right pin returns the root, nothing reaches the enrollment handler, and the endpoint built from the root enrolls, as does one built from the link the server prints alone; a wrong pin, a wrong name, a chain without the root, a chain from another authority ending in the pinned root, an oversized certificate and a leaf alone are refused.",
+  "status": "done"
+}
