@@ -9,9 +9,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crewcraft_enroll::InvitationLink;
 
-fn scratch() -> PathBuf {
+/// A private folder per test. The tag keeps parallel tests apart: clocks on some systems (macOS) tick in
+/// microseconds, so two tests starting together could otherwise share one folder and remove each other's files.
+fn scratch(tag: &str) -> PathBuf {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("crewcraft-t237-{}-{now}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("crewcraft-t237-{tag}-{}-{now}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -33,7 +35,7 @@ fn link_in(file: &Path) -> InvitationLink {
 
 #[test]
 fn first_run_and_invite_write_the_invitation_to_a_new_private_file() {
-    let dir = scratch();
+    let dir = scratch("files");
     let data = dir.join("server");
     let admin_file = dir.join("admin-invitation.txt");
 
@@ -81,7 +83,7 @@ fn first_run_and_invite_write_the_invitation_to_a_new_private_file() {
 
 #[test]
 fn a_bad_invitation_file_is_refused_before_the_server_is_created() {
-    let dir = scratch();
+    let dir = scratch("refused");
     let taken = dir.join("taken.txt");
     fs::write(&taken, "something").unwrap();
     for (tag, file) in [("exists", taken.clone()), ("no-folder", dir.join("missing").join("invite.txt"))] {
