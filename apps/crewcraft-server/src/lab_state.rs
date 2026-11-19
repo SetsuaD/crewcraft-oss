@@ -3,8 +3,14 @@
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 const LOCK_FILE: &str = "state.lock";
+/// How long `open` waits for a lock that looks held before refusing. A lock can look held for a moment after its
+/// owner closed it: a child process this program is starting shares the open lock file until it runs its own program.
+const LOCK_WAIT: Duration = Duration::from_millis(500);
+const LOCK_RETRY: Duration = Duration::from_millis(20);
 
 /// The lab server and offline administrative commands hold this for their entire use of the state directory.
 pub struct LabState {
@@ -25,7 +31,8 @@ impl LabState {
         Self::open(path)
     }
 
-    /// Open an existing private directory and obtain exclusive ownership before opening its journals.
+    /// Open an existing private directory and obtain exclusive ownership before opening its journals. A lock held by
+    /// another owner is refused (`WouldBlock`) after waiting up to `LOCK_WAIT`.
     pub fn open(path: &Path) -> io::Result<Self> {
         let metadata = fs::symlink_metadata(path)?;
         if !metadata.is_dir() {
@@ -57,10 +64,15 @@ impl LabState {
             }
             Err(error) => return Err(error),
         };
-        lock.try_lock().map_err(|error| match error {
-            TryLockError::WouldBlock => io::Error::new(io::ErrorKind::WouldBlock, "lab state is in use"),
-            TryLockError::Error(error) => error,
-        })?;
+        let deadline = Instant::now() + LOCK_WAIT;
+        loop {
+            match lock.try_lock() {
+                Ok(()) => break,
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => thread::sleep(LOCK_RETRY),
+                Err(TryLockError::WouldBlock) => return Err(io::Error::new(io::ErrorKind::WouldBlock, "lab state is in use")),
+                Err(TryLockError::Error(error)) => return Err(error),
+            }
+        }
         Ok(Self { path: path.to_path_buf(), _lock: lock })
     }
 
