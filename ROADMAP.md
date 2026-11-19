@@ -22,23 +22,30 @@ Rust ([docs/SPEC.md](docs/SPEC.md) section 7). The target is feature parity with
 | M12 | **Parity sweep**: whiteboard, spreadsheets, live cards, breakout rooms, webinars, captions and the other rows of PARITY.md | every PARITY.md row is `done` or a recorded non-goal |
 | M13 | **1.0 release**: an external security review and signed installers for every platform | review findings closed and 1.0 tagged |
 
-## First beta
+## First beta: `0.1.0-beta.1`, due 2026-12-31
 
-The first public beta (`0.1.0-beta.1`) is M2 plus a thin slice of M3. A person installs the server, runs its first-run
-setup, enrolls two desktop clients from codes, signs in with TOTP on each, and the two exchange messages in a room.
-Teams, files, presence, search and themes come in later betas.
+M2 landed on 2026-11-19 (#45). The first public beta is M2 plus a thin slice of M3: a person installs the server, runs its
+first-run setup, enrolls two desktop clients from codes, signs in with TOTP on each, and the two exchange messages in a
+room. Teams, files, presence, search and themes come in later betas.
 
-DONE_WHEN: a release carries a Windows MSI, a Linux AppImage and deb, a macOS DMG, the Linux server and `SHA256SUMS.txt`,
-and that two-client flow passes on a clean machine per platform.
+DONE_WHEN: a release `v0.1.0-beta.1` carries the desktop client for Windows (MSI), Linux (AppImage and deb) and macOS
+(DMG), the server for Linux, Windows and macOS, and `SHA256SUMS.txt`, and the two-client flow passes on a clean machine
+per platform.
 
-The desktop client is split so most of it is tested without a window:
-
-| Task | Piece | Crate |
+| Due | Piece | Tasks |
 |---|---|---|
-| T300 | Room list: followed rooms, the open room, unread badges | ui-model |
-| T301 | Composer: one draft per room, trimming and length limit | ui-model |
-| T302 | Feed rows: messages and pending sends, grouped by author | ui-model |
+| 2026-11-19 | M2: dark TLS server, device certificates, TOTP activation, wire enrollment, loopback lab (#45) | done |
+| 2026-11-21 | Window model: room list, composer, feed rows | T300, T301, T302 |
+| 2026-11-28 | Client: connection worker that runs the chat session for the window; enrolled device saved between runs | T303, T304 |
+| 2026-11-28 | Server: serve on a chosen address and server name, not only loopback; `first-run` creates the installation and prints the first invitation | T230, T231 |
+| 2026-12-12 | Desktop window (egui): enroll, sign in, room list, feed and composer; bundled OFL font; original app icon | T305, T306 |
+| 2026-12-19 | Packages: MSI, AppImage, deb, DMG, server archives per platform, `SHA256SUMS.txt` | T307 |
+| 2026-12-26 | Acceptance: the two-client flow on a clean machine per platform; a client without a certificate gets zero bytes | T308 |
+| 2026-12-31 | Release `v0.1.0-beta.1` | |
 
-Still to write: the egui views over these three, and the worker thread that runs the chat session for the window.
-Fonts are decided: `OFL-1.1` is allowed for fonts only (docs/CLEAN-ROOM.md rule 3). The views turn off egui's
-`default_fonts` feature, which also needs `Ubuntu-font-1.0`, and bundle one OFL font with its license text.
+Fonts are decided: `OFL-1.1` is allowed for fonts only (docs/CLEAN-ROOM.md rule 3). The window turns off egui's
+`default_fonts` feature, which also needs `Ubuntu-font-1.0`, and bundles one OFL font with its license text.
+
+The beta builds are unsigned. Windows warns before running them, and macOS needs the app opened from the context menu.
+
+After the beta, the phone apps (M6) are due 2027-02-28 for Android and 2027-03-31 for iOS.
