@@ -16,5 +16,5 @@
     "T214-device-session"
   ],
   "spec": "Create the W2 TLS policy from the same admission authority used to recheck the verified peer before application I/O. Bind only loopback. Device peers reach device_session::serve through a factory keyed by the exact verified leaf; a factory or recheck failure closes the connection. Bootstrap peers reach only the bootstrap adapter with their verified key, using a stream with a fixed whole-connection I/O deadline. Enforce separate deadlines for TLS, initial credential verification, and each signed-in frame. No fallback, implicit authentication store, service command, or ambient configuration.",
-  "status": "open"
+  "status": "done"
 }

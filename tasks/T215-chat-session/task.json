@@ -2,12 +2,18 @@
   "id": "T215-chat-session",
   "title": "Drive signed-in chat from the client",
   "crate": "crewcraft",
-  "files": ["apps/crewcraft/src/chat_session.rs"],
+  "files": [
+    "apps/crewcraft/src/chat_session.rs"
+  ],
   "test_path": "apps/crewcraft/tests/t215_chat_session.rs",
   "test_cmd": "cargo test -p crewcraft --test t215_chat_session",
-  "depends_on": ["T139-client-session", "T152-signin-codec", "T213-stream-frames"],
+  "depends_on": [
+    "T139-client-session",
+    "T152-signin-codec",
+    "T213-stream-frames"
+  ],
   "spec": "Drive chat over an already verified enrolled device stream. Wait for accepted sign-in before sending Hello, discard the acceptance token, and require a valid Welcome before requests. Reset an absolute frame cutoff before each read or write without exceeding the operation deadline. Return a post cursor only for its matched server acknowledgement. Follow the requested room and replay from its current cursor until the timeline reaches the acknowledged head. Report gaps or an incomplete batch with the head and applied cursor. A fatal I/O or protocol error makes the session unusable while retaining its local view. Use the existing protocol and client-core APIs.",
-  "status": "open",
+  "status": "done",
   "context": [
     "crates/proto/src/signin.rs",
     "crates/proto/src/frame.rs",
