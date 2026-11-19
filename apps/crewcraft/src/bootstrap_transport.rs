@@ -6,16 +6,16 @@ use std::time::{Duration, Instant};
 
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_enroll::{EnrollmentCode, bootstrap_public_key};
-use crewcraft_tls::DeadlineSocket;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyUsagePurpose, PKCS_ED25519, PublicKeyData};
+use rustls::SignatureScheme;
 use rustls::client::ResolvesClientCert;
 use rustls::crypto::ring::sign::any_eddsa_type;
 use rustls::pki_types::{PrivatePkcs8KeyDer, UnixTime};
 use rustls::sign::{CertifiedKey, Signer, SigningKey, SingleCertAndKey};
-use rustls::{ClientConnection, SignatureScheme, StreamOwned};
 use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
+use crate::connect::Transport;
 use crate::enroll_client::{EnrollmentError, EnrollmentRequest, FirstTotpCode, TotpSetup, VerifiedDeviceChain, enroll};
 use crate::lab_client::{LabEndpoint, LabError};
 
@@ -50,15 +50,26 @@ impl BootstrapEndpoint {
     /// Connect with only the invitation's temporary identity. The whole enrollment exchange,
     /// including authenticator setup, shares one absolute deadline after the TLS handshake.
     pub fn open(&self, code: &EnrollmentCode, confirmation_window: Duration) -> Result<BootstrapConnection<'_>, BootstrapTransportError> {
-        if confirmation_window.is_zero() || confirmation_window > MAX_CONFIRMATION_WINDOW {
-            return Err(BootstrapTransportError::ConfirmationWindow);
-        }
-        let device = bootstrap_identity(code)?;
-        let mut stream = self.endpoint.connect(device).map_err(BootstrapTransportError::Connection)?;
-        let deadline = Instant::now().checked_add(confirmation_window).ok_or(BootstrapTransportError::ConfirmationWindow)?;
-        stream.get_mut().set_deadline(deadline);
-        Ok(BootstrapConnection { stream: BootstrapStream { stream, deadline }, root_der: &self.root_der })
+        open_bootstrap(|device| self.endpoint.connect(device), &self.root_der, code, confirmation_window)
     }
+}
+
+/// Connect through `connect` with only the invitation's temporary identity and start the enrollment deadline.
+/// `root_der` must be the root `connect` already pins.
+pub(crate) fn open_bootstrap<'a>(
+    connect: impl FnOnce(Arc<dyn ResolvesClientCert>) -> Result<Transport, LabError>,
+    root_der: &'a [u8],
+    code: &EnrollmentCode,
+    confirmation_window: Duration,
+) -> Result<BootstrapConnection<'a>, BootstrapTransportError> {
+    if confirmation_window.is_zero() || confirmation_window > MAX_CONFIRMATION_WINDOW {
+        return Err(BootstrapTransportError::ConfirmationWindow);
+    }
+    let device = bootstrap_identity(code)?;
+    let mut stream = connect(device).map_err(BootstrapTransportError::Connection)?;
+    let deadline = Instant::now().checked_add(confirmation_window).ok_or(BootstrapTransportError::ConfirmationWindow)?;
+    stream.get_mut().set_deadline(deadline);
+    Ok(BootstrapConnection { stream: BootstrapStream { stream, deadline }, root_der })
 }
 
 /// One verified bootstrap connection. Only the enrollment exchange may use it.
@@ -86,7 +97,7 @@ impl BootstrapConnection<'_> {
 }
 
 struct BootstrapStream {
-    stream: StreamOwned<ClientConnection, DeadlineSocket>,
+    stream: Transport,
     deadline: Instant,
 }
 

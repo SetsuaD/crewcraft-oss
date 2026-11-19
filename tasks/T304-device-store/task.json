@@ -1,0 +1,26 @@
+{
+  "id": "T304-device-store",
+  "title": "Save an enrolled device between runs and sign in again from the saved record",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/src/device.rs",
+    "apps/crewcraft/src/device_store.rs",
+    "apps/crewcraft/src/enrollment.rs",
+    "apps/crewcraft/src/server_endpoint.rs",
+    "apps/crewcraft/src/bootstrap_transport.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft/Cargo.toml",
+    "Cargo.lock",
+    "docs/SECURITY-DESIGN.md"
+  ],
+  "test_path": "apps/crewcraft/tests/t304_device_store.rs",
+  "test_cmd": "cargo test -p crewcraft --test t304_device_store",
+  "depends_on": [
+    "T221-enroll-client",
+    "T226-bootstrap-transport",
+    "T229-lab-device"
+  ],
+  "spec": "Enroll a fresh P-256 device key at a server endpoint that accepts any address, a server name and a pinned root, and return a record with everything needed to reconnect: the address, the server name, the root certificate and its SHA-256, the device certificate and its issuer, and the PKCS#8 device key. A device store keeps one file per profile (1 to 64 of a-z, 0-9, - and _) in a directory the caller chooses. Saving writes a new file, syncs it and renames it over the old one. On Unix the directory is made 0700 and the file is created 0600, and loading refuses a file or directory with any group or other permission bit, and anything that is not a plain file. Every read is bounded (MAX_RECORD); the record carries a SHA-256 trailer and is checked whole on load: the root must match its fingerprint and the key must match the certificate, otherwise Corrupt. Debug shows only the endpoint and the key bytes are wiped on drop. A record rebuilds a TLS client identity, so a reloaded device signs in without enrolling again. An enrollment helper runs the exchange on its own thread: it sends the authenticator setup link (wrapped so Debug prints nothing), waits for the first code from the window, and returns the record. The test enrolls against a scripted loopback peer behind the real admission verifier, saves, reloads into a fresh object and signs in and posts; replaces a record atomically; refuses loose modes and links on Unix; refuses flipped, truncated, mismatched and oversized records; and enrolls through the helper thread.",
+  "status": "done"
+}
