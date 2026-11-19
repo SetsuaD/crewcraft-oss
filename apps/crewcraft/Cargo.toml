@@ -10,8 +10,8 @@ publish.workspace = true
 [dependencies]
 crewcraft-client-core.workspace = true
 crewcraft-desktop-ui.workspace = true
-# The window. default_fonts stays off (docs/CLEAN-ROOM.md rule 3): crewcraft-desktop-ui installs the bundled Inter.
-eframe = { version = "0.37", default-features = false, features = ["accesskit", "glow", "wayland", "x11"] }
+# The window: wgpu first, glow (OpenGL) as the fallback. default_fonts stays off (docs/CLEAN-ROOM.md rule 3): crewcraft-desktop-ui installs the bundled Inter.
+eframe = { version = "0.37", default-features = false, features = ["accesskit", "glow", "wgpu", "wayland", "x11"] }
 crewcraft-enroll.workspace = true
 crewcraft-proto.workspace = true
 crewcraft-tls.workspace = true

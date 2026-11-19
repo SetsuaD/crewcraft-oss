@@ -90,15 +90,24 @@ fn icon() -> Option<eframe::egui::IconData> {
 }
 
 fn window() -> io::Result<()> {
+    // wgpu first: on Windows it uses Direct3D 12, which falls back to the WARP software renderer when there is no GPU
+    // driver (VMs, remote desktops), where only OpenGL 1.1 exists. OpenGL (glow) is the fallback if wgpu cannot start.
+    match open_window(eframe::Renderer::Wgpu) {
+        Ok(()) => Ok(()),
+        Err(first) => open_window(eframe::Renderer::Glow).map_err(|second| io::Error::other(format!("{first}; then {second}"))),
+    }
+}
+
+fn open_window(renderer: eframe::Renderer) -> io::Result<()> {
     let mut viewport =
         eframe::egui::ViewportBuilder::default().with_title("CrewCraft").with_inner_size([960.0, 640.0]).with_min_inner_size([520.0, 360.0]);
     if let Some(icon) = icon() {
         viewport = viewport.with_icon(icon);
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let options = eframe::NativeOptions { viewport, renderer, ..Default::default() };
     let join = crewcraft::app::join_from_link(crewcraft::app::JOIN_TIMEOUT);
     eframe::run_native("CrewCraft", options, Box::new(move |creation| Ok(Box::new(crewcraft::app::DesktopApp::new(&creation.egui_ctx, join)))))
-        .map_err(|error| io::Error::other(error.to_string()))
+        .map_err(|error| io::Error::other(format!("{renderer:?}: {error}")))
 }
 
 fn version() {
