@@ -3,7 +3,7 @@
 //!
 //! Owns: the app's lifecycle (enroll, authenticator setup, sign in, chat, sign out, connection lost), where the
 //! enrolled device is saved, and how worker and enrollment events become window updates. Called by: `main.rs`, which
-//! runs `DesktopApp` in an eframe window. Calls: `enrollment`, `device_store`, `worker`, and a `Join` that turns an
+//! runs `DesktopApp` in an eframe window, and `crewcraft-android`, which runs it on Android (T401). Calls: `enrollment`, `device_store`, `worker`, and a `Join` that turns an
 //! invitation link into a server endpoint and an enrollment code (`join_from_link`; tests pass their own). Task T311
 //! moved joining off the window's thread. Task T313 seals the saved device with the key store (`key_vault`; tests
 //! pass an in-memory one), unless the person has opted out with `PLAIN_RECORD_SETTING`.
@@ -133,6 +133,7 @@ pub fn device_name() -> String {
         "windows" => "Windows",
         "macos" => "macOS",
         "linux" => "Linux",
+        "android" => return "CrewCraft on Android".to_owned(),
         other => other,
     };
     format!("CrewCraft desktop on {os}")
@@ -409,6 +410,12 @@ pub fn store_problem(error: StoreError) -> String {
 
 /// What to tell the person when the data folder `dir` has no key store to seal the enrollment with.
 pub fn no_key_store(dir: &Path) -> String {
+    if cfg!(target_os = "android") {
+        // The Android Keystore comes with task T403; until then the phone app can show its screens but not enroll.
+        return "This version of CrewCraft cannot use this phone's key store yet, so it cannot keep an enrollment and will not \
+                save one."
+            .to_owned();
+    }
     format!(
         "This computer has no key store CrewCraft can use (on Linux, a Secret Service such as GNOME Keyring or KWallet), so it \
          cannot keep its enrollment sealed and will not save it. Start or unlock the key store, then restart CrewCraft. To keep \
@@ -425,11 +432,17 @@ pub struct DesktopApp {
 }
 
 impl DesktopApp {
+    /// The app with its enrollment in the platform's data folder (`data_dir`).
     pub fn new(context: &eframe::egui::Context, join: Join) -> Self {
+        Self::with_data_dir(context, join, data_dir())
+    }
+
+    /// The app with its enrollment in `dir`: on Android, a folder in the app's private storage (T401).
+    pub fn with_data_dir(context: &eframe::egui::Context, join: Join, dir: Option<PathBuf>) -> Self {
         context.set_fonts(crewcraft_desktop_ui::fonts());
         let repaint = context.clone();
         let wake: Wake = Arc::new(move || repaint.request_repaint());
-        let (controller, updates) = Controller::start(data_dir(), join, wake, WorkerConfig::default());
+        let (controller, updates) = Controller::start(dir, join, wake, WorkerConfig::default());
         let mut window = Window::new();
         for update in updates {
             window.apply(update);

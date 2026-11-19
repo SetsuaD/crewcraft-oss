@@ -1,0 +1,27 @@
+{
+  "id": "T401-android-window",
+  "title": "Android window: the desktop window under NativeActivity, with the bundled font and the soft keyboard for text fields",
+  "crate": "crewcraft-android",
+  "files": [
+    "apps/crewcraft-android/Cargo.toml",
+    "apps/crewcraft-android/src/lib.rs",
+    "apps/crewcraft-android/src/shell.rs",
+    "apps/crewcraft/Cargo.toml",
+    "apps/crewcraft/src/app.rs",
+    "Cargo.lock",
+    "docs/MOBILE.md"
+  ],
+  "test_path": "apps/crewcraft-android/tests/t401_android_window.rs",
+  "test_cmd": "cargo test -p crewcraft-android --test t401_android_window",
+  "depends_on": [
+    "T400-android-apk",
+    "T309-desktop-app"
+  ],
+  "spec": "A crate apps/crewcraft-android (cdylib and rlib, no Java source) whose Android-only entry point android_main (the one #[unsafe(no_mangle)] item, the crate's only exception to the workspace's unsafe_code forbid, which it lowers to deny) starts logcat logging (tag CrewCraft) with version_line() = `crewcraft <version> (protocol <major>.<minor>) on Android`, and runs eframe (glow, android-native-activity; no accesskit, which needs GameActivity on Android) with crewcraft::app::DesktopApp::with_data_dir, which installs crewcraft_desktop_ui::fonts() and opens the same Window as the desktop, with its data in data_dir(internal data path) = <internal>/crewcraft. Around it, after each frame, the soft keyboard is shown explicitly (show_soft_input) when keyboard_wanted(platform output) (egui asks for IME, i.e. a text field has the focus) and hidden when not, only on a change (keyboard_change). Off Android the crate holds only the pure functions. apps/crewcraft takes eframe with accesskit, wgpu, wayland and x11 on every target but Android, and glow with android-native-activity on Android; device_name() is `CrewCraft on Android` there, and the no-key-store message says the phone's key store is not used yet (T403).",
+  "status": "done",
+  "context": [
+    "docs/MOBILE.md",
+    "apps/crewcraft/src/main.rs",
+    "crates/desktop-ui/src/lib.rs"
+  ]
+}
