@@ -23,6 +23,15 @@ confidence-threshold = 0.9
 
 [advisories]
 yanked = "deny"
+# Accepted "unmaintained" notices (not vulnerabilities), each with the reason and when to drop it:
+ignore = [
+  # zvariant, zvariant_derive and zbus_names were folded into zbus 6 as modules, so the standalone crates are
+  # marked unmaintained. They reach us only through accesskit_unix (the desktop window's screen-reader support on
+  # Linux, via eframe and egui-winit). Drop these lines when accesskit moves to zbus 6.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; via accesskit_unix (screen reader on Linux)" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; via accesskit_unix (screen reader on Linux)" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; via accesskit_unix (screen reader on Linux)" },
+]
 
 [bans]
 multiple-versions = "warn"
