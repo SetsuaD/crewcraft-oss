@@ -15,6 +15,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crewcraft::app::{Controller, Join, Wake};
+use crewcraft::key_vault::MemoryVault;
 use crewcraft::server_endpoint::ServerEndpoint;
 use crewcraft::worker::WorkerConfig;
 use crewcraft_bootstrap::Environment;
@@ -130,11 +131,11 @@ fn shows_text(update: &Update, room: &str, text: &str) -> bool {
 }
 
 /// Enroll one person through the whole app stack and return their controller at the sign-in screen.
-fn enroll(person: &Person, data: PathBuf, join: Join, clock: &AtomicU64) -> Controller {
+fn enroll(person: &Person, data: PathBuf, vault: &MemoryVault, join: Join, clock: &AtomicU64) -> Controller {
     let wake: Wake = Arc::new(|| {});
     let quick =
         WorkerConfig { poll_interval: Duration::from_millis(50), first_retry: Duration::from_millis(50), max_retry: Duration::from_millis(400) };
-    let (mut controller, updates) = Controller::start(Some(data), join, wake, quick);
+    let (mut controller, updates) = Controller::start_with_vault(Some(data), vault.opener(), join, wake, quick);
     assert_eq!(updates, vec![Update::NeedsEnrollment]);
     let link = Zeroizing::new("crewcraft://enroll (resolved by the test's join)".to_owned());
     assert!(controller.act(Action::Enroll { link, password: Zeroizing::new(PASSWORD.to_owned()) }).is_empty());
@@ -202,8 +203,10 @@ fn two_people_enroll_sign_in_and_chat_through_the_desktop_app_stack() {
             Ok((endpoint, code.clone()))
         })
     };
-    let mut alice_app = enroll(&alice, scratch.0.join("alice"), join_for(&alice), &clock);
-    let mut bob_app = enroll(&bob, scratch.0.join("bob"), join_for(&bob), &clock);
+    // Each app's key store outlives the app, as the operating system's does (T313).
+    let (alice_vault, bob_vault) = (MemoryVault::new(), MemoryVault::new());
+    let mut alice_app = enroll(&alice, scratch.0.join("alice"), &alice_vault, join_for(&alice), &clock);
+    let mut bob_app = enroll(&bob, scratch.0.join("bob"), &bob_vault, join_for(&bob), &clock);
 
     // A later authenticator step, so the sign-in codes are fresh.
     clock.fetch_add(STEP_MS, Ordering::SeqCst);
@@ -222,7 +225,8 @@ fn two_people_enroll_sign_in_and_chat_through_the_desktop_app_stack() {
     assert_eq!(alice_app.act(Action::SignOut), vec![Update::SignedOut]);
     drop(alice_app);
     let wake: Wake = Arc::new(|| {});
-    let (_again, updates) = Controller::start(Some(scratch.0.join("alice")), join_for(&alice), wake, WorkerConfig::default());
+    let (_again, updates) =
+        Controller::start_with_vault(Some(scratch.0.join("alice")), alice_vault.opener(), join_for(&alice), wake, WorkerConfig::default());
     // ... and fills in the email Alice last signed in with (T312).
     assert_eq!(updates, vec![Update::Enrolled { server: running.address.to_string() }, Update::LastEmail(ALICE.to_owned())]);
     drop(bob_app);
