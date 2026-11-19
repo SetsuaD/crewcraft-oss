@@ -11,6 +11,10 @@
 //!
 //! Live updates: the server answers requests and does not push between them, so the worker polls each followed room
 //! every `WorkerConfig::poll_interval`.
+//!
+//! The person's rooms: right after a sign-in the worker asks the server which rooms the person is a member of
+//! (`ListRooms`, task T233) and follows exactly those, so `Event::SignedIn` lists them and each gets an unread count.
+//! A server too old to list rooms is still used: the worker then keeps the rooms it already followed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -57,8 +61,9 @@ pub enum Event {
     /// Mutual TLS with the server succeeded: during a sign-in, or when the server answers again after a lost
     /// connection (then sign in again with a fresh code).
     Connected,
-    /// The sign-in was accepted for `email`. `rooms` are the rooms this worker already follows (opened or posted to
-    /// earlier), sorted; they are synced and polled from now on.
+    /// The sign-in was accepted for `email`. `rooms` are the rooms the person is a member of, as the server listed
+    /// them (at most `MAX_FOLLOWED`), sorted; they are followed, synced and polled from now on. From a server too old
+    /// to list rooms, `rooms` are the rooms this worker already follows (opened or posted to earlier).
     SignedIn { email: String, rooms: Vec<String> },
     /// The open room as it is drawn now. Sent when the room is opened and whenever it changes.
     Room { room: String, shown: Vec<Shown> },
@@ -148,7 +153,12 @@ fn problem(error: LabError) -> Problem {
             ChatError::SignInRefused => Problem::SignInRefused,
             ChatError::Request(_) => Problem::InvalidRequest,
             ChatError::Rejected(code) => Problem::Refused(code),
-            ChatError::SignInProtocol | ChatError::HandshakeRefused | ChatError::Session(_) | ChatError::HistoryGap { .. } => Problem::Protocol,
+            ChatError::SignInProtocol
+            | ChatError::HandshakeRefused
+            | ChatError::Session(_)
+            | ChatError::HistoryGap { .. }
+            | ChatError::Unsupported
+            | ChatError::UnexpectedResponse => Problem::Protocol,
         },
     }
 }
@@ -363,9 +373,24 @@ impl Run {
         };
         self.emit(Event::Connected);
         match self.endpoint.sign_in_over(connection.transport, credentials) {
-            Ok(session) => {
+            Ok(mut session) => {
+                let listed = match session.list_rooms() {
+                    Ok(listed) => listed,
+                    Err(error) => {
+                        let problem = problem(error);
+                        if problem.ends_session() {
+                            return self.fail_connection(problem, false);
+                        }
+                        // A refusal leaves the session usable; carry on with the rooms already followed.
+                        self.emit(Event::Failed(problem));
+                        None
+                    }
+                };
                 self.session = Some(session);
                 self.me = credentials.email().to_owned();
+                if let Some(rooms) = listed {
+                    self.adopt(rooms);
+                }
                 let rooms = self.followed.iter().cloned().collect();
                 self.emit(Event::SignedIn { email: self.me.clone(), rooms });
                 self.poll(true);
@@ -411,6 +436,19 @@ impl Run {
             }
             Err(problem) => self.emit(Event::Failed(problem)),
         }
+    }
+
+    /// Follow exactly the rooms the server listed for the person (valid names, at most `MAX_FOLLOWED`), and forget
+    /// what was kept for any other room.
+    fn adopt(&mut self, rooms: Vec<String>) {
+        self.followed = rooms.into_iter().filter(|room| valid_room(room)).take(MAX_FOLLOWED).collect();
+        if self.open.as_ref().is_some_and(|open| !self.followed.contains(open)) {
+            self.open = None;
+        }
+        let followed = &self.followed;
+        self.shown.retain(|room, _| followed.contains(room));
+        self.seen.retain(|room, _| followed.contains(room));
+        self.unread.retain(|room, _| followed.contains(room));
     }
 
     fn follow(&mut self, room: &str) -> Result<(), Problem> {

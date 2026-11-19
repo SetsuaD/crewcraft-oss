@@ -1,0 +1,24 @@
+{
+  "id": "T311-join-from-link",
+  "title": "Desktop app joins from a real invitation link, off the window's thread",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/src/main.rs",
+    "apps/crewcraft/tests/t309_desktop_app.rs",
+    "tasks/T309-desktop-app/test.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t311_join_from_link.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t311_join_from_link",
+  "depends_on": [
+    "T232-root-fetch",
+    "T234-invitation-link",
+    "T309-desktop-app"
+  ],
+  "spec": "app::join_from_link parses the pasted InvitationLink (trimmed), fetches the server's root with ServerEndpoint::from_invitation (pinned to the link's fingerprint, bounded by JOIN_TIMEOUT) and returns the endpoint and code, with plain messages for a non-link, an address that is not valid, a server that does not prove the pinned root, and one that cannot be reached. Controller runs the Join and starts Enrollment on a short-lived thread: act(Enroll) returns at once and the result arrives through poll (T309's bad-link check now reads it from poll). main.rs uses join_from_link.",
+  "status": "done",
+  "context": [
+    "apps/crewcraft/src/server_endpoint.rs",
+    "crates/enroll/src/invitation.rs"
+  ]
+}

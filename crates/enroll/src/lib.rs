@@ -10,7 +10,12 @@
 //! four, then `-` and one Crockford check symbol (the secret as a big-endian integer, mod 37):
 //! `CC1-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-C`.
 
+pub mod invitation;
 pub mod server_trust;
+
+pub use invitation::InvitationLink;
+
+use zeroize::Zeroize;
 
 /// Crockford base32 alphabet (no I, L, O, U).
 pub const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -29,9 +34,15 @@ pub enum Error {
     BadChecksum,
 }
 
-/// A 160-bit enrollment secret.
+/// A 160-bit enrollment secret. Its bytes are wiped from memory when it is dropped.
 #[derive(Clone, PartialEq, Eq)]
 pub struct EnrollmentCode([u8; 20]);
+
+impl Drop for EnrollmentCode {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 impl std::fmt::Debug for EnrollmentCode {
     // Never print the secret, even in logs or panics.
