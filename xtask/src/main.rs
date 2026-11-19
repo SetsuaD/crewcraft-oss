@@ -7,7 +7,8 @@ const USAGE: &str = "\
 usage: cargo xtask <command>
 
 commands:
-  dist    build the release packages (cargo xtask dist --help)";
+  dist    build the release packages (cargo xtask dist --help)
+  icons   rewrite assets/icon/crewcraft.ico from assets/icon/crewcraft.svg";
 
 fn run(args: &[String]) -> xtask::Result<()> {
     match args.split_first() {
@@ -17,6 +18,15 @@ fn run(args: &[String]) -> xtask::Result<()> {
                 return Ok(());
             }
             xtask::dist::run(&xtask::dist::parse_args(rest)?)
+        }
+        Some((command, _)) if command == "icons" => {
+            let root = xtask::dist::workspace_root()?;
+            let svg =
+                std::fs::read(root.join("assets/icon/crewcraft.svg")).map_err(|error| xtask::Error::new(format!("reading the icon SVG: {error}")))?;
+            let path = root.join(xtask::icon::COMMITTED_ICO);
+            std::fs::write(&path, xtask::icon::app_ico(&svg)?).map_err(|error| xtask::Error::new(format!("writing {}: {error}", path.display())))?;
+            println!("wrote {}", path.display());
+            Ok(())
         }
         Some((command, _)) if command == "--help" || command == "-h" || command == "help" => {
             println!("{USAGE}");

@@ -885,3 +885,11 @@ fn tree_files_refuse_unsafe_paths() {
     let clash = [TreeFile::new("a", 0o644, b"x".to_vec()), TreeFile::new("a/b", 0o644, b"y".to_vec())];
     assert!(archive::tar(&clash, "./", MTIME).is_err());
 }
+
+// ---------------------------------------------------------------- the committed Windows icon
+
+#[test]
+fn the_committed_windows_icon_matches_the_svg() {
+    let committed = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/icon/crewcraft.ico")).unwrap();
+    assert_eq!(committed, xtask::icon::app_ico(SVG).unwrap(), "run `cargo xtask icons` after changing assets/icon/crewcraft.svg");
+}
