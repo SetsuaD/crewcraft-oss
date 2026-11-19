@@ -32,10 +32,11 @@ const MAX_ROOT_DER: u64 = 16 * 1024;
 const PUBLIC_ROOT: &str = server_install::PUBLIC_ROOT;
 
 const USAGE: &str = "\
-crewcraft-server first-run <new-data-directory> --name <server-name> --admin <email> [--listen <address:port>]
+crewcraft-server first-run <new-data-directory> --name <server-name> --admin <email> [--listen <address:port>] [--public-port <port>]
     Create a server: its certificate authority, settings and public root (trust-root.der), and an invitation for
     the administrator, shown as a crewcraft://enroll link. The server name is the DNS name or IP address clients
     use. The listen address defaults to 127.0.0.1:7443; use 0.0.0.0:7443 or [::]:7443 for every interface.
+    Behind port forwarding, --public-port is the port people connect to; invitations carry it.
     Run it in a private interactive terminal. An existing directory is never changed.
 crewcraft-server serve <data-directory>
     Serve with the recorded name and listen address until interrupted.
@@ -174,10 +175,11 @@ struct FirstRun {
     name: ServerName,
     admin: String,
     listen: SocketAddr,
+    public_port: Option<u16>,
 }
 
 fn parse_first_run(flags: &[OsString]) -> io::Result<FirstRun> {
-    let (mut name, mut admin, mut listen) = (None, None, None);
+    let (mut name, mut admin, mut listen, mut public_port) = (None, None, None, None);
     let mut flags = flags.iter();
     while let Some(flag) = flags.next() {
         let value = text_arg(flags.next().ok_or_else(|| usage("every first-run option takes a value"))?)?;
@@ -185,7 +187,12 @@ fn parse_first_run(flags: &[OsString]) -> io::Result<FirstRun> {
             "--name" => name.replace(ServerName::parse(value).map_err(|error| usage_owned(error.to_string()))?).is_some(),
             "--admin" => admin.replace(normalize_email(value).map_err(|_| usage("--admin takes an email address"))?).is_some(),
             "--listen" => listen.replace(server_install::parse_listen(value).map_err(|error| usage_owned(error.to_string()))?).is_some(),
-            _ => return Err(usage("first-run takes --name, --admin and --listen")),
+            "--public-port" => {
+                let port =
+                    value.parse::<u16>().ok().filter(|port| *port != 0).ok_or_else(|| usage("--public-port takes a port number (1 to 65535)"))?;
+                public_port.replace(port).is_some()
+            }
+            _ => return Err(usage("first-run takes --name, --admin, --listen and --public-port")),
         };
         if given_twice {
             return Err(usage("a first-run option was given twice"));
@@ -193,11 +200,11 @@ fn parse_first_run(flags: &[OsString]) -> io::Result<FirstRun> {
     }
     let name = name.ok_or_else(|| usage("first-run needs --name <server-name>"))?;
     let admin = admin.ok_or_else(|| usage("first-run needs --admin <email>"))?;
-    Ok(FirstRun { name, admin, listen: listen.unwrap_or_else(ServerConfig::default_listen) })
+    Ok(FirstRun { name, admin, listen: listen.unwrap_or_else(ServerConfig::default_listen), public_port })
 }
 
 fn first_run(data: &Path, flags: &[OsString]) -> io::Result<()> {
-    let FirstRun { name, admin, listen } = parse_first_run(flags)?;
+    let FirstRun { name, admin, listen, public_port } = parse_first_run(flags)?;
     // Creating the directory refuses an existing one atomically; this only refuses before asking for a terminal.
     if fs::symlink_metadata(data).is_ok() {
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, "an installation already exists there; first-run never changes one"));
@@ -205,11 +212,15 @@ fn first_run(data: &Path, flags: &[OsString]) -> io::Result<()> {
     require_private_terminal("run first-run in a private interactive terminal: it shows the administrator's invitation")?;
     let config = ServerConfig { name, listen };
     let (mut installation, root) = server_install::create(data, &config, now_ms())?;
-    println!("Server {}", config.public_server());
+    if let Some(port) = public_port.filter(|port| *port != config.listen.port()) {
+        server_install::write_public_port(data, port)?;
+    }
+    let server = server_install::link_server(&config, public_port);
+    println!("Server {server}");
     println!("Listening on {}", config.listen);
     println!("Trusted root {}", data.join(PUBLIC_ROOT).display());
     println!("Root SHA-256 {}", RootFingerprint::from_der(&root.certificate_der));
-    let mut display = LinkTerminal { out: io::stdout(), server: config.public_server(), root_sha256: root.sha256 };
+    let mut display = LinkTerminal { out: io::stdout(), server, root_sha256: root.sha256 };
     lab_admin::invite(&mut installation.accounts, &admin, None, now_ms(), &mut display).map_err(|error| {
         io::Error::other(format!("the server was created but the administrator was not invited ({error}); run invite to try again"))
     })?;
@@ -220,7 +231,8 @@ fn invite(data: &Path, email: &str) -> io::Result<()> {
     require_private_terminal("show invitations in a private interactive terminal")?;
     let (mut installation, config) = server_install::open(data, now_ms())?;
     let root_sha256 = server_install::root_sha256(data)?;
-    let mut display = LinkTerminal { out: io::stdout(), server: config.public_server(), root_sha256 };
+    let server = server_install::link_server(&config, server_install::read_public_port(data)?);
+    let mut display = LinkTerminal { out: io::stdout(), server, root_sha256 };
     lab_admin::invite(&mut installation.accounts, email, None, now_ms(), &mut display).map_err(lab_error)?;
     Ok(())
 }
@@ -233,7 +245,8 @@ fn serve(data: &Path) -> io::Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     let flag = shutdown.clone();
     ctrlc::set_handler(move || flag.store(true, Ordering::Release)).map_err(|error| io::Error::other(error.to_string()))?;
-    println!("CrewCraft listening on {} as {}", runtime.local_addr()?, config.public_server());
+    let server = server_install::link_server(&config, server_install::read_public_port(data)?);
+    println!("CrewCraft listening on {} as {server}", runtime.local_addr()?);
     io::stdout().flush()?;
     let served = runtime.serve_enrolled(&shutdown);
     println!("CrewCraft stopped.");

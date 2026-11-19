@@ -1,0 +1,12 @@
+{
+  "id": "T236-public-port",
+  "title": "Server behind port forwarding: invitations carry the public port",
+  "crate": "crewcraft-server",
+  "files": ["apps/crewcraft-server/src/server_install.rs", "apps/crewcraft-server/src/main.rs", "README.md"],
+  "test_path": "apps/crewcraft-server/tests/t236_public_port.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t236_public_port",
+  "depends_on": ["T231-first-run"],
+  "spec": "`first-run --public-port <port>` records the port people connect to in `public-port` (owner-only, written once) when it differs from the listen port; `link_server` writes invitations as name:public-port, else name:listen-port; `invite` and `serve` read it back. A damaged file (not a number, 0, out of range, oversized) is refused.",
+  "status": "done",
+  "context": ["apps/crewcraft-server/src/server_name.rs"]
+}
