@@ -8,6 +8,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Stop serving cleanly on Ctrl+C and SIGTERM (`termination`).
+ctrlc = { version = "3.4", features = ["termination"] }
 crewcraft-accounts.workspace = true
 crewcraft-admission.workspace = true
 crewcraft-bootstrap.workspace = true

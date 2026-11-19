@@ -129,6 +129,7 @@ the system's key store is planned (docs/SECURITY-DESIGN.md).
 | `apps/crewcraft-server` | the server binary (dark TLS, web client, admin console) |
 | `apps/crewcraft` | the desktop client |
 | `tasks/` | open work, one test per task |
+| `xtask` | build tasks: `cargo xtask dist` writes the release packages ([docs/RELEASE.md](docs/RELEASE.md)) |
 | `ci/validate.sh` | the whole gate |
 
 | Read | For |
@@ -150,10 +151,11 @@ a parity sweep and 1.0.
 
 ## Downloads
 
-None yet. The first beta, `0.1.0-beta.1` (due 2026-12-31), will be published on this repository's Releases page: the
-desktop app for Windows (MSI), Linux (AppImage and deb) and macOS (DMG), and the server for each, with a
-`SHA256SUMS.txt`. The beta builds are not code-signed: Windows warns before running them, and macOS needs the app
-opened from the context menu the first time. `docs/ACCEPTANCE.md` lists what each release must pass first.
+None yet. The first beta, `0.1.0-beta.1` (due 2026-12-31, [ROADMAP.md](ROADMAP.md)), will be published on this
+repository's Releases page: the desktop app for Windows (MSI), Linux (AppImage and deb) and macOS (DMG), and the server
+for each, with a `SHA256SUMS.txt`. The packages are built with `cargo xtask dist`; how, and what each one holds, is in
+[docs/RELEASE.md](docs/RELEASE.md). The beta builds are not code-signed: Windows warns before running them, and macOS
+needs the app opened from the context menu the first time. `docs/ACCEPTANCE.md` lists what each release must pass first.
 
 ## Secrets & access
 
@@ -162,7 +164,9 @@ is committed to this repository, and the sanitize scan in the gate fails on priv
 
 ## Vendored binaries
 
-None.
+None in the repository. The Linux AppImage release asset starts with the prebuilt AppImage runtime, which is not
+committed: the person building a release passes it in, pinned by SHA-256 (version, source and license in
+[docs/NON-RUST-DEPENDENCIES.md](docs/NON-RUST-DEPENDENCIES.md)).
 
 ## Contributing
 
