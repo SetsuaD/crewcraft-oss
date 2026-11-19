@@ -9,7 +9,7 @@
   "test_cmd": "cargo test -p crewcraft-ui-model --test t301_ui_composer",
   "depends_on": [],
   "spec": "Implement Composer in crates/ui-model/src/composer.rs as its doc comments say: drafts are stored per room exactly as typed; submit trims leading and trailing whitespace only, refuses Empty and TooLong (more than MAX_DRAFT_CHARS chars, counted after trimming) and keeps the draft on refusal, and on success returns Command::Post and clears only that room's draft. Replace the `_todo` field and remove the clippy::todo allow. No new dependencies.",
-  "status": "open",
+  "status": "done",
   "context": [
     "crates/ui-model/src/lib.rs"
   ]
