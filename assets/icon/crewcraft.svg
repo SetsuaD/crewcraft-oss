@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>CrewCraft</title>
+  <!-- Original artwork for CrewCraft (see ATTRIBUTION.md): a speech bubble holding three people, on a rounded tile. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff8a4c"/>
+      <stop offset="1" stop-color="#e0503a"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#tile)"/>
+  <path d="M120 128h272a40 40 0 0 1 40 40v152a40 40 0 0 1-40 40H236l-76 60v-60h-40a40 40 0 0 1-40-40V168a40 40 0 0 1 40-40z" fill="#ffffff"/>
+  <g fill="#263159">
+    <circle cx="186" cy="234" r="26"/>
+    <circle cx="256" cy="222" r="30"/>
+    <circle cx="326" cy="234" r="26"/>
+  </g>
+  <g fill="#263159">
+    <path d="M144 316a42 42 0 0 1 84 0z"/>
+    <path d="M206 316a50 50 0 0 1 100 0z"/>
+    <path d="M284 316a42 42 0 0 1 84 0z"/>
+  </g>
+</svg>
