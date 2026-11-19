@@ -1,8 +1,9 @@
-//! Compose the loopback listener, TLS admission and the separate device and bootstrap handlers. Task T219.
+//! Compose the listener (loopback for the lab, any address for a network server), TLS admission and the separate
+//! device and bootstrap handlers. Tasks T219 and T230.
 
 use std::cell::Cell;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -40,9 +41,16 @@ pub struct LabOptions {
 pub struct BootstrapStream {
     stream: StreamOwned<ServerConnection, DeadlineSocket>,
     deadline: Instant,
+    peer: IpAddr,
 }
 
 impl BootstrapStream {
+    /// The peer's IP address, read from the TCP socket before the TLS handshake, never from anything the peer sent.
+    /// An IPv4 address that arrived on an IPv6 socket (`::ffff:a.b.c.d`) is given as the IPv4 address.
+    pub fn peer_ip(&self) -> IpAddr {
+        self.peer
+    }
+
     fn check_deadline(&self) -> io::Result<()> {
         if Instant::now() < self.deadline { Ok(()) } else { Err(io::ErrorKind::TimedOut.into()) }
     }
@@ -87,12 +95,35 @@ impl LabServer {
         admission: Arc<dyn Admission>,
         rooms: DurableServer,
     ) -> io::Result<Self> {
+        Self::bind_with(options, identity, device_roots, admission, rooms, Listener::bind)
+    }
+
+    /// Bind to any local address (task T230). Everything else is as `bind`: a peer gets application bytes only after
+    /// the same TLS admission and checks.
+    pub fn bind_network(
+        options: LabOptions,
+        identity: Identity,
+        device_roots: RootCertStore,
+        admission: Arc<dyn Admission>,
+        rooms: DurableServer,
+    ) -> io::Result<Self> {
+        Self::bind_with(options, identity, device_roots, admission, rooms, Listener::bind_network)
+    }
+
+    fn bind_with(
+        options: LabOptions,
+        identity: Identity,
+        device_roots: RootCertStore,
+        admission: Arc<dyn Admission>,
+        rooms: DurableServer,
+        listen: fn(SocketAddr, NonZeroUsize) -> io::Result<Listener>,
+    ) -> io::Result<Self> {
         let Timeouts { handshake, sign_in, signed_in_frame, bootstrap } = options.timeouts;
         if [handshake, sign_in, signed_in_frame, bootstrap].iter().any(|&timeout| timeout.is_zero() || cutoff(timeout).is_err()) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid connection deadline"));
         }
         let config = server_config(identity, device_roots, admission.clone()).map_err(io::Error::other)?;
-        let listener = Listener::bind(options.address, options.capacity)?;
+        let listener = listen(options.address, options.capacity)?;
         Ok(Self { listener, timeouts: options.timeouts, protocol: options.protocol, config, admission, rooms: Mutex::new(rooms) })
     }
 
@@ -113,6 +144,9 @@ impl LabServer {
     ) -> io::Result<()> {
         let Self { listener, timeouts, protocol, config, admission, rooms } = self;
         listener.serve(shutdown, move |tcp: TcpStream| {
+            // From the socket, before admission: nothing the peer sends can choose the address its limits count against.
+            let Ok(peer) = tcp.peer_addr() else { return };
+            let peer = peer.ip().to_canonical();
             let now_secs = || (now_ms() / 1000) as i64;
             let Ok(admitted) = admit(tcp, config.clone(), timeouts.handshake, &*admission, now_secs()) else { return };
             if admitted.recheck(&*admission, now_secs()).is_err() {
@@ -143,7 +177,7 @@ impl LabServer {
                 Class::Bootstrap(public_key) => {
                     let Ok(deadline) = cutoff(timeouts.bootstrap) else { return };
                     let stream = StreamOwned::new(admitted.stream.conn, DeadlineSocket::new(admitted.stream.sock, deadline));
-                    bootstrap(public_key, &mut BootstrapStream { stream, deadline });
+                    bootstrap(public_key, &mut BootstrapStream { stream, deadline, peer });
                 }
             }
         })

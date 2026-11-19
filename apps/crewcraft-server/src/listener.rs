@@ -1,4 +1,5 @@
-//! A loopback-only TCP listener with a bounded number of active handlers.
+//! A TCP listener with a bounded number of active handlers: loopback-only for the lab (`bind`), any address for a
+//! network server (`bind_network`, task T230).
 
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -21,6 +22,13 @@ impl Listener {
         if !address.ip().is_loopback() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "listener address must be loopback"));
         }
+        Self::bind_network(address, capacity)
+    }
+
+    /// Bind any local address, including every interface (`0.0.0.0`, or `::`, which on most systems also accepts
+    /// IPv4). Port zero lets the operating system choose a port. The listener does not filter peers by address: only
+    /// a peer that passes TLS admission ever receives application bytes.
+    pub fn bind_network(address: SocketAddr, capacity: NonZeroUsize) -> io::Result<Self> {
         let socket = TcpListener::bind(address)?;
         socket.set_nonblocking(true)?;
         Ok(Self { socket, capacity })

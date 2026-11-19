@@ -63,7 +63,9 @@ Libraries, each proven by the tests in `crates/*/tests`:
   invites, devices and enrollment, uploads, rate limits, retention, an operation journal and an audit chain.
 - **Client core:** timeline, room view, inbox, outbox, notifications and the client session.
 
-There is no network server, client app or installer yet: the dark TLS server is milestone M2 and the desktop client M3.
+- **Server binary:** a dark TLS server with a `first-run` setup; see "Run a server" below.
+
+There is no client app or installer yet: the desktop client is milestone M3.
 
 ## Quick start
 
@@ -77,6 +79,25 @@ cargo build --release --workspace
 ```
 
 On Windows, `setup.bat`, `run_dev.bat` and `build.bat` do the same.
+
+## Run a server
+
+The server answers only enrolled devices. One data directory holds everything: its certificate authority, accounts,
+rooms, the settings `first-run` records (`server.conf`) and the public root certificate (`trust-root.der`).
+
+```sh
+# Once, in a private terminal: the administrator's invitation is shown here and nowhere else.
+crewcraft-server first-run /srv/crewcraft --name chat.example.org --admin admin@example.org --listen 0.0.0.0:7443
+crewcraft-server serve /srv/crewcraft                       # until interrupted
+crewcraft-server invite /srv/crewcraft person@example.org   # private terminal again
+crewcraft-server room /srv/crewcraft admin@example.org General
+crewcraft-server add-member /srv/crewcraft <room> admin@example.org person@example.org
+```
+
+`--name` is the DNS name or IP address clients connect to; the server certificate is signed for it. `--listen`
+defaults to `127.0.0.1:7443`. Each invitation is shown as a
+`crewcraft://enroll?server=<name:port>&code=<code>&root_sha256=<hex>` link and as its parts. Hand the person
+`trust-root.der` with it. `crewcraft-server --help` lists every command, including the loopback-only `lab` ones.
 
 ## Architecture
 

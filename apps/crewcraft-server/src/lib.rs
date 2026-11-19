@@ -9,4 +9,6 @@ pub mod lab_runtime;
 pub mod lab_server;
 pub mod lab_state;
 pub mod listener;
+pub mod server_install;
+pub mod server_name;
 pub mod stored_device_auth;
