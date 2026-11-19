@@ -2,7 +2,8 @@
 //!
 //! `first-run`, `serve`, `invite`, `room` and `add-member` run a network server from one data directory whose recorded
 //! settings (`server.conf`) name the server and the address it listens on (task T231). The `lab` commands keep the
-//! loopback-only lab, which pins its root from a separate file.
+//! loopback-only lab, which pins its root from a separate file. While `serve` runs, `invite`, `room` and `add-member`
+//! send their request to it over its control socket (Unix, task T238) instead of opening the directory.
 
 use std::env;
 use std::ffi::OsString;
@@ -20,7 +21,10 @@ use crewcraft_accounts::identity::normalize_email;
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_proto::handshake::ServerSide;
 use crewcraft_proto::request::FEATURE_LIST_ROOMS;
+#[cfg(unix)]
+use crewcraft_server::control::{ControlClient, ControlSocket};
 use crewcraft_server::lab_admin::{self, DisplayFailed, IssuedCode, ProtectedDisplay};
+use crewcraft_server::lab_installation::LabInstallation;
 use crewcraft_server::lab_runtime::LabRuntime;
 use crewcraft_server::lab_server::{LabOptions, Timeouts};
 use crewcraft_server::server_install::{self, ServerConfig};
@@ -75,14 +79,9 @@ fn run(args: &[OsString]) -> io::Result<()> {
         [command, data, email, flag, path] if command == "invite" && flag == "--invitation-file" => {
             invite(Path::new(data), text_arg(email)?, Some(Path::new(path)))?
         }
-        [command, data, owner, name] if command == "room" => {
-            let (mut installation, _) = server_install::open(Path::new(data), now_ms())?;
-            let slug = installation.rooms.create_room(&lab_email(owner)?, text_arg(name)?).map_err(lab_error)?;
-            println!("Room {slug}");
-        }
+        [command, data, owner, name] if command == "room" => println!("Room {}", create_room(Path::new(data), owner, name)?),
         [command, data, room, owner, member] if command == "add-member" => {
-            let (mut installation, _) = server_install::open(Path::new(data), now_ms())?;
-            installation.rooms.add_member(text_arg(room)?, &lab_email(owner)?, &lab_email(member)?, Role::Member).map_err(lab_error)?;
+            add_member(Path::new(data), room, owner, member)?;
             println!("Member added.");
         }
         [lab, init, state] if lab == "lab" && init == "init" => init_lab(Path::new(state))?,
@@ -259,16 +258,66 @@ fn invite(data: &Path, email: &str, invitation_file: Option<&Path>) -> io::Resul
             InvitationOut::Terminal(io::stdout())
         }
     };
-    let (mut installation, config) = server_install::open(data, now_ms())?;
-    let root_sha256 = server_install::root_sha256(data)?;
-    let server = server_install::link_server(&config, server_install::read_public_port(data)?);
-    let mut display = LinkTerminal { out, server, root_sha256 };
+    // A running server issues the invitation itself (T238); the code comes back over its owner-only socket.
+    #[cfg(unix)]
+    if let Some(running) = ControlClient::connect(data) {
+        let mut display = link_display(data, out)?;
+        running.invite(email, |email, code| display.show_text(email, code).is_ok())?;
+        if let Some(path) = invitation_file {
+            println!("Invitation for {email} written to {} (readable by its owner only)", path.display());
+        }
+        return Ok(());
+    }
+    let (mut installation, _) = open_offline(data)?;
+    let mut display = link_display(data, out)?;
     lab_admin::invite(&mut installation.accounts, email, None, now_ms(), &mut display).map_err(lab_error)?;
     if let Some(path) = invitation_file {
         println!("Invitation for {email} written to {} (readable by its owner only)", path.display());
     }
     Ok(())
 }
+
+/// How a link for this installation is shown: its recorded name and public port, and its root.
+fn link_display(data: &Path, out: InvitationOut) -> io::Result<LinkTerminal> {
+    let config = server_install::read_config(data)?;
+    let root_sha256 = server_install::root_sha256(data)?;
+    let server = server_install::link_server(&config, server_install::read_public_port(data)?);
+    Ok(LinkTerminal { out, server, root_sha256 })
+}
+
+fn create_room(data: &Path, owner: &OsString, name: &OsString) -> io::Result<String> {
+    #[cfg(unix)]
+    if let Some(running) = ControlClient::connect(data) {
+        return running.create_room(&lab_email(owner)?, text_arg(name)?);
+    }
+    let (mut installation, _) = open_offline(data)?;
+    installation.rooms.create_room(&lab_email(owner)?, text_arg(name)?).map_err(lab_error)
+}
+
+fn add_member(data: &Path, room: &OsString, owner: &OsString, member: &OsString) -> io::Result<()> {
+    #[cfg(unix)]
+    if let Some(running) = ControlClient::connect(data) {
+        return running.add_member(text_arg(room)?, &lab_email(owner)?, &lab_email(member)?);
+    }
+    let (mut installation, _) = open_offline(data)?;
+    installation.rooms.add_member(text_arg(room)?, &lab_email(owner)?, &lab_email(member)?, Role::Member).map_err(lab_error)?;
+    Ok(())
+}
+
+/// Open the data directory for a command when no running server answers. A directory still in use gets a message that
+/// says what to do.
+fn open_offline(data: &Path) -> io::Result<(LabInstallation, ServerConfig)> {
+    server_install::open(data, now_ms()).map_err(|error| match error.kind() {
+        io::ErrorKind::WouldBlock => io::Error::new(io::ErrorKind::WouldBlock, IN_USE),
+        _ => error,
+    })
+}
+
+#[cfg(unix)]
+const IN_USE: &str =
+    "the data directory is in use by another command, or by a server that does not answer on its control socket; try again, or stop the server";
+#[cfg(not(unix))]
+const IN_USE: &str = "the data directory is in use by the running server; on Windows, stop the server to run invite, room or add-member";
 
 fn serve(data: &Path) -> io::Result<()> {
     let (installation, config) = server_install::open(data, now_ms())?;
@@ -279,8 +328,23 @@ fn serve(data: &Path) -> io::Result<()> {
     let flag = shutdown.clone();
     ctrlc::set_handler(move || flag.store(true, Ordering::Release)).map_err(|error| io::Error::other(error.to_string()))?;
     let server = server_install::link_server(&config, server_install::read_public_port(data)?);
+    // invite, room and add-member reach the running server here (T238). Without it they wait for the server to stop.
+    #[cfg(unix)]
+    let control = match ControlSocket::bind(data) {
+        Ok(control) => Some(control),
+        Err(error) => {
+            eprintln!("crewcraft-server: no control socket ({error}); stop the server to run invite, room or add-member");
+            None
+        }
+    };
     println!("CrewCraft listening on {} as {server}", runtime.local_addr()?);
     io::stdout().flush()?;
+    #[cfg(unix)]
+    let served = match control {
+        Some(control) => runtime.serve_enrolled_with_control(&shutdown, control),
+        None => runtime.serve_enrolled(&shutdown),
+    };
+    #[cfg(not(unix))]
     let served = runtime.serve_enrolled(&shutdown);
     println!("CrewCraft stopped.");
     served
@@ -301,10 +365,17 @@ struct LinkTerminal {
 
 impl ProtectedDisplay for LinkTerminal {
     fn show(&mut self, issued: &IssuedCode<'_>) -> Result<(), DisplayFailed> {
+        self.show_text(issued.email(), issued.code())
+    }
+}
+
+impl LinkTerminal {
+    /// Show `email`'s invitation with `code`, whether this command issued it or the running server did.
+    fn show_text(&mut self, email: &str, code: &str) -> Result<(), DisplayFailed> {
         // Built the way a client reads it, so a link the client would refuse is never shown.
-        let link = server_install::invitation(&self.server, issued.code(), &self.root_sha256).map_err(|_| DisplayFailed)?;
+        let link = server_install::invitation(&self.server, code, &self.root_sha256).map_err(|_| DisplayFailed)?;
         let root = server_install::hex(&self.root_sha256);
-        let (email, server, code) = (issued.email(), &self.server, issued.code());
+        let server = &self.server;
         let text = format!("Private invitation for {email}\n{link}\nServer {server}\nCode {code}\nRoot SHA-256 {root}\n");
         match &mut self.out {
             InvitationOut::Terminal(out) => {
