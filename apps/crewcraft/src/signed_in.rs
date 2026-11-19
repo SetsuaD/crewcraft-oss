@@ -1,7 +1,7 @@
 //! A signed-in chat connection, and the credentials that open one.
 //!
 //! Owns: `Credentials` (email, password and a current TOTP code, checked for shape and never printed),
-//! `SignedInSession` (post, edit, delete and sync over one connection) and the sign-in step itself. Called by the lab
+//! `SignedInSession` (post, edit, delete, sync and the room list over one connection) and the sign-in step itself. Called by the lab
 //! endpoint (`lab_client`), the server endpoint (`server_endpoint`) and the connection worker (`worker`). Calls
 //! `chat_session` for the protocol.
 
@@ -12,6 +12,7 @@ use crewcraft_client_core::notify::Settings;
 use crewcraft_client_core::room_view::Shown;
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
+use crewcraft_proto::request::FEATURE_LIST_ROOMS;
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn};
 use zeroize::Zeroizing;
 
@@ -64,9 +65,10 @@ pub(crate) fn valid_room(room: &str) -> bool {
     !room.is_empty() && room.len() <= MAX_NAME && room.chars().all(|ch| !ch.is_control() && !ch.is_whitespace())
 }
 
-/// Sign in over a verified device connection and negotiate the chat protocol, all within one operation deadline.
+/// Sign in over a verified device connection and negotiate the chat protocol, all within one operation deadline. The
+/// client offers `FEATURE_LIST_ROOMS`; a server that does not agree to it is still used, without the room list.
 pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str) -> Result<SignedInSession, LabError> {
-    let hello = Hello { min_version: 1, max_version: 1, features: 0, client: client.into() };
+    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS, client: client.into() };
     let settings = Settings::new(credentials.email);
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
@@ -106,6 +108,15 @@ impl SignedInSession {
     /// Ask the server to answer, which keeps an idle connection open.
     pub fn ping(&mut self) -> Result<(), LabError> {
         self.chat.ping(0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// The rooms the signed-in person is a member of, sorted, or `None` when the server is too old to list them (it did
+    /// not agree to `FEATURE_LIST_ROOMS` in the handshake; nothing is sent then).
+    pub fn list_rooms(&mut self) -> Result<Option<Vec<String>>, LabError> {
+        if !self.chat.lists_rooms() {
+            return Ok(None);
+        }
+        self.chat.list_rooms(0, Instant::now() + OPERATION_TIMEOUT).map(Some).map_err(LabError::Chat)
     }
 
     /// Fetch the room's events after the cursor already held and return the acknowledged head and the whole room as

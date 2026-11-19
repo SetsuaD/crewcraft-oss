@@ -1,0 +1,27 @@
+{
+  "id": "T233-list-rooms",
+  "title": "List a person's rooms and report them at sign-in",
+  "crate": "crewcraft",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/client-core/src/client.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft-server/src/server_install.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "docs/SPEC.md",
+    "ROADMAP.md"
+  ],
+  "test_path": "apps/crewcraft/tests/t233_list_rooms.rs",
+  "test_cmd": "cargo test -p crewcraft --test t233_list_rooms",
+  "depends_on": [
+    "T124-request-codec",
+    "T128-dispatch",
+    "T303-connection-worker"
+  ],
+  "spec": "Request::ListRooms (tag 8, no fields; 7 stays unassigned) asks for the rooms the signed-in person is a member of. The server answers Ok { cursor: n } and then, as Sync's events follow its answer, one room-list frame (request::encode_rooms: tag 131, the request id, a u16 count n, then each room as a 1 to MAX_NAME byte string; 130 stays unassigned; Response itself is unchanged). Encoding refuses more than MAX_ROOMS rooms or a bad name length (FieldLength); decoding refuses a count above MAX_ROOMS before reading any room. dispatch::listed_rooms gives the caller's own memberships only (Server::rooms_of), sorted by slug, the first MAX_ROOMS, leaving out slugs no request could name. Client-core reports the frame as ClientEvent::Rooms. It is an addition to protocol version 1 behind the handshake feature bit FEATURE_LIST_ROOMS: servers advertise it, the client offers it, and a client sends ListRooms only when the server agreed, so an older server is never sent a tag it would close the connection on. ChatSession::list_rooms (the list must have the announced count) and SignedInSession::list_rooms (None from an older server) expose it. Right after a sign-in the worker lists the rooms and follows exactly them (valid names, at most MAX_FOLLOWED), so Event::SignedIn.rooms is the person's room list and each room gets an unread count; from an older server it keeps the rooms it already followed. The test covers the codec round trip and limits, the server listing only the caller's memberships, and a worker whose person was added to two rooms seeing both in SignedIn with their unread counts, and still signing in against a server without the feature.",
+  "status": "done"
+}

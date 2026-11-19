@@ -1,7 +1,8 @@
 //! One request from a signed-in user, applied to the server: the server side of `proto::request` (T124) over
 //! `server::Server` (T122). Task T128.
 
-use crewcraft_proto::request::{Request, Response};
+use crewcraft_proto::message::MAX_NAME;
+use crewcraft_proto::request::{MAX_ROOMS, Request, Response};
 
 use crate::durable::{DurableError, DurableServer};
 use crate::room::RoomError;
@@ -48,6 +49,8 @@ pub fn error_code(error: ServerError) -> u16 {
 ///   go out as separate frames, not in this response.
 /// - `MarkRead`: `Server::mark_read`; `Ok { cursor }` is the room's head, whether or not the marker moved.
 /// - `Ping`: `Ok { cursor: 0 }`; it needs no room and never fails.
+/// - `ListRooms`: `Ok { cursor }` is how many rooms `listed_rooms` gives for `user`. The names themselves go out as
+///   one room-list frame after this response (`request::encode_rooms`), as `Sync`'s events do. It never fails.
 ///
 /// Any error is `Error { code: error_code(e), detail: "" }`.
 pub fn handle(server: &mut Server, user: &str, request: &Request, now_ms: u64) -> Response {
@@ -79,6 +82,13 @@ impl Backend<'_> {
     }
 }
 
+/// The rooms `ListRooms` lists for `user`: the slugs of the rooms they are a member of (`Server::rooms_of`), sorted,
+/// and nothing about anyone else's. At most `request::MAX_ROOMS` (the first by slug); a slug longer than
+/// `message::MAX_NAME` bytes, which no request could name, is left out.
+pub fn listed_rooms(server: &Server, user: &str) -> Vec<String> {
+    server.rooms_of(user).into_iter().map(|room| room.slug).filter(|slug| !slug.is_empty() && slug.len() <= MAX_NAME).take(MAX_ROOMS).collect()
+}
+
 fn refusal(code: u16) -> Response {
     Response::Error { code, detail: String::new() }
 }
@@ -86,6 +96,7 @@ fn refusal(code: u16) -> Response {
 pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Request, now_ms: u64) -> Result<Response, DurableError> {
     let result = match request {
         Request::Ping => return Ok(Response::Ok { cursor: 0 }),
+        Request::ListRooms => return Ok(Response::Ok { cursor: listed_rooms(backend.server(), user).len() as u64 }),
         Request::Post { room, text } => backend.change(|s| s.post(room, user, text, now_ms), |s| s.post(room, user, text, now_ms)),
         Request::Edit { room, target, text } => {
             backend.change(|s| s.edit(room, user, *target, text, now_ms), |s| s.edit(room, user, *target, text, now_ms))

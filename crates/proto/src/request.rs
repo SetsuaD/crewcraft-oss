@@ -9,17 +9,35 @@
 //! - tag 4 `Sync`: `str room | u64 cursor`
 //! - tag 5 `MarkRead`: `str room | u64 cursor`
 //! - tag 6 `Ping`: no fields
+//! - tag 8 `ListRooms`: no fields (task T233; tag 7 is unassigned)
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
 //! - tag 129 `Error`: `u16 code | str detail`
 //!
+//! `ListRooms` is answered `Ok { cursor: n }`, and then, as `Sync`'s events follow its answer, by one room-list frame
+//! (`encode_rooms`): `u8 tag (131) | u32 id | u16 n | n × str room`, where `id` repeats the request's and `n` is 0 to
+//! `MAX_ROOMS`. Tag 130 is unassigned.
+//!
 //! `room` is 1 to `message::MAX_NAME` bytes, `text` 0 to `message::MAX_BODY` bytes, `detail` 0 to `MAX_DETAIL` bytes.
+//!
+//! `ListRooms` is an addition to protocol version 1, announced by the handshake feature bit `FEATURE_LIST_ROOMS`. A
+//! client sends it only when the server's `Welcome` carries that bit: an older server does not know the tag and
+//! would close the connection.
 
 use crate::message::{CodecError, MAX_BODY, MAX_NAME};
 
 pub const MAX_DETAIL: usize = 256;
+/// The most rooms one room-list frame carries.
+pub const MAX_ROOMS: usize = 512;
+/// The handshake feature bit (`handshake::Hello::features`) for `ListRooms` and its room-list frame.
+pub const FEATURE_LIST_ROOMS: u32 = 1;
+/// The first byte of a room-list frame.
+pub const ROOMS_TAG: u8 = 131;
 
+const LIST_ROOMS: u8 = 8;
+
+/// A request. `ListRooms` asks for the rooms the signed-in person is a member of.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
     Post { room: String, text: String },
@@ -28,6 +46,7 @@ pub enum Request {
     Sync { room: String, cursor: u64 },
     MarkRead { room: String, cursor: u64 },
     Ping,
+    ListRooms,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +148,10 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.push(6);
             out.extend_from_slice(&id.to_be_bytes());
         }
+        Request::ListRooms => {
+            out.push(LIST_ROOMS);
+            out.extend_from_slice(&id.to_be_bytes());
+        }
     }
     Ok(out)
 }
@@ -141,7 +164,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(1..=6).contains(&tag) {
+    if !(1..=6).contains(&tag) && tag != LIST_ROOMS {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -174,6 +197,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
             Request::MarkRead { room, cursor }
         }
         6 => Request::Ping,
+        LIST_ROOMS => Request::ListRooms,
         _ => return Err(CodecError::BadKind(tag)),
     };
     if pos != bytes.len() {
@@ -231,4 +255,49 @@ pub fn decode_response(bytes: &[u8]) -> Result<(u32, Response), CodecError> {
         return Err(CodecError::TrailingBytes);
     }
     Ok((id, response))
+}
+
+/// Encode the room-list frame that follows the `Ok` answering `ListRooms` request `id`. `FieldLength` if there are
+/// more than `MAX_ROOMS` rooms, or a room is empty or longer than `message::MAX_NAME` bytes.
+pub fn encode_rooms(id: u32, rooms: &[String]) -> Result<Vec<u8>, CodecError> {
+    if rooms.len() > MAX_ROOMS {
+        return Err(CodecError::FieldLength);
+    }
+    let mut out = vec![ROOMS_TAG];
+    out.extend_from_slice(&id.to_be_bytes());
+    out.extend_from_slice(&(rooms.len() as u16).to_be_bytes());
+    for room in rooms {
+        write_str(&mut out, room, 1, MAX_NAME)?;
+    }
+    Ok(out)
+}
+
+/// Decode exactly one room-list frame: its request id and the rooms. Errors in the order the bytes are read: the tag
+/// (`Truncated`, or `BadKind(tag)` for anything but `ROOMS_TAG`), the id, the count (`FieldLength` above `MAX_ROOMS`,
+/// before any room is read), each room as a string field, then `TrailingBytes`.
+pub fn decode_rooms(bytes: &[u8]) -> Result<(u32, Vec<String>), CodecError> {
+    let Some(&tag) = bytes.first() else {
+        return Err(CodecError::Truncated);
+    };
+    if tag != ROOMS_TAG {
+        return Err(CodecError::BadKind(tag));
+    }
+    let mut pos: usize = 1;
+    let id = read_u32(bytes, &mut pos)?;
+    if pos + 2 > bytes.len() {
+        return Err(CodecError::Truncated);
+    }
+    let count = u16::from_be_bytes([bytes[pos], bytes[pos + 1]]) as usize;
+    pos += 2;
+    if count > MAX_ROOMS {
+        return Err(CodecError::FieldLength);
+    }
+    let mut rooms = Vec::with_capacity(count);
+    for _ in 0..count {
+        rooms.push(read_string(bytes, &mut pos, 1, MAX_NAME)?);
+    }
+    if pos != bytes.len() {
+        return Err(CodecError::TrailingBytes);
+    }
+    Ok((id, rooms))
 }

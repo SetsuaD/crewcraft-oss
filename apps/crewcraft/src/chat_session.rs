@@ -11,7 +11,7 @@ use crewcraft_client_core::session::{ClientSession, Phase, SessionError};
 use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
-use crewcraft_proto::request::{Request, Response};
+use crewcraft_proto::request::{FEATURE_LIST_ROOMS, Request, Response};
 use crewcraft_proto::signin::{self, SignIn};
 
 const SIGN_IN_REPLY_LIMIT: usize = 1 + signin::TOKEN_LEN;
@@ -38,6 +38,10 @@ pub enum ChatError {
         head: u64,
         reason: io::ErrorKind,
     },
+    /// The server did not agree to the feature this request needs (an older server); nothing was sent.
+    Unsupported,
+    /// The server's room list did not match the count its answer announced; the connection is closed.
+    UnexpectedResponse,
 }
 
 pub struct ChatSession<S, D> {
@@ -88,6 +92,45 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
 
     pub fn delete(&mut self, room: &str, target: u64, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<u64, ChatError> {
         self.request(Request::Delete { room: room.to_owned(), target }, now_ms, local_minute, deadline)
+    }
+
+    /// The features both sides agreed on in the handshake (`handshake::Hello::features`).
+    pub fn features(&self) -> u32 {
+        match self.session.phase() {
+            Phase::Open { features, .. } => features,
+            _ => 0,
+        }
+    }
+
+    /// Whether the server agreed to `ListRooms` (`request::FEATURE_LIST_ROOMS`).
+    pub fn lists_rooms(&self) -> bool {
+        self.features() & FEATURE_LIST_ROOMS != 0
+    }
+
+    /// The rooms the signed-in person is a member of, as the server lists them. `Unsupported`, with nothing sent, when
+    /// the server did not agree to `FEATURE_LIST_ROOMS`. The answer announces how many rooms follow; a room list of
+    /// another length is `UnexpectedResponse` and closes the session.
+    pub fn list_rooms(&mut self, now_ms: u64, deadline: Instant) -> Result<Vec<String>, ChatError> {
+        if !self.lists_rooms() {
+            return Err(ChatError::Unsupported);
+        }
+        let (id, count) = match self.exchange(Request::ListRooms, now_ms, 0, deadline)? {
+            (id, Response::Ok { cursor }) => (id, cursor),
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        loop {
+            for event in self.receive(now_ms, 0, deadline)? {
+                if let ClientEvent::Rooms { id: answered, rooms } = event
+                    && answered == id
+                {
+                    if u64::try_from(rooms.len()).ok() != Some(count) {
+                        self.closed = true;
+                        return Err(ChatError::UnexpectedResponse);
+                    }
+                    return Ok(rooms);
+                }
+            }
+        }
     }
 
     /// A request that needs no room and never fails at the server, to keep an idle connection open.
@@ -141,6 +184,14 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
     }
 
     fn request(&mut self, request: Request, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<u64, ChatError> {
+        match self.exchange(request, now_ms, local_minute, deadline)?.1 {
+            Response::Ok { cursor } => Ok(cursor),
+            Response::Error { code, .. } => Err(ChatError::Rejected(code)),
+        }
+    }
+
+    /// Send one request and return its id and matched response.
+    fn exchange(&mut self, request: Request, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<(u32, Response), ChatError> {
         if self.closed {
             return Err(ChatError::Closed);
         }
@@ -150,11 +201,8 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         // There is exactly one request in flight. Client::receive matches its id and ignores old ids.
         loop {
             let events = self.receive(now_ms, local_minute, deadline)?;
-            if let Some(ClientEvent::Reply(RequestReply::Done { response, .. })) = events.into_iter().next() {
-                return match response {
-                    Response::Ok { cursor } => Ok(cursor),
-                    Response::Error { code, .. } => Err(ChatError::Rejected(code)),
-                };
+            if let Some(ClientEvent::Reply(RequestReply::Done { id, response, .. })) = events.into_iter().next() {
+                return Ok((id, response));
             }
         }
     }

@@ -66,7 +66,9 @@ The enrollment code is the bootstrap credential while its invitation is unexpire
    `seed = HKDF-SHA256(ikm = code bits, salt = "crewcraft-enroll-v1", info = "bootstrap-ed25519")`, derives the Ed25519
    public key from `seed`, and stores **only that public key**, the invitation record and its expiry. The trusted
    invitation includes the code, the server name and the SHA-256 fingerprint of the root certificate's DER bytes.
-   The administrator supplies the root certificate with the invitation or through the organization's trust setup.
+   The administrator supplies the root certificate with the invitation or through the organization's trust setup,
+   or the client fetches it from the server's own chain, accepting it only by that fingerprint and only when the
+   chain verifies against it for the server name; fetching presents no certificate and sends no application byte.
 2. The client parses the code (typos are caught by the check symbol before any network traffic), derives the same
    seed and key pair, and makes a self-signed certificate for it. Before connecting, it verifies the root certificate's
    fingerprint. The TLS handshake verifies the server chain and hostname before the client sends a request or password.
