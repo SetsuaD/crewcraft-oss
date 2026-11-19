@@ -12,7 +12,8 @@ use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crewcraft_accounts::identity::normalize_email;
@@ -227,9 +228,16 @@ fn invite(data: &Path, email: &str) -> io::Result<()> {
 fn serve(data: &Path) -> io::Result<()> {
     let (installation, config) = server_install::open(data, now_ms())?;
     let runtime = LabRuntime::bind_network(installation, config.serve_options(), &config.name, now_ms)?;
+    // Ctrl+C, SIGTERM (how service managers stop a server) and SIGHUP end serving cleanly: the listener stops
+    // accepting, open connections finish their current request, and the journals close.
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let flag = shutdown.clone();
+    ctrlc::set_handler(move || flag.store(true, Ordering::Release)).map_err(|error| io::Error::other(error.to_string()))?;
     println!("CrewCraft listening on {} as {}", runtime.local_addr()?, config.public_server());
     io::stdout().flush()?;
-    runtime.serve_enrolled(&AtomicBool::new(false))
+    let served = runtime.serve_enrolled(&shutdown);
+    println!("CrewCraft stopped.");
+    served
 }
 
 /// Shows an invitation as the link a client opens, and its parts for typing in by hand.

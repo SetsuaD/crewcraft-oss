@@ -1,0 +1,12 @@
+{
+  "id": "T235-clean-stop",
+  "title": "Server stops cleanly on Ctrl+C and SIGTERM",
+  "crate": "crewcraft-server",
+  "files": ["apps/crewcraft-server/src/main.rs", "apps/crewcraft-server/Cargo.toml"],
+  "test_path": "apps/crewcraft-server/tests/t235_clean_stop.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t235_clean_stop",
+  "depends_on": ["T231-first-run"],
+  "spec": "`crewcraft-server serve` installs a Ctrl+C / SIGTERM / SIGHUP handler (ctrlc with `termination`) that sets the shutdown flag the listener already polls; serving then returns, prints `CrewCraft stopped.`, exits 0 and releases the state lock.",
+  "status": "done",
+  "context": ["apps/crewcraft-server/src/listener.rs"]
+}
