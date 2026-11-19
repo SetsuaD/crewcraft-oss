@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "crewcraft"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-admission",
  "crewcraft-client-core",
@@ -850,7 +850,7 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-accounts"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "argon2",
  "base64",
@@ -862,7 +862,7 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-admission"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-pki",
  "crewcraft-tls",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-bootstrap"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-accounts",
  "crewcraft-admission",
@@ -890,14 +890,14 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-client-core"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-proto",
 ]
 
 [[package]]
 name = "crewcraft-desktop-ui"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-client-core",
  "crewcraft-ui-model",
@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-enroll"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "ed25519-dalek",
  "hkdf",
@@ -918,7 +918,7 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-pki"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-tls",
  "rand_core",
@@ -932,11 +932,11 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-proto"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 
 [[package]]
 name = "crewcraft-server"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft",
  "crewcraft-accounts",
@@ -962,7 +962,7 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-server-core"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "chacha20poly1305",
  "crewcraft-accounts",
@@ -976,11 +976,11 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-strict-toml"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 
 [[package]]
 name = "crewcraft-theme"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-strict-toml",
  "sha2",
@@ -988,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-tls"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "rcgen",
  "rustls",
@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-totp"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "hmac",
  "sha1",
@@ -1006,14 +1006,14 @@ dependencies = [
 
 [[package]]
 name = "crewcraft-ui-model"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-client-core",
 ]
 
 [[package]]
 name = "crewcraft-update"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-strict-toml",
  "sha2",
@@ -4805,7 +4805,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.0.1"
+version = "0.1.0-beta.1"
 dependencies = [
  "cab",
  "flate2",
