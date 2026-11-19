@@ -123,7 +123,7 @@ pub fn enroll(
             BootstrapResponse::Error { code } => return Err(EnrollmentError::SetupRefused(code)),
             BootstrapResponse::Activated { .. } => return Err(EnrollmentError::Setup(ExchangeProblem::UnexpectedReply)),
         };
-        if !uri.strip_prefix("otpauth://totp/").is_some_and(|rest| !rest.is_empty()) || uri.bytes().any(|byte| byte.is_ascii_control()) {
+        if uri.strip_prefix("otpauth://totp/").is_none_or(|rest| rest.is_empty()) || uri.bytes().any(|byte| byte.is_ascii_control()) {
             return Err(EnrollmentError::Setup(ExchangeProblem::InvalidSetupUri));
         }
         prompt(TotpSetup(&uri)).ok_or(EnrollmentError::PromptCancelled)?
