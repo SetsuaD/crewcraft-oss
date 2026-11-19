@@ -11,8 +11,9 @@ same change that adds the dependency; the security contributor reviews it (CODEO
 | Helper | Pulled in by | Why it is needed | Pure-Rust option considered | Approved |
 |---|---|---|---|---|
 | `cc` | `ring` 0.17 (through `rustls`, crate `crewcraft-tls`) | ring compiles its C and assembly routines with `cc`. It is the crypto provider of the first owned TLS proof (M2, work item W0). | `rustls-graviola` (no C, but x86_64 and aarch64 only and very new), `rustls-rustcrypto` (pre-release), `aws-lc-rs` (audited, but also needs `cmake`) | No: waits for the security contributor's review (CODEOWNERS) |
+| `pkg-config` | `wayland-sys` 0.31 (through `winit` and `glutin`, used by `eframe` for the desktop window on Linux, crate `crewcraft`) | wayland-sys's build script can look up the system's Wayland library. The window loads libwayland at run time (winit's `wayland-dlopen`), so nothing is compiled or linked at build time; the helper is listed because it is in `Cargo.lock`. Linux desktops supply libwayland, libxkbcommon, X11 and OpenGL; they are run-time requirements of the package, not build inputs | None mature: winit is the Rust windowing library egui uses, and it reaches the display server through these system libraries | No: waits for the security contributor's review (CODEOWNERS) |
 
-Only the helper in the table is native; every other dependency is pure Rust.
+Only the helpers in the table are native; every other dependency is pure Rust.
 
 ## Expected decisions
 
