@@ -176,6 +176,27 @@ pub fn write_public_port(dir: &Path, port: u16) -> io::Result<()> {
     write_new(&dir.join(PUBLIC_PORT_FILE), format!("{port}\n").as_bytes())
 }
 
+/// Check, before anything is created, that an invitation can be written to `path` for a scripted install (T237): it
+/// must not exist yet (an existing file is never overwritten or appended to) and its folder must exist.
+pub fn check_invitation_file(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "the invitation file already exists; give a new path")),
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        Err(_) => {}
+    }
+    let folder = path.parent().filter(|folder| !folder.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    if !fs::metadata(folder)?.is_dir() {
+        return Err(invalid("the invitation file's folder does not exist"));
+    }
+    Ok(())
+}
+
+/// Write an invitation to a new file readable by its owner only (0600 on Unix). It holds a secret enrollment code:
+/// hand it over privately and delete it once the person has enrolled.
+pub fn write_invitation_file(path: &Path, text: &str) -> io::Result<()> {
+    write_new(path, text.as_bytes())
+}
+
 /// The server as invitations write it: the recorded name with the public port when one is recorded, else the listen
 /// port.
 pub fn link_server(config: &ServerConfig, public_port: Option<u16>) -> String {
