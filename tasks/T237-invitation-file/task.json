@@ -1,0 +1,12 @@
+{
+  "id": "T237-invitation-file",
+  "title": "Scripted install: first-run and invite write the invitation to a new owner-only file",
+  "crate": "crewcraft-server",
+  "files": ["apps/crewcraft-server/src/main.rs", "apps/crewcraft-server/src/server_install.rs", "README.md"],
+  "test_path": "apps/crewcraft-server/tests/t237_invitation_file.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t237_invitation_file",
+  "depends_on": ["T231-first-run", "T234-invitation-link"],
+  "spec": "`first-run ... --invitation-file <new-file>` and `invite <data> <email> --invitation-file <new-file>` run without a terminal and write the invitation (link, server, code, root fingerprint) to a new file created with create_new and mode 0600; the terminal gets only a 'written to' line. The file is checked before anything is created: an existing path or a missing folder is refused and no server is created. Without a terminal and without the flag, both refuse and name the flag.",
+  "status": "done",
+  "context": ["crates/enroll/src/invitation.rs"]
+}

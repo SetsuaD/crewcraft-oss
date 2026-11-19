@@ -98,7 +98,8 @@ crewcraft-server add-member /srv/crewcraft <room> admin@example.org person@examp
 
 `--name` is the DNS name or IP address clients connect to; the server certificate is signed for it. `--listen`
 defaults to `127.0.0.1:7443`. Behind port forwarding, `--public-port <port>` is the port people connect to, and
-invitations carry it. Each invitation is shown as a
+invitations carry it. For a scripted install (no terminal), add `--invitation-file <new-file>` to `first-run` or
+`invite`: the invitation goes to that new file, readable by its owner only; delete it once the person has enrolled. Each invitation is shown as a
 `crewcraft://enroll?server=<name:port>&code=<code>&root_sha256=<hex>` link and as its parts. Send the person the
 link over a channel you trust: it is their invitation. `crewcraft-server --help` lists every command, including the
 loopback-only `lab` ones.
