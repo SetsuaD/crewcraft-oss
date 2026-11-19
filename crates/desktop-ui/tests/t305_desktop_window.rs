@@ -142,3 +142,35 @@ fn a_failure_is_shown_until_the_screen_changes() {
     h.run();
     assert!(h.query_by_label("The invitation has expired.").is_none());
 }
+
+#[test]
+fn enter_sends_and_shift_enter_does_not() {
+    let mut h = harness();
+    h.state_mut().apply(Update::SignedIn { email: "ana@example.org".to_owned(), rooms: vec!["general".to_owned()] });
+    h.run();
+    let _ = h.state_mut().take_actions();
+    type_into(&mut h, "Message", "first line");
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Enter);
+    h.run();
+    assert!(h.state_mut().take_actions().is_empty(), "Shift+Enter must not send");
+    h.get_by_label("Message").type_text("second line");
+    h.run();
+    h.key_press(egui::Key::Enter);
+    h.run();
+    match h.state_mut().take_actions().as_slice() {
+        [Action::Room(Command::Post { room, text })] => {
+            assert_eq!(room, "general");
+            assert!(text.starts_with("first line") && text.ends_with("second line"), "{text:?}");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn the_last_email_fills_the_sign_in_form_once() {
+    let mut h = harness();
+    h.state_mut().apply(Update::Enrolled { server: "chat.example.org".to_owned() });
+    h.state_mut().apply(Update::LastEmail("ana@example.org".to_owned()));
+    h.run();
+    assert_eq!(h.get_by_label("Email").value().as_deref(), Some("ana@example.org"));
+}
