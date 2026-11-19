@@ -12,6 +12,12 @@ step "clippy";   cargo clippy --workspace --all-targets --locked -- -D warnings
 step "tests";    cargo test --workspace --locked
 step "sanitize"; bash tools/sanitize-scan.sh
 step "rust-only"; bash tools/rust-only.sh
+step "cargo-deny"
+if command -v cargo-deny >/dev/null 2>&1; then
+  cargo deny --locked check
+else
+  echo "cargo-deny: not installed here, SKIPPED (licenses, advisories, bans and sources were not checked)"
+fi
 
 if [ "${1:-}" = "--tasks" ]; then
   step "open tasks (informational)"

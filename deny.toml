@@ -27,6 +27,8 @@ yanked = "deny"
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# The workspace's own crates depend on each other by path with no version; they are never published (publish = false).
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
