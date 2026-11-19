@@ -1,0 +1,194 @@
+//! Synchronous chat over an already verified, enrolled device connection. Task T215.
+
+use std::io::{self, Read, Write};
+use std::time::{Duration, Instant};
+
+use crewcraft_client_core::client::{Client, ClientEvent};
+use crewcraft_client_core::notify::Settings;
+use crewcraft_client_core::requests::Reply as RequestReply;
+use crewcraft_client_core::room_view::RoomView;
+use crewcraft_client_core::session::{ClientSession, Phase, SessionError};
+use crewcraft_proto::frame::{self, ReceivedFrame};
+use crewcraft_proto::handshake::Hello;
+use crewcraft_proto::message::{CodecError, MAX_NAME};
+use crewcraft_proto::request::{Request, Response};
+use crewcraft_proto::signin::{self, SignIn};
+
+const SIGN_IN_REPLY_LIMIT: usize = 1 + signin::TOKEN_LEN;
+const WELCOME_LIMIT: usize = 9 + MAX_NAME;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatError {
+    Io(io::ErrorKind),
+    SignInProtocol,
+    SignInRefused,
+    HandshakeRefused,
+    Session(SessionError),
+    Request(CodecError),
+    Rejected(u16),
+    Closed,
+    /// An out-of-order event or a head behind the local cursor requires resync.
+    HistoryGap {
+        reached: u64,
+        head: u64,
+    },
+    /// The stream stopped or the deadline expired before the advertised head arrived.
+    SyncIncomplete {
+        reached: u64,
+        head: u64,
+        reason: io::ErrorKind,
+    },
+}
+
+pub struct ChatSession<S, D> {
+    stream: S,
+    set_deadline: D,
+    frame_timeout: Duration,
+    session: ClientSession,
+    closed: bool,
+}
+
+impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
+    /// The stream has already authenticated both peers. `set_deadline` must enforce one absolute
+    /// cutoff across all I/O for a frame. The same operation deadline covers sign-in and negotiation.
+    pub fn connect(
+        stream: S,
+        set_deadline: D,
+        credentials: &SignIn<'_>,
+        hello: Hello,
+        settings: Settings,
+        frame_timeout: Duration,
+        deadline: Instant,
+    ) -> Result<Self, ChatError> {
+        let versions = hello.min_version..=hello.max_version;
+        let supported_features = hello.features;
+        let client = Client::new(credentials.email, settings);
+        let mut chat = Self { stream, set_deadline, frame_timeout, session: ClientSession::new(hello, client), closed: false };
+        chat.authenticate(credentials, deadline)?;
+
+        let hello = chat.session.start().map_err(ChatError::Session)?;
+        chat.write_frame(&hello, deadline)?;
+        let reply = chat.read_frame(WELCOME_LIMIT, deadline)?;
+        chat.session.receive(reply.as_bytes(), 0, 0).map_err(ChatError::Session)?;
+        match chat.session.phase() {
+            Phase::Open { version, features } if versions.contains(&version) && features & !supported_features == 0 => Ok(chat),
+            _ => Err(ChatError::HandshakeRefused),
+        }
+    }
+
+    /// Send one post and return only its matched server acknowledgement. A transport failure
+    /// after dispatch leaves the result unknown. The runtime does not retry a write.
+    pub fn post(&mut self, room: &str, text: &str, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<u64, ChatError> {
+        self.request(Request::Post { room: room.to_owned(), text: text.to_owned() }, now_ms, local_minute, deadline)
+    }
+
+    pub fn edit(&mut self, room: &str, target: u64, text: &str, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<u64, ChatError> {
+        self.request(Request::Edit { room: room.to_owned(), target, text: text.to_owned() }, now_ms, local_minute, deadline)
+    }
+
+    pub fn delete(&mut self, room: &str, target: u64, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<u64, ChatError> {
+        self.request(Request::Delete { room: room.to_owned(), target }, now_ms, local_minute, deadline)
+    }
+
+    /// Follow the room and fetch events after its current cursor. Return the acknowledged head
+    /// after the timeline reaches it. A gap or incomplete replay leaves the applied prefix visible.
+    pub fn sync(&mut self, room: &str, direct: bool, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<u64, ChatError> {
+        if self.closed {
+            return Err(ChatError::Closed);
+        }
+        let inbox = self.session.client_mut().inbox_mut();
+        inbox.follow(room, direct);
+        let start = inbox.view(room).ok_or(ChatError::Closed)?.cursor();
+        let head = self.request(Request::Sync { room: room.to_owned(), cursor: start }, now_ms, local_minute, deadline)?;
+
+        loop {
+            let view = self.view(room).ok_or(ChatError::Closed)?;
+            let reached = view.cursor();
+            if view.needs_resync() || head < start {
+                self.closed = true;
+                return Err(ChatError::HistoryGap { reached, head });
+            }
+            if reached >= head {
+                return Ok(head);
+            }
+            match self.receive(now_ms, local_minute, deadline) {
+                Err(ChatError::Io(reason)) => return Err(ChatError::SyncIncomplete { reached, head, reason }),
+                Err(error) => return Err(error),
+                Ok(_) => {}
+            }
+        }
+    }
+
+    pub fn view(&mut self, room: &str) -> Option<&RoomView> {
+        self.session.client_mut().inbox().view(room)
+    }
+
+    fn authenticate(&mut self, credentials: &SignIn<'_>, deadline: Instant) -> Result<(), ChatError> {
+        let request = signin::encode_request(credentials).map_err(|_| ChatError::SignInProtocol)?;
+        let framed = frame::encode(&request).map_err(|_| ChatError::SignInProtocol)?;
+        self.write_frame(&framed, deadline)?;
+
+        let reply = self.read_frame(SIGN_IN_REPLY_LIMIT, deadline)?;
+        match signin::decode_reply(reply.payload()).map_err(|_| ChatError::SignInProtocol)? {
+            signin::Reply::Accepted { .. } => Ok(()),
+            signin::Reply::Refused => Err(ChatError::SignInRefused),
+        }
+    }
+
+    fn request(&mut self, request: Request, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<u64, ChatError> {
+        if self.closed {
+            return Err(ChatError::Closed);
+        }
+        let frame = self.session.client_mut().send(request, now_ms).map_err(ChatError::Request)?;
+        self.write_frame(&frame, deadline)?;
+
+        // There is exactly one request in flight. Client::receive matches its id and ignores old ids.
+        loop {
+            let events = self.receive(now_ms, local_minute, deadline)?;
+            if let Some(ClientEvent::Reply(RequestReply::Done { response, .. })) = events.into_iter().next() {
+                return match response {
+                    Response::Ok { cursor } => Ok(cursor),
+                    Response::Error { code, .. } => Err(ChatError::Rejected(code)),
+                };
+            }
+        }
+    }
+
+    fn receive(&mut self, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<Vec<ClientEvent>, ChatError> {
+        let frame = self.read_frame(frame::MAX_FRAME, deadline)?;
+        self.session.receive(frame.as_bytes(), now_ms, local_minute).map_err(|error| {
+            self.closed = true;
+            ChatError::Session(error)
+        })
+    }
+
+    fn prepare_frame(&mut self, deadline: Instant) -> Result<(), ChatError> {
+        let now = Instant::now();
+        if deadline <= now || self.frame_timeout.is_zero() {
+            self.closed = true;
+            return Err(ChatError::Io(io::ErrorKind::TimedOut));
+        }
+        let cutoff = now.checked_add(self.frame_timeout).map_or(deadline, |frame_deadline| frame_deadline.min(deadline));
+        (self.set_deadline)(&mut self.stream, cutoff);
+        Ok(())
+    }
+
+    fn write_frame(&mut self, frame: &[u8], deadline: Instant) -> Result<(), ChatError> {
+        self.prepare_frame(deadline)?;
+        self.stream.write_all(frame).and_then(|()| self.stream.flush()).map_err(|error| {
+            self.closed = true;
+            ChatError::Io(error.kind())
+        })
+    }
+
+    fn read_frame(&mut self, limit: usize, deadline: Instant) -> Result<ReceivedFrame, ChatError> {
+        self.prepare_frame(deadline)?;
+        match frame::read_frame(&mut self.stream, limit) {
+            Ok(Some(frame)) => Ok(frame),
+            result => {
+                self.closed = true;
+                Err(ChatError::Io(result.err().map_or(io::ErrorKind::UnexpectedEof, |error| error.kind())))
+            }
+        }
+    }
+}

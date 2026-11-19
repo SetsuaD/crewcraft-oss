@@ -6,8 +6,8 @@
 ## 1. Principles
 
 - **Dark by default.** The staff entrance (the server's main port) speaks only mutual TLS. A client without an acceptable certificate
-  fails the handshake and receives zero application bytes. TLS 1.3 has to send its handshake messages before the
-  client certificate arrives. The server sends no HTTP response, banner or login page on that connection.
+  fails the TLS handshake, so it receives no HTTP response at all: no banner, no login page, no error page, nothing
+  that confirms what is listening.
 - **Devices are enrolled, people are verified.** A device certificate says "this is an enrolled device of person P";
   the person's email and password and a TOTP code say "person P is present". All of them are required for a session
   (section 8).
@@ -47,12 +47,11 @@ The enrollment code is the bootstrap credential while its invitation is unexpire
    invitation includes the code, the server name and the SHA-256 fingerprint of the root certificate's DER bytes.
    The administrator supplies the root certificate with the invitation or through the organization's trust setup.
 2. The client parses the code (typos are caught by the check symbol before any network traffic), derives the same
-   seed and key pair, makes a self-signed certificate for it, and connects. It checks the fingerprint of the supplied
-   root certificate before trusting that root and uses standard TLS certificate chain and hostname checks. A missing
-   or mismatched trust anchor stops enrollment before the client sends a request or password.
-3. The server's client-certificate verifier accepts a handshake if the certificate chains to the issuing CA and is not
-   revoked, **or** if it is self-signed with a public key that matches an unexpired, unused invitation. Anything else
-   fails the handshake.
+   seed and key pair, and makes a self-signed certificate for it. Before connecting, it verifies the root certificate's
+   fingerprint. The TLS handshake verifies the server chain and hostname before the client sends a request or password.
+3. For a device, the verifier requires the exact active client-authentication certificate from the enrolled-device
+   record and a valid chain. For bootstrap, it requires a valid self-signed certificate and proof of possession of the
+   public key that matches a live invitation. Other connections fail the TLS handshake before any application reply.
 4. A bootstrap connection can reach exactly two calls. The first stages the verified certificate signing request
    and password setup, then returns the authenticator setup URI. The same connection confirms the first TOTP code
    against that staged request. Every other request on the connection is closed without a response.

@@ -9,6 +9,23 @@ publish.workspace = true
 
 [dependencies]
 crewcraft-client-core.workspace = true
+crewcraft-enroll.workspace = true
+crewcraft-proto.workspace = true
+crewcraft-tls.workspace = true
+rcgen.workspace = true
+rpassword = "7.5.4"
+rustls.workspace = true
+time.workspace = true
+x509-parser = { workspace = true, features = ["verify"] }
+zeroize.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.30.1", default-features = false, features = ["signal", "term"] }
+
+[dev-dependencies]
+crewcraft-admission.workspace = true
+crewcraft-pki.workspace = true
+crewcraft-totp.workspace = true
 
 [lints]
 workspace = true
