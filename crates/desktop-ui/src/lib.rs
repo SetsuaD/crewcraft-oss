@@ -148,12 +148,33 @@ pub struct Window {
     notice: Option<String>,
     busy: bool,
     actions: Vec<Action>,
+    /// Which pane a phone-width window shows (one at a time, T402).
+    phone_pane: PhonePane,
 }
+
+/// The panes of the phone layout (REQUIREMENTS 2.9): the room list, one conversation, and the account.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PhonePane {
+    #[default]
+    Chats,
+    Conversation,
+    Account,
+}
+
+/// Below this width (in points) the chat screen uses the phone layout.
+pub const PHONE_MAX_WIDTH: f32 = 600.0;
+/// The smallest height of anything tapped in the phone layout, in points.
+pub const TOUCH_TARGET: f32 = 44.0;
 
 impl Window {
     /// The enrollment screen until the app says otherwise.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The pane the phone layout shows.
+    pub fn phone_pane(&self) -> PhonePane {
+        self.phone_pane
     }
 
     pub fn screen(&self) -> Screen {
@@ -207,6 +228,7 @@ impl Window {
             }
             Update::Failed(text) => self.notice = Some(text),
             Update::SignedOut => {
+                self.phone_pane = PhonePane::Chats;
                 self.feeds.clear();
                 self.rooms = RoomList::new();
                 self.composer = Composer::new();
@@ -308,6 +330,10 @@ impl Window {
     }
 
     fn chat_ui(&mut self, ui: &mut Ui) {
+        if ui.available_width() < PHONE_MAX_WIDTH {
+            self.phone_chat_ui(ui);
+            return;
+        }
         egui::Panel::top("crewcraft-app-bar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.strong("CrewCraft");
@@ -351,6 +377,84 @@ impl Window {
                 }
             });
         });
+    }
+
+    /// The phone layout: one pane at a time, a bottom tab bar, and larger touch targets (T402).
+    fn phone_chat_ui(&mut self, ui: &mut Ui) {
+        ui.spacing_mut().interact_size.y = TOUCH_TARGET;
+        let in_conversation = self.phone_pane == PhonePane::Conversation && self.rooms.selected().is_some();
+        if !in_conversation {
+            egui::Panel::bottom("crewcraft-tabs").show(ui, |ui| {
+                ui.columns(2, |columns| {
+                    let total = self.rooms.total_unread();
+                    let chats = if total > 0 { format!("Chats ({total})") } else { "Chats".to_owned() };
+                    let size = [columns[0].available_width(), TOUCH_TARGET];
+                    if columns[0].add_sized(size, egui::Button::selectable(self.phone_pane == PhonePane::Chats, chats)).clicked() {
+                        self.phone_pane = PhonePane::Chats;
+                    }
+                    if columns[1].add_sized(size, egui::Button::selectable(self.phone_pane == PhonePane::Account, "Account")).clicked() {
+                        self.phone_pane = PhonePane::Account;
+                    }
+                });
+            });
+        }
+        match self.phone_pane {
+            PhonePane::Conversation if in_conversation => {
+                let room = self.rooms.selected().map(str::to_owned).unwrap_or_default();
+                egui::Panel::top("crewcraft-conversation-bar").show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.add_sized([96.0, TOUCH_TARGET], egui::Button::new("< Chats")).clicked() {
+                            self.phone_pane = PhonePane::Chats;
+                        }
+                        ui.strong(&room);
+                    });
+                });
+                egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
+                egui::CentralPanel::default_margins().show(ui, |ui| {
+                    ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
+                        for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
+                            feed_row_ui(ui, row);
+                        }
+                    });
+                });
+            }
+            PhonePane::Account => {
+                egui::CentralPanel::default_margins().show(ui, |ui| {
+                    ui.heading("Account");
+                    ui.label(format!("Signed in as {}", self.email));
+                    if !self.server.is_empty() {
+                        ui.label(format!("Server: {}", self.server));
+                    }
+                    ui.add_space(12.0);
+                    if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::new("Sign out")).clicked() {
+                        self.actions.push(Action::SignOut);
+                    }
+                });
+            }
+            _ => {
+                self.phone_pane = PhonePane::Chats;
+                egui::CentralPanel::default_margins().show(ui, |ui| {
+                    ui.heading("Your rooms");
+                    let rows = self.rooms.rows();
+                    if rows.is_empty() {
+                        ui.label("You are not in any rooms yet.");
+                    }
+                    ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                        let mut open = None;
+                        for row in rows {
+                            let text = if row.unread > 0 { format!("{}  ({})", row.name, row.unread) } else { row.name.clone() };
+                            if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, text)).clicked() {
+                                open = Some(row.name);
+                            }
+                        }
+                        if let Some(room) = open {
+                            self.open_room(&room);
+                            self.phone_pane = PhonePane::Conversation;
+                        }
+                    });
+                });
+            }
+        }
     }
 
     fn composer_ui(&mut self, ui: &mut Ui, room: &str) {
