@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crewcraft_accounts::identity::normalize_email;
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_proto::handshake::ServerSide;
+use crewcraft_proto::request::FEATURE_LIST_ROOMS;
 use crewcraft_server::lab_admin::{self, DisplayFailed, IssuedCode, ProtectedDisplay};
 use crewcraft_server::lab_runtime::LabRuntime;
 use crewcraft_server::lab_server::{LabOptions, Timeouts};
@@ -240,7 +241,8 @@ struct LinkTerminal {
 
 impl ProtectedDisplay for LinkTerminal {
     fn show(&mut self, issued: &IssuedCode<'_>) -> Result<(), DisplayFailed> {
-        let link = server_install::enrollment_link(&self.server, issued.code(), &self.root_sha256);
+        // Built the way a client reads it, so a link the client would refuse is never shown.
+        let link = server_install::invitation(&self.server, issued.code(), &self.root_sha256).map_err(|_| DisplayFailed)?;
         let root = server_install::hex(&self.root_sha256);
         let (email, server, code) = (issued.email(), &self.server, issued.code());
         writeln!(self.out, "Private invitation for {email}\n{link}\nServer {server}\nCode {code}\nRoot SHA-256 {root}").map_err(|_| DisplayFailed)?;
@@ -271,7 +273,7 @@ fn serve_lab(state: &Path, trusted_root: &Path, port: u16) -> io::Result<()> {
             signed_in_frame: Duration::from_secs(120),
             bootstrap: Duration::from_secs(120),
         },
-        protocol: ServerSide { min_version: 1, max_version: 1, features: 0, name: "CrewCraft Lab".into() },
+        protocol: ServerSide { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS, name: "CrewCraft Lab".into() },
     };
     let runtime = LabRuntime::bind(installation, options, now_ms)?;
     println!("CrewCraft lab listening on {}", runtime.local_addr()?);

@@ -846,6 +846,7 @@ dependencies = [
  "ed25519-dalek",
  "hkdf",
  "sha2",
+ "zeroize",
 ]
 
 [[package]]

@@ -38,6 +38,7 @@ per platform.
 | 2026-11-21 | Window model: room list, composer, feed rows | T300, T301, T302 |
 | 2026-11-28 | Client: connection worker that runs the chat session for the window; enrolled device saved between runs | T303, T304 |
 | 2026-11-28 | Server: serve on a chosen address and server name, not only loopback; `first-run` creates the installation and prints the first invitation | T230, T231 |
+| 2026-11-28 | Protocol for the window: fetch the root from an invitation's fingerprint, list a person's rooms, one invitation-link type | T232, T233, T234 |
 | 2026-12-12 | Desktop window (egui): enroll, sign in, room list, feed and composer; bundled OFL font; original app icon | T305, T306 |
 | 2026-12-19 | Packages: MSI, AppImage, deb, DMG, server archives per platform, `SHA256SUMS.txt` | T307 |
 | 2026-12-26 | Acceptance: the two-client flow on a clean machine per platform; a client without a certificate gets zero bytes | T308 |
