@@ -1,0 +1,28 @@
+{
+  "id": "T421-ios-window",
+  "title": "The egui window on iOS: winit's iOS backend, the bundled font, safe areas and the on-screen keyboard",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/Cargo.toml",
+    "apps/crewcraft/src/ios.rs",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft/src/main.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "Cargo.lock",
+    "docs/MOBILE.md"
+  ],
+  "test_path": "apps/crewcraft/tests/t421_ios_window.rs",
+  "test_cmd": "cargo test -p crewcraft --test t421_ios_window",
+  "depends_on": [
+    "T402-phone-layout",
+    "T309-desktop-app"
+  ],
+  "spec": "On iOS, `crewcraft` with no arguments prints its version line and opens the same DesktopApp (crewcraft-desktop-ui's Window with fonts(), so the phone layout below 600 points) through eframe and winit's iOS backend, with wgpu (Metal) only, asking the device for exactly the limits the GPU offers (the iOS Simulator falls short of wgpu's defaults); glow and accesskit stay desktop-only, since glutin has no iOS backend. Warnings and errors from the window's libraries go to standard error, the app's log. Tapping a text field raises the on-screen keyboard (egui asks for text input, winit makes its view the first responder) and typed characters and Backspace reach the field. crewcraft::ios::PhoneApp wraps the app: before every frame it reads the safe-area insets and the keyboard layout guide of the key window's content view (winit's view) from UIKit (objc2-ui-kit, safe calls only, no unsafe code) and sets RawInput::safe_area_insets to the safe area with the bottom raised to the keyboard's top edge when the keyboard covers more (ios::insets; non-finite or negative values become 0, a guide frame of zero height is not yet laid out and means no keyboard, and the bottom never exceeds the window); the app is laid out inside those insets (ios::inside_insets), the rest painted with the window's background, so the layout ends above the keyboard and clear of the status bar, Dynamic Island and home indicator; after the insets or the text focus change it reads them again every 50 ms for 12 frames while the keyboard slides. The launch argument --focus-first-field (FOCUS_FIRST_FIELD) presses Tab until a text field has the focus and then places its text cursor, as a tap does, at most FOCUS_TRIES frames, until egui asks for text input, so the keyboard can be checked on a simulator that nothing can tap; without it nothing is pressed. The enrollment and sign-in forms are never wider than the window (crewcraft-desktop-ui): at phone width a fixed 460-point form pushed its fields past both screen edges, where egui shows no text cursor and so never asks for the keyboard. The data folder on iOS is Library/Application Support/CrewCraft under HOME (the app container; None for a missing or relative HOME). The device enrolls as 'CrewCraft on iOS', and until the key store comes (T422, T423) the missing key store is explained in iPhone words. Desktop builds are unchanged.",
+  "status": "done",
+  "context": [
+    "docs/MOBILE.md",
+    "docs/SPEC.md",
+    "crates/desktop-ui/src/lib.rs"
+  ]
+}

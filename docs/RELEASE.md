@@ -3,8 +3,9 @@
 `cargo xtask dist` builds the release binaries and writes the release assets plus `SHA256SUMS.txt`: the Linux and
 Windows assets on one Linux x86_64 machine, the macOS assets on a Mac ([below](#macos)). The packages are written in
 Rust (`xtask/`). These are not: the MinGW-w64 linker for the Windows binaries, `mksquashfs` for the AppImage's image,
-the prebuilt AppImage runtime at the front of the AppImage, Apple's `lipo` and `hdiutil` on the Mac, and the Android
-NDK's linker and `aapt2` for the Android app ([below](#android)) ([NON-RUST-DEPENDENCIES.md](NON-RUST-DEPENDENCIES.md)).
+the prebuilt AppImage runtime at the front of the AppImage, Apple's `lipo` and `hdiutil` on the Mac, the Android
+NDK's linker and `aapt2` for the Android app ([below](#android)), and Xcode's iOS SDK and `codesign` for the iPhone
+app ([below](#ios-simulator)) ([NON-RUST-DEPENDENCIES.md](NON-RUST-DEPENDENCIES.md)).
 
 ## Build the release packages
 
@@ -174,6 +175,37 @@ adb logcat -s CrewCraft      # crewcraft <version> (protocol <n>) on Android
 ```
 
 `cargo test -p xtask --test t400_android_apk` checks the manifest, icons, zip layout and signature without the SDK.
+
+## iOS (simulator)
+
+The iPhone app is built on a Mac with Xcode and its iOS Simulator (Rust 1.95; Xcode provides the iOS SDK, the linker
+and `codesign`). It is not a release asset yet: a build for real iPhones needs a signing identity and comes with
+TestFlight (task T424).
+
+```sh
+rustup target add x86_64-apple-ios aarch64-apple-ios-sim
+cargo xtask ios --version 0.1.0-beta.1 --out dist-ios        # --target sim-x86_64 or sim-arm64; default: this Mac's
+xcrun simctl boot "iPhone 17"                                 # any iPhone on iOS 17 or later
+xcrun simctl install booted dist-ios/CrewCraft.app
+xcrun simctl launch --console-pty booted io.github.setsuad.crewcraft
+```
+
+It builds `crewcraft` for `x86_64-apple-ios` (Intel Macs) or `aarch64-apple-ios-sim` (Apple Silicon) with
+`IPHONEOS_DEPLOYMENT_TARGET=17.0`, checks that the program is a Mach-O for that CPU built for the simulator and iOS
+17.0, and writes `dist-ios/CrewCraft.app`, replacing an earlier one, signed ad hoc (`codesign --sign -`). The bundle
+is flat and written by xtask in Rust, with no Xcode project:
+
+| File | Contents |
+|---|---|
+| `crewcraft` | The program (stripped, with the build machine's folders remapped as in the release builds) |
+| `Info.plist` | Identifier `io.github.setsuad.crewcraft`, `CFBundleShortVersionString` the release's three numbers (the only form the App Store accepts), `CFBundleVersion` the same numbers as the MSI and macOS (`0.1.0-beta.1` is `0.1.201`), `MinimumOSVersion` 17.0, an empty `UILaunchScreen`, iPhone (`UIDeviceFamily` 1), portrait, `CFBundleSupportedPlatforms` `iPhoneSimulator` |
+| `AppIcon60x60` at `@2x` and `@3x` | The home-screen icon at 120 and 180 px, rendered from `assets/icon/crewcraft.svg` and named in `CFBundleIcons` |
+| `PkgInfo`, `licenses/` | `APPL????`, and the license files with the font's license |
+
+`--console-pty` shows what the program prints (its first line is `crewcraft <version> (protocol <n>)`); the system's
+log of the app is `xcrun simctl spawn booted log stream --predicate 'process == "crewcraft"'`.
+The plist, the icons, the bundle layout and the program check are tested on Linux by `cargo test -p xtask` (task
+T420); on any other system `cargo xtask ios` stops before building, with an error.
 
 ## Unsigned beta builds
 

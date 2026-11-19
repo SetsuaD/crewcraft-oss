@@ -28,14 +28,40 @@ time.workspace = true
 x509-parser = { workspace = true, features = ["verify"] }
 zeroize.workspace = true
 
-# The window: wgpu first, glow (OpenGL) as the fallback. default_fonts stays off (docs/CLEAN-ROOM.md rule 3): crewcraft-desktop-ui installs the bundled Inter.
-[target.'cfg(not(target_os = "android"))'.dependencies]
+# The window. default_fonts stays off (docs/CLEAN-ROOM.md rule 3): crewcraft-desktop-ui installs the bundled Inter.
+# Desktop: wgpu first, glow (OpenGL) as the fallback, and the screen reader.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 eframe = { version = "0.37", default-features = false, features = ["accesskit", "glow", "wgpu", "wayland", "x11"] }
 
 # On Android (apps/crewcraft-android, T401): OpenGL ES through glow, under Android's NativeActivity. eframe's
 # screen-reader support needs GameActivity (Java) on Android, so it is left out there for now.
 [target.'cfg(target_os = "android")'.dependencies]
 eframe = { version = "0.37", default-features = false, features = ["glow", "android-native-activity"] }
+
+# iOS (src/ios.rs, task T421): wgpu on Metal only (glutin has no iOS backend); the window's safe area and the
+# on-screen keyboard's frame are read from UIKit through its Rust bindings (the crates winit and egui-winit already
+# use on iOS; they declare Apple's own functions, nothing is compiled from C).
+[target.'cfg(target_os = "ios")'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["wgpu"] }
+# The window's warnings and errors (eframe, winit, wgpu) on standard error, which is the app's log on iOS.
+log = { version = "0.4", features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSEnumerator", "NSSet", "NSThread"] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "UIApplication",
+    "UIGeometry",
+    "UIKeyboardLayoutGuide",
+    "UILayoutGuide",
+    "UIResponder",
+    "UIScene",
+    "UISceneDefinitions",
+    "UITrackingLayoutGuide",
+    "UIView",
+    "UIViewController",
+    "UIWindow",
+    "UIWindowScene",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.30.1", default-features = false, features = ["signal", "term"] }

@@ -9,6 +9,7 @@ usage: cargo xtask <command>
 commands:
   dist    build the release packages (cargo xtask dist --help)
   apk     build the Android app (cargo xtask apk --help)
+  ios     build CrewCraft.app for the iOS Simulator, on a Mac (cargo xtask ios --help)
   icons   rewrite assets/icon/crewcraft.ico from assets/icon/crewcraft.svg";
 
 fn run(args: &[String]) -> xtask::Result<()> {
@@ -26,6 +27,13 @@ fn run(args: &[String]) -> xtask::Result<()> {
                 return Ok(());
             }
             xtask::android::run(&xtask::android::parse_args(rest)?)
+        }
+        Some((command, rest)) if command == "ios" => {
+            if rest.iter().any(|arg| arg == "--help" || arg == "-h") {
+                println!("{}", xtask::ios::USAGE);
+                return Ok(());
+            }
+            xtask::ios::run(&xtask::ios::parse_args(rest)?)
         }
         Some((command, _)) if command == "icons" => {
             let root = xtask::dist::workspace_root()?;

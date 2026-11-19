@@ -1,5 +1,6 @@
 //! CrewCraft client executable: with no arguments it opens the desktop window (`app`, task T309); `--version` and the
-//! loopback `lab chat` terminal client stay for development.
+//! loopback `lab chat` terminal client stay for development. On iOS the same window opens through `crewcraft::ios`
+//! (task T421).
 
 // A release build on Windows is a GUI program: no console window opens behind it.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -38,6 +39,11 @@ fn main() -> ExitCode {
 fn run(args: &[OsString]) -> io::Result<()> {
     match args {
         [] => window()?,
+        #[cfg(target_os = "ios")]
+        [flag] if flag == crewcraft::ios::FOCUS_FIRST_FIELD => {
+            version();
+            crewcraft::ios::run(true)?;
+        }
         [flag] if flag == "--version" => version(),
         [lab, chat, address, root_path, fingerprint, email, room] if lab == "lab" && chat == "chat" => {
             if !io::stdin().is_terminal() || !io::stdout().is_terminal() || !io::stderr().is_terminal() {
@@ -77,6 +83,7 @@ fn run(args: &[OsString]) -> io::Result<()> {
 }
 
 /// The app's icon, decoded for the window title bar and task bar.
+#[cfg(not(target_os = "ios"))]
 fn icon() -> Option<eframe::egui::IconData> {
     let decoder = png::Decoder::new(Cursor::new(&include_bytes!("../../../assets/icon/crewcraft.png")[..]));
     let mut reader = decoder.read_info().ok()?;
@@ -89,6 +96,14 @@ fn icon() -> Option<eframe::egui::IconData> {
     Some(eframe::egui::IconData { rgba, width: info.width, height: info.height })
 }
 
+/// On iOS: the version line (it shows in the app's log), then the window, which never returns.
+#[cfg(target_os = "ios")]
+fn window() -> io::Result<()> {
+    version();
+    crewcraft::ios::run(false)
+}
+
+#[cfg(not(target_os = "ios"))]
 fn window() -> io::Result<()> {
     // wgpu first: on Windows it uses Direct3D 12, which falls back to the WARP software renderer when there is no GPU
     // driver (VMs, remote desktops), where only OpenGL 1.1 exists. OpenGL (glow) is the fallback if wgpu cannot start.
@@ -98,6 +113,7 @@ fn window() -> io::Result<()> {
     }
 }
 
+#[cfg(not(target_os = "ios"))]
 fn open_window(renderer: eframe::Renderer) -> io::Result<()> {
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title("CrewCraft")

@@ -33,6 +33,8 @@ Programs that a build runs, rather than crates it compiles. Each is listed with 
 
 | `apksigner` (Android SDK build-tools, a Java program; needs a Java runtime) | `cargo xtask apk --keystore`, only | Signs the APK with a release key held in a Java keystore (PKCS#12 or JKS), which is how release and Play upload keys are usually kept. Without `--keystore` xtask signs in Rust (v2 scheme, ECDSA P-256, `ring`) and needs neither apksigner nor Java. `apksigner verify` is also the independent check of an APK ([RELEASE.md](RELEASE.md)) | Reading a PKCS#12 keystore in Rust (`p12` crates) and signing in Rust, which xtask already does for the test key; decided with the release identity (T406) | Listed as a platform tool of the Android build (2026-11-19) |
 
+| Xcode with its iOS SDK and Simulator (the linker, clang and `xcrun`), and `codesign` | `cargo xtask ios`, on a Mac only ([RELEASE.md](RELEASE.md#ios-simulator)) | Rust's iOS targets link against Apple's iOS SDK through Apple's linker, and `cc` compiles ring's C and assembly with Xcode's clang, as for macOS; the SDK is licensed for Apple hardware. `codesign --sign -` seals `CrewCraft.app` ad hoc (no identity). The `Info.plist`, the icons and the bundle layout are written by xtask in Rust: no Xcode project, asset catalog (`actool`), storyboard (`ibtool`), Swift or Objective-C. `xcrun simctl` only installs and starts the app on a simulator | None: no other iOS SDK or linker exists. A build for iPhones adds a signing identity and provisioning profile (T424) | No: waits for the maintainers' review |
+
 ## Shipped third-party binaries
 
 Prebuilt programs that are not built from source here but go into a release asset. Each is pinned by SHA-256, never
@@ -70,4 +72,6 @@ Each is decided when its milestone starts, and recorded here if it adds a row.
   C and need no row. The key stores that seal the desktop's device record (T313) are reached this way: Credential
   Manager through `windows-sys`, the macOS Keychain through `security-framework-sys`, and the Linux Secret Service
   over D-Bus in Rust (`zbus`, with RustCrypto for the session encryption), not through `libdbus`, whose crates
-  would need `pkg-config` and the C library.
+  would need `pkg-config` and the C library. On iOS the window's safe area and the keyboard's frame come from UIKit
+  through `objc2-ui-kit` and `objc2-foundation` (T421), which winit and egui-winit already use there; they declare
+  Apple's own Objective-C classes and compile no C.
