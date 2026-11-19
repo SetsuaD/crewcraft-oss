@@ -55,3 +55,12 @@ pub fn ico(images: &[(u32, Vec<u8>)]) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
+
+/// Where the Windows icon is committed: `apps/crewcraft` embeds it in `crewcraft.exe` (see its `build.rs`).
+pub const COMMITTED_ICO: &str = "assets/icon/crewcraft.ico";
+
+/// The Windows `.ico` for the app, rendered from the SVG in `ICO_SIZES`. `cargo xtask icons` writes it to
+/// `COMMITTED_ICO`; a T307 test fails when the committed file no longer matches the SVG.
+pub fn app_ico(svg: &[u8]) -> Result<Vec<u8>> {
+    ico(&render_sizes(svg, &ICO_SIZES)?)
+}
