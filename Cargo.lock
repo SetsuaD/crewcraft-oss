@@ -951,6 +951,7 @@ dependencies = [
  "crewcraft-tls",
  "crewcraft-totp",
  "crewcraft-ui-model",
+ "ctrlc",
  "rand_core",
  "rcgen",
  "rustls",
@@ -1038,6 +1039,17 @@ checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
  "typenum",
+]
+
+[[package]]
+name = "ctrlc"
+version = "3.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11247e6c4f83c2b15748f4873805483deaa2bbc855e773817c07a9f987f55c62"
+dependencies = [
+ "dispatch2",
+ "nix",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1129,6 +1141,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
+ "libc",
  "objc2 0.6.5",
 ]
 
