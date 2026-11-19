@@ -1,34 +1,22 @@
 //! Driver for a loopback lab CLI with a caller-provided enrolled device signer. Task T217.
 
-use std::fmt;
 use std::io::{self, BufRead, Read};
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
-use crewcraft_client_core::notify::Settings;
 use crewcraft_client_core::room_view::Shown;
 use crewcraft_enroll::server_trust::RootFingerprint;
-use crewcraft_proto::handshake::Hello;
-use crewcraft_proto::message::{MAX_BODY, MAX_NAME};
+use crewcraft_proto::message::MAX_BODY;
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn};
-use crewcraft_tls::DeadlineSocket;
-use rustls::client::{ResolvesClientCert, Resumption};
+use rustls::RootCertStore;
+use rustls::client::ResolvesClientCert;
 use rustls::pki_types::{CertificateDer, ServerName};
-use rustls::sign::CertifiedKey;
-use rustls::{ClientConfig, ClientConnection, RootCertStore, SignatureScheme, StreamOwned};
 
-use crate::chat_session::{ChatError, ChatSession};
+use crate::chat_session::ChatError;
+use crate::connect::{self, Transport};
+use crate::signed_in::{SignedInSession, sign_in, valid_room};
 
-const TCP_TIMEOUT: Duration = Duration::from_secs(3);
-const TLS_TIMEOUT: Duration = Duration::from_secs(5);
-const FRAME_TIMEOUT: Duration = Duration::from_secs(3);
-const OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_ROOT_DER: usize = 64 * 1024;
-
-type Transport = StreamOwned<ClientConnection, DeadlineSocket>;
-type SetDeadline = fn(&mut Transport, Instant);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabError {
@@ -62,10 +50,6 @@ impl<'a> LabCommand<'a> {
     }
 }
 
-fn valid_room(room: &str) -> bool {
-    !room.is_empty() && room.len() <= MAX_NAME && room.chars().all(|ch| !ch.is_control() && !ch.is_whitespace())
-}
-
 /// Results stay in memory. The caller can render approved fields without logging credentials or raw transport errors.
 pub enum LabOutcome {
     SignedIn,
@@ -73,44 +57,8 @@ pub enum LabOutcome {
     Synced { head: u64, lines: Vec<Shown> },
 }
 
-/// An authenticated connection. Dropping it ends the local session. Commands use the same connection
-/// and the same room views until the connection closes.
-pub struct LabSession {
-    chat: ChatSession<Transport, SetDeadline>,
-}
-
-impl LabSession {
-    /// `text` comes from the caller's protected input and is sent only on this connection.
-    pub fn post(&mut self, room: &str, text: &str) -> Result<u64, LabError> {
-        if !valid_room(room) {
-            return Err(LabError::Usage);
-        }
-        self.chat.post(room, text, 0, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
-    }
-
-    pub fn edit(&mut self, room: &str, target: u64, text: &str) -> Result<u64, LabError> {
-        if !valid_room(room) || target == 0 {
-            return Err(LabError::Usage);
-        }
-        self.chat.edit(room, target, text, 0, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
-    }
-
-    pub fn delete(&mut self, room: &str, target: u64) -> Result<u64, LabError> {
-        if !valid_room(room) || target == 0 {
-            return Err(LabError::Usage);
-        }
-        self.chat.delete(room, target, 0, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
-    }
-
-    pub fn sync(&mut self, room: &str) -> Result<(u64, Vec<Shown>), LabError> {
-        if !valid_room(room) {
-            return Err(LabError::Usage);
-        }
-        let head = self.chat.sync(room, false, 0, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)?;
-        let lines = self.chat.view(room).ok_or(LabError::MissingTimeline)?.shown();
-        Ok((head, lines))
-    }
-}
+/// An authenticated lab connection: the same session type a server endpoint opens.
+pub type LabSession = SignedInSession;
 
 pub struct LabEndpoint {
     address: SocketAddr,
@@ -189,61 +137,12 @@ impl LabEndpoint {
             return Err(LabError::Input);
         }
         let credentials = SignIn { email: &email, password: &password, code: &code };
-        let hello = Hello { min_version: 1, max_version: 1, features: 0, client: "crewcraft-lab".into() };
-        let settings = Settings::new(&email);
-        let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
-        let deadline = Instant::now() + OPERATION_TIMEOUT;
-        let chat = ChatSession::connect(stream, set_deadline, &credentials, hello, settings, FRAME_TIMEOUT, deadline).map_err(LabError::Chat)?;
-        Ok((LabSession { chat }, message))
+        let session = sign_in(stream, &credentials, "crewcraft-lab")?;
+        Ok((session, message))
     }
 
     pub(crate) fn connect(&self, device: Arc<dyn ResolvesClientCert>) -> Result<Transport, LabError> {
-        if !device.has_certs() || device.only_raw_public_keys() {
-            return Err(LabError::Device);
-        }
-        let resolver = Arc::new(SelectedDevice { device, selected: AtomicBool::new(false) });
-        let mut config = ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-            .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|_| LabError::Trust)?
-            .with_root_certificates(self.roots.clone())
-            .with_client_cert_resolver(resolver.clone());
-        config.resumption = Resumption::disabled();
-        config.enable_early_data = false;
-        let mut connection = ClientConnection::new(Arc::new(config), self.server_name.clone()).map_err(|_| LabError::Trust)?;
-        let tcp = TcpStream::connect_timeout(&self.address, TCP_TIMEOUT).map_err(|error| LabError::Connect(error.kind()))?;
-        let mut socket = DeadlineSocket::new(tcp, Instant::now() + TLS_TIMEOUT);
-        connection.complete_io(&mut socket).map_err(|_| LabError::Handshake)?;
-        if connection.is_handshaking() || connection.wants_write() {
-            return Err(LabError::Handshake);
-        }
-        if !resolver.selected.load(Ordering::Relaxed) {
-            return Err(LabError::Device);
-        }
-        Ok(StreamOwned::new(connection, socket))
-    }
-}
-
-struct SelectedDevice {
-    device: Arc<dyn ResolvesClientCert>,
-    selected: AtomicBool,
-}
-
-impl fmt::Debug for SelectedDevice {
-    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
-        output.write_str("SelectedDevice { .. }")
-    }
-}
-
-impl ResolvesClientCert for SelectedDevice {
-    fn resolve(&self, root_hint_subjects: &[&[u8]], schemes: &[SignatureScheme]) -> Option<Arc<CertifiedKey>> {
-        let selected =
-            self.device.resolve(root_hint_subjects, schemes).filter(|key| !key.cert.is_empty() && key.key.choose_scheme(schemes).is_some());
-        self.selected.store(selected.is_some(), Ordering::Relaxed);
-        selected
-    }
-
-    fn has_certs(&self) -> bool {
-        self.device.has_certs()
+        Ok(connect::connect(&[self.address], &self.server_name, &self.roots, device)?.transport)
     }
 }
 

@@ -1,0 +1,27 @@
+{
+  "id": "T303-connection-worker",
+  "title": "Run the chat session on a worker thread for the desktop window",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/server_endpoint.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/connect.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/lab_client.rs",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft/Cargo.toml",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft/tests/t303_connection_worker.rs",
+  "test_cmd": "cargo test -p crewcraft --test t303_connection_worker",
+  "depends_on": [
+    "T215-chat-session",
+    "T217-lab-client",
+    "T300-ui-room-list",
+    "T301-ui-composer",
+    "T302-ui-feed"
+  ],
+  "spec": "A connection worker that owns one signed-in chat session on its own thread. The window starts it with a server endpoint (any address, a server name and one pinned root) and an enrolled device identity, gets back an event channel, and hands it sign-ins (email, password, a fresh TOTP code) and crewcraft_ui_model::Command values; no call blocks. Sync makes a room the open room and sends its snapshot (Vec<Shown>); every followed room is polled on a short interval, the open room's snapshot is sent when it changes, and each followed room's unread count (others' messages since it was last open) when it changes. Post sends Posted with the acknowledged cursor, or PostFailed with the text so the draft can be restored. A server refusal is reported without ending the session; a lost connection is reported as Failed then Disconnected, after which the worker retries the mutual TLS connection with exponential backoff and reports Connected when the server answers, because a new sign-in needs a fresh code. With no room followed it pings so an idle connection stays open. Events carry no password, code, token or key. Dropping the worker shuts its socket so blocked I/O ends at once, and joins the thread. The test uses an in-test loopback server with the real admission verifier and the server-core session: two devices, A posts and B's worker delivers a snapshot with the post; dropping a worker closes its connection and ends its thread; a server that goes away produces a failure event, not a hang, and is found again when it returns.",
+  "status": "done"
+}

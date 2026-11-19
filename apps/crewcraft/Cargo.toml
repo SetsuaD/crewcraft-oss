@@ -12,9 +12,11 @@ crewcraft-client-core.workspace = true
 crewcraft-enroll.workspace = true
 crewcraft-proto.workspace = true
 crewcraft-tls.workspace = true
+crewcraft-ui-model.workspace = true
 rcgen.workspace = true
 rpassword = "7.5.4"
 rustls.workspace = true
+sha2.workspace = true
 time.workspace = true
 x509-parser = { workspace = true, features = ["verify"] }
 zeroize.workspace = true
@@ -25,6 +27,7 @@ nix = { version = "0.30.1", default-features = false, features = ["signal", "ter
 [dev-dependencies]
 crewcraft-admission.workspace = true
 crewcraft-pki.workspace = true
+crewcraft-server-core.workspace = true
 crewcraft-totp.workspace = true
 
 [lints]

@@ -27,6 +27,27 @@
 | Device key | The client's OS key store (Windows CNG/TPM, macOS Keychain, Linux kernel keyring or an encrypted file, Android Keystore, iOS Secure Enclave), generated there, never exportable | TLS client handshakes |
 | Bootstrap key | Derived in memory from an enrollment code, discarded after enrollment | one enrollment handshake |
 
+> **Implementation status (first beta).** The desktop client does not use an OS key store yet. It generates the
+> device key in the process (`crewcraft::device::NewDevice`) and saves it, with the device certificate and the
+> server's pinned root, in one record file per server profile (`crewcraft::device_store`, task T304). What protects
+> the key at rest is file permissions only:
+>
+> - On Unix the record directory is `0700` and each record `0600`. The client refuses to load a record, or to read
+>   from a directory, that grants any group or other permission, and refuses a symbolic link in place of a record.
+> - On Windows the record lives under the per-user data directory and relies on that directory's inherited access
+>   list. The client does not check or set it.
+> - The key is not encrypted. Anyone who can read the file as the user, or as an administrator or root, can copy the
+>   device key. A copied key alone does not open a session: signing in still needs the email, the password and a
+>   current TOTP code, and an administrator can revoke the device's certificate.
+> - A backup of the user's data directory contains the key.
+>
+> Records are written to a new file, synced, then renamed over the old one, so a crash leaves the old record or the
+> new one. Each record carries a SHA-256 checksum, and on load its root must match its fingerprint and its key must
+> match its certificate. The key bytes are wiped from memory when a record is dropped and never printed.
+>
+> Moving the key into the OS key store (non-exportable where the platform allows) is the planned replacement. Until
+> then this is the beta's honest limit.
+
 Device keys are ECDSA P-256 because it is the one algorithm every hardware key store supports (the Secure Enclave
 supports nothing else). The bootstrap key is Ed25519 (software only, short-lived).
 
