@@ -21,6 +21,9 @@ use crewcraft_ui_model::{Command, DraftError, FeedRow};
 use egui::{Align, Color32, FontData, FontDefinitions, FontFamily, Key, Layout, RichText, ScrollArea, TextEdit, Ui};
 use zeroize::Zeroizing;
 
+/// The width of the enrollment and sign-in forms.
+const FORM_WIDTH: f32 = 460.0;
+
 /// Inter (OFL-1.1, assets/fonts/OFL.txt), the window's only font.
 const INTER: &[u8] = include_bytes!("../../../assets/fonts/InterVariable.ttf");
 
@@ -206,16 +209,38 @@ impl Window {
     }
 
     /// Draw the current screen. Call once per frame.
+    /// The app hands over the whole window area; each screen paints its own panels.
     pub fn ui(&mut self, ui: &mut Ui) {
-        if let Some(notice) = &self.notice {
-            ui.colored_label(ui.visuals().warn_fg_color, notice.as_str());
+        let screen = self.screen();
+        if screen == Screen::Chat {
+            if let Some(notice) = self.notice.clone() {
+                egui::Panel::top("crewcraft-notice").show(ui, |ui| {
+                    ui.colored_label(ui.visuals().warn_fg_color, notice);
+                });
+            }
+            self.chat_ui(ui);
+            return;
         }
-        match self.screen() {
-            Screen::Enroll => self.enroll_ui(ui),
-            Screen::Authenticator => self.authenticator_ui(ui),
-            Screen::SignIn => self.sign_in_ui(ui),
-            Screen::Chat => self.chat_ui(ui),
-        }
+        egui::CentralPanel::default_margins().show(ui, |ui| {
+            ui.add_space((ui.available_height() * 0.12).min(80.0));
+            ui.vertical_centered(|ui| {
+                ui.set_max_width(FORM_WIDTH);
+                egui::Frame::group(ui.style()).inner_margin(24.0).corner_radius(8.0).show(ui, |ui| {
+                    ui.set_width(FORM_WIDTH - 48.0);
+                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                        ui.spacing_mut().item_spacing.y = 8.0;
+                        if let Some(notice) = &self.notice {
+                            ui.colored_label(ui.visuals().warn_fg_color, notice.as_str());
+                        }
+                        match screen {
+                            Screen::Enroll => self.enroll_ui(ui),
+                            Screen::Authenticator => self.authenticator_ui(ui),
+                            Screen::SignIn | Screen::Chat => self.sign_in_ui(ui),
+                        }
+                    });
+                });
+            });
+        });
     }
 
     fn go(&mut self, screen: Screen) {
