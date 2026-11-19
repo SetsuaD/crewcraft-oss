@@ -24,6 +24,9 @@ x509-parser.workspace = true
 
 [dev-dependencies]
 crewcraft = { path = "../crewcraft" }
+crewcraft-desktop-ui.workspace = true
+crewcraft-ui-model.workspace = true
+zeroize.workspace = true
 crewcraft-client-core.workspace = true
 rcgen.workspace = true
 

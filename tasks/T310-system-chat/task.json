@@ -1,0 +1,21 @@
+{
+  "id": "T310-system-chat",
+  "title": "System test: a network server and two full desktop-app stacks enroll, sign in and chat",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/Cargo.toml"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t310_system_chat.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t310_system_chat",
+  "depends_on": [
+    "T230-network-serve",
+    "T309-desktop-app"
+  ],
+  "spec": "No new behaviour: an acceptance test over real parts. A server bound with the network path and a configured name, two desktop-app Controllers with their own data folders: each enrolls from an invitation code (authenticator setup URI checked, first code confirmed), signs in with a fresh TOTP code, follows the room, and each sees the other's message. A restart of one app from its data folder goes straight to sign-in.",
+  "status": "done",
+  "context": [
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft-server/src/lab_runtime.rs",
+    "docs/ACCEPTANCE.md"
+  ]
+}
