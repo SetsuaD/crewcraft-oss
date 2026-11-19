@@ -11,8 +11,8 @@ case "${1:-}" in
     for d in tasks/T*/; do id=$(basename "$d"); printf '%-24s %-6s %s\n' "$id" "$(field "$id" status)" "$(field "$id" title)"; done ;;
   install)
     id="${2:?task id}"; dst="$(field "$id" test_path)"
-    task_path_re='^(crates|apps)/[a-z0-9-]+/tests/t[0-9]+_[a-z0-9_]+\.rs$'   # task.json can come from a pull request
-    [[ "$dst" =~ $task_path_re ]] || { echo "refused: test_path '$dst' is not under crates/ or apps/ with a task test name" >&2; exit 1; }
+    task_path_re='^((crates|apps)/[a-z0-9-]+|xtask)/tests/t[0-9]+_[a-z0-9_]+\.rs$'   # task.json can come from a pull request
+    [[ "$dst" =~ $task_path_re ]] || { echo "refused: test_path '$dst' is not under crates/, apps/ or xtask/ with a task test name" >&2; exit 1; }
     mkdir -p "$(dirname "$dst")"; cp "tasks/$id/test.rs" "$dst"; echo "installed $dst"
     cmd="$(field "$id" test_cmd)"
     [[ "$cmd" =~ ^cargo\ test\ -p\ [a-z0-9-]+\ --test\ t[0-9]+_[a-z0-9_]+$ ]] || { echo "refused: unexpected test_cmd in task.json" >&2; exit 1; }
