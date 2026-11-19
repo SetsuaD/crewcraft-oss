@@ -106,7 +106,9 @@ cargo xtask dist --version 0.1.0-beta.1 --out dist --target macos-universal
 ```
 
 It builds both binaries for `x86_64-apple-darwin` and `aarch64-apple-darwin`, checks each build's architecture, joins
-each pair with `lipo -create`, and writes:
+each pair with `lipo -create`, signs `CrewCraft.app` ad hoc (`codesign --sign -`: it seals the bundle without naming
+anyone, so an Apple Silicon Mac offers "Open" instead of calling the app damaged; it is not a Developer ID signature),
+and writes:
 
 | Asset | Contents |
 |---|---|

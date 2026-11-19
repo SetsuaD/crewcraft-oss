@@ -159,6 +159,14 @@ pub fn lipo(inputs: &[&Path], output: &Path) -> Result<()> {
     run(Command::new("lipo").arg("-create").args(inputs).arg("-output").arg(output), "lipo")
 }
 
+/// Signs `app` ad hoc (`codesign --sign -`), which seals the whole bundle without any identity, then verifies it.
+/// The linker signs only the arm64 executable; an unsealed bundle downloaded to an Apple Silicon Mac is reported as
+/// damaged instead of offering "Open". An ad-hoc signature names nobody, so the beta stays without a Developer ID.
+pub fn adhoc_sign(app: &Path) -> Result<()> {
+    run(Command::new("codesign").args(["--force", "--deep", "--sign", "-", "--timestamp=none"]).arg(app), "codesign")?;
+    run(Command::new("codesign").args(["--verify", "--deep", "--strict"]).arg(app), "codesign --verify")
+}
+
 /// Makes a compressed disk image (UDZO) of `staging` with `hdiutil create`.
 pub fn hdiutil(staging: &Path, image: &Path) -> Result<()> {
     run(

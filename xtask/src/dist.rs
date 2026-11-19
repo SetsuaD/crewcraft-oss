@@ -313,6 +313,7 @@ fn build_target(root: &Path, options: &Options, target: Target, epoch: u64, runt
                 let staging = work.join(macos::VOLUME_NAME);
                 let app = macos::app_files(version, &client, &macos::render_icns(&svg)?, &linux_docs);
                 macos::write_staging(&staging, &app)?;
+                macos::adhoc_sign(&staging.join(macos::APP_DIR))?;
                 let image = work.join(asset.file_name(version));
                 macos::hdiutil(&staging, &image)?;
                 read(&image)?
