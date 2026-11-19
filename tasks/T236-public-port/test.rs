@@ -43,7 +43,7 @@ fn the_public_port_is_recorded_once_and_read_back() {
     // Recorded once: a second write is refused and the first value stays.
     assert_eq!(server_install::write_public_port(&dir, 8443).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
     assert_eq!(server_install::read_public_port(&dir).unwrap(), Some(443));
-    assert!(server_install::write_public_port(&scratch("zero"), 0).is_err());
+    assert!(server_install::write_public_port(&scratch("zero-write"), 0).is_err());
     let _ = fs::remove_dir_all(&dir);
 }
 
