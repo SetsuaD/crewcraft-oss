@@ -1,0 +1,25 @@
+{
+  "id": "T405-invitation-links",
+  "title": "Invitation links open the app with the link filled in",
+  "crate": "crewcraft",
+  "files": [
+    "crates/desktop-ui/src/lib.rs",
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/Cargo.toml",
+    "apps/crewcraft-android/src/jvm.rs",
+    "apps/crewcraft-android/src/keystore.rs",
+    "apps/crewcraft-android/src/shell.rs",
+    "apps/crewcraft-android/src/lib.rs",
+    "xtask/src/android.rs",
+    "xtask/tests/t400_android_apk.rs",
+    "tasks/T400-android-apk/test.rs",
+    "Cargo.lock",
+    "docs/MOBILE.md"
+  ],
+  "test_path": "apps/crewcraft/tests/t405_invitation_links.rs",
+  "test_cmd": "cargo test -p crewcraft --test t405_invitation_links",
+  "depends_on": ["T234-invitation-link", "T305-desktop-window", "T401-android-window", "T403-hardware-device-key"],
+  "spec": "app::opened_with_link(text) is Update::InvitationLink with the trimmed text when it parses as an InvitationLink, and None for anything else. Update::InvitationLink fills the enrollment form's link field only while the enrollment screen shows and no enrollment is in progress, changes nothing else (it does not clear busy), and prints as 'InvitationLink(..)'. DesktopApp::open_link applies it. The Android manifest adds an intent filter (VIEW, DEFAULT, BROWSABLE, scheme crewcraft, host enroll); at start the Android app reads the launching intent's data over JNI through AndroidApp::activity_as_ptr and opens it with open_link, logging only whether it was an invitation link. A link that arrives while the app runs is a documented limit (NativeActivity has no new-intent callback).",
+  "status": "done",
+  "context": ["docs/MOBILE.md", "crates/enroll/src/invitation.rs"]
+}

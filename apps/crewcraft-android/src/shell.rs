@@ -22,7 +22,7 @@ use crewcraft::hardware_key::HardwareKeys;
 
 /// The app's entry point, called by `android-activity` on its own thread once the activity is created; returning
 /// ends the app.
-// One of the crate's two pieces of unsafe code (see Cargo.toml): android-activity finds this function by its symbol
+// One of the crate's three pieces of unsafe code (see Cargo.toml): android-activity finds this function by its symbol
 // name.
 #[expect(unsafe_code, reason = "android-activity calls the app through the unmangled symbol android_main")]
 #[unsafe(no_mangle)]
@@ -42,16 +42,25 @@ fn android_main(app: AndroidApp) {
 #[cfg(not(feature = "selftest"))]
 fn window(app: AndroidApp, dir: Option<std::path::PathBuf>) {
     let keystore = crate::keystore::AndroidKeystore::new().ok().map(|keys| Arc::new(keys) as Arc<dyn HardwareKeys>);
+    let launch_link = crate::jvm::java_vm().and_then(|vm| crate::jvm::launch_link(&vm, app.activity_as_ptr()));
     let options = eframe::NativeOptions { android_app: Some(app.clone()), renderer: eframe::Renderer::Glow, ..Default::default() };
     let join = join_from_link(JOIN_TIMEOUT);
     let started = eframe::run_native(
         "CrewCraft",
         options,
         Box::new(move |creation| {
-            let inner = match keystore {
+            let mut inner = match keystore {
                 Some(keys) => DesktopApp::with_hardware_keys(&creation.egui_ctx, join, dir, keys),
                 None => DesktopApp::with_data_dir(&creation.egui_ctx, join, dir),
             };
+            // Opened from a crewcraft://enroll link (T405): the link fills the enrollment form. Never logged.
+            if let Some(link) = launch_link {
+                if inner.open_link(&link) {
+                    log::info!("CrewCraft opened from an invitation link");
+                } else {
+                    log::info!("CrewCraft opened from a link that is not an invitation link ({} characters)", link.len());
+                }
+            }
             Ok(Box::new(PhoneApp { inner, app, keyboard: false }))
         }),
     );
