@@ -1,0 +1,31 @@
+{
+  "id": "T403-hardware-device-key",
+  "title": "Device key in a hardware key store: the Android Keystore",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/src/hardware_key.rs",
+    "apps/crewcraft/src/device.rs",
+    "apps/crewcraft/src/device_store.rs",
+    "apps/crewcraft/src/enrollment.rs",
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft-android/src/keystore.rs",
+    "apps/crewcraft-android/src/selftest.rs",
+    "apps/crewcraft-android/src/shell.rs",
+    "apps/crewcraft-android/src/lib.rs",
+    "apps/crewcraft-android/Cargo.toml",
+    "xtask/src/android.rs",
+    "xtask/tests/t400_android_apk.rs",
+    "tasks/T400-android-apk/test.rs",
+    "Cargo.lock",
+    "docs/MOBILE.md",
+    "docs/SECURITY-DESIGN.md",
+    "docs/NON-RUST-DEPENDENCIES.md"
+  ],
+  "test_path": "apps/crewcraft/tests/t403_hardware_device_key.rs",
+  "test_cmd": "cargo test -p crewcraft --test t403_hardware_device_key",
+  "depends_on": ["T304-device-store", "T309-desktop-app", "T313-sealed-device-record", "T401-android-window"],
+  "spec": "hardware_key: HardwareKeys (generate, open, delete P-256 keys by alias; errors Unavailable, NotFound, SignFailed, Invalid) and HardwareKey (alias, DER SubjectPublicKeyInfo, a DER ECDSA SHA-256 signature, KeyLocation SecureElement / TrustedEnvironment / Software / Unknown). RequestSigner lets a key sign a certificate request through rcgen and TlsSigningKey a TLS 1.3 client handshake through rustls, offering ecdsa_secp256r1_sha256 only; both refuse a public key that is not P-256. new_alias(profile) is 'crewcraft-<profile>-' plus 16 random hex digits; valid_alias allows 1 to 64 of a-z, 0-9, '-' and '_'. MemoryKeys is an in-process store for tests (shared clones, a signature count, set_unavailable, set_refuse_signing, private_key_for_test). NewDevice::generate_in(keys, alias) makes the key in the store and signs the request there; if the request cannot be made, or enrollment then fails, the key is deleted. DeviceStore::open_hardware(dir, keys) reads and writes version 3 records: the magic line 'crewcraft device v3', the version 1 fields with the key's alias in place of the key, and a SHA-256; loading opens the key from the store (KeyMissing when the store no longer holds it, KeyStoreUnavailable when it cannot be reached); saving over a record deletes the key the old record named; remove deletes the file, then the key. A hardware store refuses other versions and the desktop stores refuse version 3 (KeyKind). Controller::start_with_hardware_keys starts a phone app whose enrollments make their key in the store. On Android, AndroidKeystore implements HardwareKeys over JNI (KeyPairGenerator with KeyGenParameterSpec in AndroidKeyStore, StrongBox first; Signature SHA256withECDSA; KeyInfo for the location), and the app's controller uses it. 'cargo xtask apk --self-test' builds the emulator self-test (feature selftest) for one test server, never release-signed: it joins from the invitation link, enrolls with the Keystore key, saves and reloads the record, and signs in; a second start signs in from the saved record.",
+  "status": "done",
+  "context": ["docs/MOBILE.md", "docs/SECURITY-DESIGN.md", "apps/crewcraft/tests/t309_desktop_app.rs"]
+}

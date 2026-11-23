@@ -6,8 +6,8 @@
 //! (where to keep the app's data, when to show the soft keyboard, the version line in the log), and on Android the
 //! entry point (`shell`). Called by: `android-activity` on the phone (through `android_main`) and the T401 test.
 //! Calls: `crewcraft` and eframe (on Android only). Later tasks slot in here: the phone layout (T402) is in
-//! `crewcraft-desktop-ui` and needs nothing from this crate; the Keystore device key (T403) becomes the key store
-//! the controller is started with; storage and lifecycle (T404) refine [`data_dir`]; links (T405) feed the
+//! `crewcraft-desktop-ui` and needs nothing from this crate; the Keystore device key (T403) is `keystore`, the key
+//! store the controller is started with, and `selftest` its emulator test; storage and lifecycle (T404) refine [`data_dir`]; links (T405) feed the
 //! activity's intent to the enrollment screen.
 
 use std::path::{Path, PathBuf};
