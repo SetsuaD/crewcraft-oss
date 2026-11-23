@@ -95,6 +95,13 @@
 > ask the Keystore to sign, so a compromised app can act as the device while it runs, but it cannot copy the key off
 > the phone. The emulator's Keystore is software only, so the emulator test proves the flow, not the hardware.
 
+> **Implementation status (iOS, task T422).** On iOS the device key is a P-256 key generated in the Secure Enclave and
+> kept in the app's Keychain under its alias (`crewcraft::ios_keys`). The Secure Enclave signs the enrollment request
+> and every TLS client handshake; the private key cannot be exported. The record is the same version 3 record as on
+> Android and holds no secret. The same limit applies: code running inside the app can ask the Secure Enclave to sign
+> while it runs, but cannot take the key off the phone. The simulator's Secure Enclave is simulated, so the simulator
+> test proves the flow, not the hardware.
+
 Device keys are ECDSA P-256 because it is the one algorithm every hardware key store supports (the Secure Enclave
 supports nothing else). The bootstrap key is Ed25519 (software only, short-lived).
 

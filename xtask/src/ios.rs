@@ -27,12 +27,16 @@ use crate::version::Version;
 use crate::{Context, Error, Result, dist, icon, linkage, macos};
 
 pub const USAGE: &str = "\
-usage: cargo xtask ios --version <version> --out <dir> [--target sim-x86_64|sim-arm64]
+usage: cargo xtask ios --version <version> --out <dir> [--target sim-x86_64|sim-arm64] [--self-test]
 
 Builds crewcraft in release mode for the iOS Simulator and writes <dir>/CrewCraft.app, signed ad hoc. Without
 --target it builds for this Mac's simulator: sim-arm64 on Apple Silicon, sim-x86_64 on Intel. Install and start it
 with `xcrun simctl install booted <dir>/CrewCraft.app` and `xcrun simctl launch booted io.github.setsuad.crewcraft`.
-Runs on macOS only, with Xcode and the iOS Simulator. See docs/RELEASE.md.";
+Runs on macOS only, with Xcode and the iOS Simulator. See docs/RELEASE.md.
+
+--self-test also runs the simulator self-test of the Keychain device key (task T422) beside the window, for the test
+server named by CREWCRAFT_SELFTEST_LINK, CREWCRAFT_SELFTEST_EMAIL and CREWCRAFT_SELFTEST_PASSWORD; its lines go to
+the app's standard error (`xcrun simctl launch --console`). Never for a release.";
 
 /// The bundle identifier, the same as the macOS app's.
 pub const BUNDLE_ID: &str = macos::BUNDLE_ID;
@@ -134,6 +138,8 @@ pub struct Options {
     pub version: Version,
     pub out: PathBuf,
     pub target: IosTarget,
+    /// `--self-test`: the simulator self-test build (crewcraft's feature `selftest`).
+    pub self_test: bool,
 }
 
 /// Parses the arguments after `ios`.
@@ -141,6 +147,7 @@ pub fn parse_args(args: &[String]) -> Result<Options> {
     let mut version = None;
     let mut out = None;
     let mut target = None;
+    let mut self_test = false;
     let mut rest = args.iter();
     while let Some(flag) = rest.next() {
         let mut value = || rest.next().ok_or_else(|| Error::new(format!("{flag} needs a value\n\n{USAGE}")));
@@ -154,12 +161,13 @@ pub fn parse_args(args: &[String]) -> Result<Options> {
                 }
                 target = Some(parsed);
             }
+            "--self-test" => self_test = true,
             _ => return Err(Error::new(format!("unknown argument {flag:?}\n\n{USAGE}"))),
         }
     }
     let version = version.ok_or_else(|| Error::new(format!("--version is required\n\n{USAGE}")))?;
     let out = out.ok_or_else(|| Error::new(format!("--out is required\n\n{USAGE}")))?;
-    Ok(Options { version, out, target: target.unwrap_or_else(IosTarget::host_default) })
+    Ok(Options { version, out, target: target.unwrap_or_else(IosTarget::host_default), self_test })
 }
 
 /// `CFBundleShortVersionString`: the release's three numbers, the only form the App Store accepts. The pre-release
@@ -277,16 +285,36 @@ pub fn require_macos() -> Result<()> {
     }
 }
 
+/// The entitlements a simulator build carries (task T422): a Keychain access group named after the bundle, without
+/// which the simulator's Keychain refuses the app (`errSecMissingEntitlement`) and the device key cannot be kept. As
+/// Xcode does for the simulator, they are linked into the program as its `__TEXT,__entitlements` section; the ad-hoc
+/// signature carries none. A device build gets its entitlements from its provisioning profile instead.
+pub fn simulator_entitlements() -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n<dict>\n\t<key>keychain-access-groups</key>\n\t<array>\n\t\t<string>{BUNDLE_ID}</string>\n\t</array>\n</dict>\n</plist>\n"
+    )
+}
+
 /// Builds the client for `target` and returns the program's path.
-fn cargo_build(root: &Path, target: IosTarget, epoch: u64) -> Result<PathBuf> {
+fn cargo_build(root: &Path, target: IosTarget, epoch: u64, self_test: bool) -> Result<PathBuf> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     println!("== building {CLIENT} for the iOS Simulator ({}, {})", target.name(), target.triple());
-    let status = Command::new(&cargo)
-        .current_dir(root)
-        .args(["build", "--release", "--locked", "--target", target.triple(), "-p", CLIENT])
+    let mut command = Command::new(&cargo);
+    command.current_dir(root).args(["build", "--release", "--locked", "--target", target.triple(), "-p", CLIENT]);
+    if self_test {
+        command.args(["--features", "selftest"]);
+    }
+    let entitlements = dist::work_dir(root, "ios-entitlements")?.join("simulator.entitlements");
+    fs::write(&entitlements, simulator_entitlements()).context(|| format!("writing {}", entitlements.display()))?;
+    let mut rustflags = dist::release_rustflags(root);
+    rustflags.push("\u{1f}-Clink-arg=-Wl,-sectcreate,__TEXT,__entitlements,");
+    rustflags.push(entitlements.as_os_str());
+    let status = command
         .env("SOURCE_DATE_EPOCH", epoch.to_string())
         .env("CARGO_PROFILE_RELEASE_STRIP", "symbols")
-        .env("CARGO_ENCODED_RUSTFLAGS", dist::release_rustflags(root))
+        .env("CARGO_ENCODED_RUSTFLAGS", rustflags)
         .env("IPHONEOS_DEPLOYMENT_TARGET", MINIMUM_OS)
         .env_remove("RUSTFLAGS")
         .status()
@@ -306,7 +334,7 @@ pub fn run(options: &Options) -> Result<()> {
     if built != options.version.to_string() {
         println!("warning: the program reports version {built}, not {}; set workspace.package.version before a release", options.version);
     }
-    let program = cargo_build(&root, options.target, epoch)?;
+    let program = cargo_build(&root, options.target, epoch, options.self_test)?;
     let binary = fs::read(&program).context(|| format!("reading {}", program.display()))?;
     check_program(&binary, options.target)?;
     let svg = fs::read(root.join("assets/icon/crewcraft.svg")).context(|| "reading the icon SVG".to_string())?;
