@@ -1154,6 +1154,7 @@ name = "crewcraft-update"
 version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-strict-toml",
+ "ed25519-dalek",
  "sha2 0.10.9",
 ]
 
