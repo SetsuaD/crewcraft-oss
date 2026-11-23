@@ -59,6 +59,12 @@ fn command_line_defaults_to_phones_and_keeps_the_keystore_pair_together() {
     assert!(android::parse_args(&args(&["--version", "0.1.0", "--out", "dist", "--keystore", "k.p12"])).is_err());
     assert!(android::parse_args(&args(&["--version", "0.1.0", "--out", "dist", "--target", "armv7"])).is_err());
     assert!(android::parse_args(&args(&["--out", "dist"])).is_err());
+    // The emulator self-test of the Keystore (T403) is opt-in and never release-signed.
+    assert!(!options.self_test);
+    assert!(android::parse_args(&args(&["--version", "0.1.0", "--out", "dist", "--target", "x86_64", "--self-test"])).unwrap().self_test);
+    assert!(
+        android::parse_args(&args(&["--version", "0.1.0", "--out", "dist", "--self-test", "--keystore", "k.p12", "--key-alias", "app"])).is_err()
+    );
     assert_eq!(android::file_name(&version("0.1.0-beta.1"), Abi::Aarch64), "crewcraft-0.1.0-beta.1-android-aarch64.apk");
     assert_eq!(android::file_name(&version("0.1.0"), Abi::X86_64), "crewcraft-0.1.0-android-x86_64.apk");
     assert_eq!(android::library_path(Abi::Aarch64), "lib/arm64-v8a/libcrewcraft_android.so");

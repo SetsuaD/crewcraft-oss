@@ -13,6 +13,10 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "android")]
+mod keystore;
+#[cfg(all(target_os = "android", feature = "selftest"))]
+mod selftest;
+#[cfg(target_os = "android")]
 mod shell;
 
 /// The folder under the activity's internal data path (`/data/user/<user>/<package>/files`) where the app keeps

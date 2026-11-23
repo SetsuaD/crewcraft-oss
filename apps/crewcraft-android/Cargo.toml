@@ -12,6 +12,11 @@ publish.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# The emulator self-test of task T403 in place of the window (src/selftest.rs); `cargo xtask apk --self-test` builds
+# it, with the test server's invitation fixed at build time. Never for a release.
+selftest = ["dep:crewcraft-totp"]
+
 [dependencies]
 crewcraft-client-core.workspace = true
 # Only to read the frame's output (does a text field want the keyboard?); the same egui eframe uses.
@@ -23,6 +28,12 @@ crewcraft = { path = "../crewcraft" }
 eframe = { version = "0.37", default-features = false, features = ["glow", "android-native-activity"] }
 # Writes the app's log (and eframe's) to logcat.
 android_logger = { version = "0.15", default-features = false }
+# The Android Keystore (T403) through JNI, with no Java source; the JVM handle comes from ndk-context, which
+# android-activity fills in. Both are already part of the build through android-activity.
+jni = { version = "0.22", default-features = false }
+ndk-context = "0.1"
+# Only for the emulator self-test (feature `selftest`): it answers the authenticator step itself.
+crewcraft-totp = { workspace = true, optional = true }
 log = "0.4"
 # The AndroidApp handle (winit's re-export of android-activity, the one eframe runs on): the data path and the
 # soft keyboard.
@@ -35,7 +46,9 @@ egui_kittest = "0.37"
 # The workspace lints, except `unsafe_code`: `deny` here instead of `forbid`, so that the one item that needs it can
 # say so. Android's NativeActivity glue (android-activity) calls the app through a symbol named `android_main`, and
 # exporting a function under a fixed symbol name (`#[unsafe(no_mangle)]`) counts as unsafe code. That attribute,
-# in src/shell.rs, is the only exception; everything else in this crate is checked as strictly as the workspace.
+# in src/shell.rs, is one of two exceptions. The other is `java_vm` in src/keystore.rs (T403): turning the JVM
+# pointer that android-activity records into a `jni::JavaVM` handle, so the app can reach the Android Keystore.
+# Everything else in this crate is checked as strictly as the workspace.
 [lints.rust]
 unsafe_code = "deny"
 
