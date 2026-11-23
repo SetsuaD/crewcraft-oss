@@ -217,3 +217,34 @@ The beta builds are not code-signed.
   Applications, remove the download mark with `xattr -dr com.apple.quarantine /Applications/CrewCraft.app`. On macOS 15
   and later, if right-click Open is not offered, allow it under System Settings, Privacy & Security, **Open Anyway**.
 - Linux: the deb and the AppImage are not signed; check them against `SHA256SUMS.txt`.
+
+## Signed release manifests (milestone M5)
+
+A server updates itself, and its apps update from it, only from a release manifest signed with a release key whose
+public half the build pins (REQUIREMENTS 2.21, `crewcraft_update`). `cargo xtask release` (task T501) makes and
+checks them:
+
+```sh
+# Once, on the release owner's own machine: a new release key and its public half.
+cargo xtask release key --out ~/crewcraft-release.key
+# For each release, after `dist` and `apk` wrote the packages into dist/:
+cargo xtask release manifest --version 0.2.0 --channel beta --published 2026-12-31 --min-client 0.1.0 \
+  --dir dist --out dist/crewcraft-0.2.0.release.toml
+cargo xtask release sign --manifest dist/crewcraft-0.2.0.release.toml --key ~/crewcraft-release.key \
+  --out dist/crewcraft-0.2.0.release.toml.sig
+# Anyone, with the published public key:
+cargo xtask release verify --manifest dist/crewcraft-0.2.0.release.toml --signature dist/crewcraft-0.2.0.release.toml.sig \
+  --public <public-key-hex> --dir dist
+```
+
+- The key file holds the private key (64 hex characters). `key` writes it to a new file, owner-only on Unix, and
+  prints only the public key; `sign` refuses a key file others can read. Keep it off build machines and out of the
+  repository; where it lives is the release owner's decision. Several public keys may be pinned at once, so a key can
+  be replaced by pinning its successor a release before the switch.
+- The manifest lists one package per kind and platform: the server archives, the desktop AppImage, MSI and DMG (the
+  `.deb` is updated by the system's package manager instead), and the phone APK. Each entry carries the file's size
+  and SHA-256, so a client checks the download against the signed manifest.
+- `sign` checks the new signature with the public key before writing it, and never overwrites a file. `verify` is
+  what a server or client does on receipt: the signature against the pinned keys, then each file.
+- Not yet: pinning the release keys in the server and the apps, the server's self-update and the apps' updaters (the
+  rest of M5).

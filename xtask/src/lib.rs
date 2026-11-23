@@ -21,6 +21,7 @@ pub mod ios;
 pub mod linkage;
 pub mod macos;
 pub mod names;
+pub mod release;
 pub mod sums;
 pub mod version;
 pub mod windows_msi;
