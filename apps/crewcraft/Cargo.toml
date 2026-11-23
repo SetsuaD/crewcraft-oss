@@ -82,6 +82,8 @@ crewcraft-admission.workspace = true
 crewcraft-pki.workspace = true
 crewcraft-server-core.workspace = true
 crewcraft-totp.workspace = true
+# The window, driven headless for the T405 test (as crewcraft-desktop-ui's own tests do).
+egui_kittest = "0.37"
 
 [build-dependencies]
 # Embeds the icon and version resource in crewcraft.exe on Windows (build.rs); uses the target's resource compiler.

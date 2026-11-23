@@ -13,6 +13,8 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "android")]
+mod jvm;
+#[cfg(target_os = "android")]
 mod keystore;
 #[cfg(all(target_os = "android", feature = "selftest"))]
 mod selftest;

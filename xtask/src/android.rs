@@ -130,7 +130,7 @@ pub fn library_path(abi: Abi) -> String {
 }
 
 /// `AndroidManifest.xml` (as text; `aapt2` compiles it). One `NativeActivity` that loads the app's library and is
-/// the launcher entry; the INTERNET permission and nothing else; no Java code; no backups of the app's data (it
+/// the launcher entry, and opens `crewcraft://enroll` invitation links (T405); the INTERNET permission and nothing else; no Java code; no backups of the app's data (it
 /// will hold the device's enrollment); the window resizes for the soft keyboard and is not restarted by rotation,
 /// a keyboard or a size change (egui redraws at the new size).
 pub fn manifest(version: &Version) -> Result<String> {
@@ -161,6 +161,12 @@ pub fn manifest(version: &Version) -> Result<String> {
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="crewcraft" android:host="enroll" />
             </intent-filter>
         </activity>
     </application>

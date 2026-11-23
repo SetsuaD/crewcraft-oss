@@ -46,9 +46,10 @@ egui_kittest = "0.37"
 # The workspace lints, except `unsafe_code`: `deny` here instead of `forbid`, so that the one item that needs it can
 # say so. Android's NativeActivity glue (android-activity) calls the app through a symbol named `android_main`, and
 # exporting a function under a fixed symbol name (`#[unsafe(no_mangle)]`) counts as unsafe code. That attribute,
-# in src/shell.rs, is one of two exceptions. The other is `java_vm` in src/keystore.rs (T403): turning the JVM
-# pointer that android-activity records into a `jni::JavaVM` handle, so the app can reach the Android Keystore.
-# Everything else in this crate is checked as strictly as the workspace.
+# in src/shell.rs, is one of three exceptions. The other two are in src/jvm.rs: `java_vm` (T403) turns the JVM
+# pointer android-activity records into a `jni::JavaVM` handle, so the app can reach the Android Keystore, and
+# `activity` (T405) turns the activity pointer it hands out into a `jni` handle, to read the link the app was
+# opened with. Everything else in this crate is checked as strictly as the workspace.
 [lints.rust]
 unsafe_code = "deny"
 

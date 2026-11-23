@@ -101,6 +101,9 @@ pub enum Update {
     },
     /// The email address last used to sign in on this device, to fill in the sign-in form.
     LastEmail(String),
+    /// The app was opened from an invitation link (task T405): fill in the enrollment form's link field. Ignored
+    /// unless the enrollment screen is showing. `Debug` does not show the link, which holds a one-time secret.
+    InvitationLink(Zeroizing<String>),
     /// Something failed; the text is shown to the person as written.
     Failed(String),
     SignedOut,
@@ -116,6 +119,7 @@ impl fmt::Debug for Update {
             Self::Snapshot { room, shown } => f.debug_struct("Snapshot").field("room", room).field("rows", &shown.len()).finish(),
             Self::Unread { room, unread } => f.debug_struct("Unread").field("room", room).field("unread", unread).finish(),
             Self::LastEmail(email) => f.debug_tuple("LastEmail").field(email).finish(),
+            Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
             Self::Failed(text) => f.debug_tuple("Failed").field(text).finish(),
             Self::SignedOut => f.write_str("SignedOut"),
         }
@@ -192,6 +196,13 @@ impl Window {
     }
 
     pub fn apply(&mut self, update: Update) {
+        // A link to fill in changes nothing else: an enrollment in progress stays in progress.
+        if let Update::InvitationLink(link) = update {
+            if self.screen() == Screen::Enroll && !self.busy {
+                self.link = link;
+            }
+            return;
+        }
         self.busy = false;
         match update {
             Update::NeedsEnrollment => self.go(Screen::Enroll),
@@ -226,6 +237,7 @@ impl Window {
                     self.email = email;
                 }
             }
+            Update::InvitationLink(_) => {}
             Update::Failed(text) => self.notice = Some(text),
             Update::SignedOut => {
                 self.phone_pane = PhonePane::Chats;

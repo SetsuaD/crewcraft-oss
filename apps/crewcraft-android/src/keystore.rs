@@ -5,8 +5,7 @@
 //! Owns: the Java calls, made from Rust through JNI with no Java source: `KeyPairGenerator` with a
 //! `KeyGenParameterSpec` to make a key, `KeyStore("AndroidKeyStore")` to find and delete one, `Signature
 //! ("SHA256withECDSA")` to sign, and `KeyInfo` to say where a key lives. Called by: `shell` (the app's controller) and
-//! `selftest`. Calls: the JVM through the `jni` crate; the JVM handle comes from `ndk-context`, which
-//! `android-activity` fills in before `android_main` runs.
+//! `selftest`. Calls: the JVM through the `jni` crate, with the handle from `jvm`.
 
 use std::fmt;
 use std::sync::Arc;
@@ -40,7 +39,7 @@ impl fmt::Debug for AndroidKeystore {
 impl AndroidKeystore {
     /// The Keystore of the running app; `Unavailable` if the JVM handle is missing.
     pub fn new() -> Result<Self, HardwareKeyError> {
-        java_vm().map(|vm| Self { vm: Arc::new(vm) }).ok_or(HardwareKeyError::Unavailable)
+        crate::jvm::java_vm().map(|vm| Self { vm: Arc::new(vm) }).ok_or(HardwareKeyError::Unavailable)
     }
 
     /// Run `call` with this thread attached to the JVM. A Java exception becomes `Unavailable` unless `call` turns it
@@ -56,18 +55,6 @@ impl AndroidKeystore {
             })
             .unwrap_or(Err(HardwareKeyError::Unavailable))
     }
-}
-
-// The only unsafe code here (see Cargo.toml): turning the JVM pointer android-activity recorded into a handle.
-#[expect(unsafe_code, reason = "the JVM pointer comes from ndk-context, which android-activity sets before android_main runs")]
-fn java_vm() -> Option<JavaVM> {
-    let vm = ndk_context::android_context().vm();
-    if vm.is_null() {
-        return None;
-    }
-    // SAFETY: `vm` is the process's `JavaVM*`, valid for the life of the process; android-activity recorded it in
-    // ndk-context when the activity was created, before calling `android_main`.
-    Some(unsafe { JavaVM::from_raw(vm.cast()) })
 }
 
 impl HardwareKeys for AndroidKeystore {

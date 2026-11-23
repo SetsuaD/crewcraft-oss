@@ -24,7 +24,7 @@ and a new layout.
 | T402 | Phone layout in `crewcraft-desktop-ui`: one pane at a time with back navigation, a bottom tab bar, larger touch targets, the composer above the keyboard | headless tests (egui_kittest) at phone sizes |
 | T403 | Device key in Android Keystore: a P-256 key generated inside the Keystore (hardware-backed where the phone has it), used for the enrollment request and for every TLS client signature through a custom rustls signer, so the private key never leaves the Keystore | **Done.** The emulator self-test enrolls against a real server and signs in, then signs in again after a restart; the Keystore's `KeyInfo` says where the key lives (below) |
 | T404 | App storage and lifecycle: the device record and last email in the app's private storage; reconnect after the app returns to the foreground | enroll, kill the app, reopen: it goes straight to sign-in |
-| T405 | Invitation links open the app: an intent filter for `crewcraft://enroll` | tapping a link in a message opens the enrollment screen with the link filled in |
+| T405 | Invitation links open the app: an intent filter for `crewcraft://enroll` | **Done** for a link that starts the app: on the emulator, a link from a real server opened the enrollment screen with the link filled in, and enrolling went on to the server's authenticator setup. A link tapped while the app is already running brings it forward without filling the form (below) |
 | T406 | Release packaging: a signed APK beside the desktop assets in the release, with `SHA256SUMS.txt`; a Play Store bundle (AAB) when the store listing exists | the APK installs on a real phone from the release page |
 | T407 | Acceptance on a real phone (Android 10+): the two-person flow with a desktop on the other side | recorded in the release notes |
 
@@ -35,11 +35,12 @@ and a new layout.
   `classes.dex`. `android-activity` (through winit and eframe) runs the app's `android_main` on its own thread, and
   that opens the same `DesktopApp` and `Window` as the desktop, with the bundled Inter font, rendered with OpenGL ES
   (glow). eframe's screen-reader support needs GameActivity (Java) on Android, so it is off there for now.
-- The exceptions to `unsafe_code = "forbid"`, both in `apps/crewcraft-android`, which lowers the lint to `deny` and
-  allows it on two functions only (`#[expect(unsafe_code)]` with the reason): android-activity finds the entry point
-  by its symbol name, and `#[unsafe(no_mangle)] fn android_main` is unsafe code to the compiler; and `java_vm`
-  (T403) turns the JVM pointer android-activity records (in `ndk-context`) into a `jni::JavaVM` handle. Everything
-  else in the crate, and every other crate, stays `forbid`. No reviewed dependency exports that symbol for an app.
+- The exceptions to `unsafe_code = "forbid"`, all in `apps/crewcraft-android`, which lowers the lint to `deny` and
+  allows it on three functions only (`#[expect(unsafe_code)]` with the reason): android-activity finds the entry
+  point by its symbol name, and `#[unsafe(no_mangle)] fn android_main` is unsafe code to the compiler; `java_vm`
+  (T403) turns the JVM pointer android-activity records (in `ndk-context`) into a `jni::JavaVM` handle; and
+  `activity` (T405) does the same for the activity pointer (`AndroidApp::activity_as_ptr`). Everything else in the
+  crate, and every other crate, stays `forbid`. No reviewed dependency exports that symbol for an app.
 - The soft keyboard: winit asks for it when egui wants text input, and the app also asks explicitly
   (`show_soft_input`) when a text field gains the focus and hides it when none has the focus. On Android, typing
   arrives as key events that winit maps to characters, which egui turns into text.
@@ -67,6 +68,17 @@ and a new layout.
   record, and signs in over mutual TLS; started again, it signs in from the saved record. Run against a real
   `crewcraft-server` on the Android 14 emulator, see the T403 pull request for the log. The emulator's Keystore
   is software, so the hardware level is checked on a real phone with T407.
+
+### Invitation links (T405)
+
+- The manifest lets the activity open `crewcraft://enroll` links (`VIEW`, `DEFAULT`, `BROWSABLE`). At start the
+  app reads the launching intent's data over JNI (`jvm::launch_link`, through `AndroidApp::activity_as_ptr`; the
+  `ndk-context` context is the Application, not the activity), and `crewcraft::app::opened_with_link` takes it only
+  if it parses as an invitation link. The window then fills the enrollment form's link field
+  (`Update::InvitationLink`), only while the enrollment screen shows. The link is never logged.
+- Known limit: the activity is `singleTask`, and `NativeActivity` gives native code no new-intent callback, so a
+  link tapped while the app is already running brings it forward without filling the form; the person pastes it,
+  or closes the app and taps the link again. Lifting this needs a Java `onNewIntent`, which the app does not have.
 
 ## iOS (due 2027-03-31)
 
