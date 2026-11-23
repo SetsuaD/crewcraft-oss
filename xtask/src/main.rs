@@ -10,7 +10,8 @@ commands:
   dist    build the release packages (cargo xtask dist --help)
   apk     build the Android app (cargo xtask apk --help)
   ios     build CrewCraft.app for the iOS Simulator, on a Mac (cargo xtask ios --help)
-  icons   rewrite assets/icon/crewcraft.ico from assets/icon/crewcraft.svg";
+  icons   rewrite assets/icon/crewcraft.ico from assets/icon/crewcraft.svg
+  release make a release key, write and sign a release manifest, verify one (cargo xtask release --help)";
 
 fn run(args: &[String]) -> xtask::Result<()> {
     match args.split_first() {
@@ -34,6 +35,13 @@ fn run(args: &[String]) -> xtask::Result<()> {
                 return Ok(());
             }
             xtask::ios::run(&xtask::ios::parse_args(rest)?)
+        }
+        Some((command, rest)) if command == "release" => {
+            if rest.is_empty() || rest.iter().any(|arg| arg == "--help" || arg == "-h") {
+                println!("{}", xtask::release::USAGE);
+                return Ok(());
+            }
+            xtask::release::run(&xtask::release::parse_args(rest)?)
         }
         Some((command, _)) if command == "icons" => {
             let root = xtask::dist::workspace_root()?;
