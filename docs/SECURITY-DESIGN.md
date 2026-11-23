@@ -7,7 +7,10 @@
 
 - **Dark by default.** The staff entrance (the server's main port) speaks only mutual TLS. A client without an acceptable certificate
   fails the TLS handshake, so it receives no HTTP response at all: no banner, no login page, no error page, nothing
-  that confirms what is listening.
+  that confirms what is listening. One thing a prober does learn: in TLS 1.3 the server sends its own certificate
+  before it checks the client's, so anyone who opens a handshake can read the server certificate, and with it the
+  server's name and that its issuer is a private CrewCraft root. Choose a server name that says nothing you would not
+  put in DNS. A client's own connection also sends that name in the clear (SNI), as any TLS client does.
 - **Devices are enrolled, people are verified.** A device certificate says "this is an enrolled device of person P";
   the person's email and password and a TOTP code say "person P is present". All of them are required for a session
   (section 8).

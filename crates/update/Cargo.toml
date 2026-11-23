@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 crewcraft-strict-toml.workspace = true
+ed25519-dalek.workspace = true
 sha2.workspace = true
 
 [lints]

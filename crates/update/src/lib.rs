@@ -6,8 +6,11 @@
 //! and what an open web client should do.
 //! Called by: the server (self-update, serving client updates) and every client (accepting an update).
 //!
-//! Signatures: `open_release` takes a `SignatureCheck`. The Ed25519 implementation over the project's release keys
-//! joins in milestone M5 with the release tooling; until then only the rules here exist, and nothing installs anything.
+//! Signatures: `open_release` takes a `SignatureCheck`; `ed25519::ReleaseKeys` is the implementation over the pinned
+//! release keys (M5). The release signing tool and the installers that act on a release come later in M5; until then
+//! nothing installs anything.
+
+pub mod ed25519;
 
 use std::cmp::Ordering;
 use std::fmt;
