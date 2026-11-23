@@ -952,6 +952,7 @@ dependencies = [
  "crewcraft-totp",
  "crewcraft-ui-model",
  "eframe",
+ "egui_kittest",
  "embed-resource",
  "keyring-core",
  "log",

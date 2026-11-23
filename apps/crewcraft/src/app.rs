@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use crewcraft_desktop_ui::{Action, Update, Window};
 use crewcraft_enroll::{EnrollmentCode, InvitationLink};
+use zeroize::Zeroizing;
 
 use crate::bootstrap_transport::MAX_CONFIRMATION_WINDOW;
 use crate::device::{DeviceError, StoredDevice};
@@ -114,6 +115,14 @@ pub fn join_from_link(timeout: Duration) -> Join {
         })?;
         Ok((endpoint, link.code().clone()))
     })
+}
+
+/// The window update for a link the app was opened with (task T405: an Android intent; later, the desktop's link
+/// handlers): `InvitationLink` for a well-formed CrewCraft invitation link, `None` for anything else, which is
+/// dropped without a word, so a stray link cannot put text in the form.
+pub fn opened_with_link(text: &str) -> Option<Update> {
+    let text = text.trim();
+    InvitationLink::parse(text).ok().map(|_| Update::InvitationLink(Zeroizing::new(text.to_owned())))
 }
 
 type Started = Result<(Enrollment, Receiver<EnrollmentEvent>), String>;
@@ -478,6 +487,18 @@ pub struct DesktopApp {
 }
 
 impl DesktopApp {
+    /// Fill the enrollment form with the invitation link the app was opened with (`opened_with_link`). False if the
+    /// text is not an invitation link.
+    pub fn open_link(&mut self, text: &str) -> bool {
+        match opened_with_link(text) {
+            Some(update) => {
+                self.window.apply(update);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// The app with its enrollment in the platform's data folder (`data_dir`).
     pub fn new(context: &eframe::egui::Context, join: Join) -> Self {
         Self::with_data_dir(context, join, data_dir())

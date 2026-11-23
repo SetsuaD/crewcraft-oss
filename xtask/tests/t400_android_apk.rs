@@ -89,6 +89,10 @@ fn manifest_is_one_native_activity_with_internet_only_and_no_code() {
         r#"android:windowSoftInputMode="adjustResize""#,
         r#"<action android:name="android.intent.action.MAIN" />"#,
         r#"<category android:name="android.intent.category.LAUNCHER" />"#,
+        // Invitation links open the app (T405).
+        r#"<action android:name="android.intent.action.VIEW" />"#,
+        r#"<category android:name="android.intent.category.BROWSABLE" />"#,
+        r#"<data android:scheme="crewcraft" android:host="enroll" />"#,
     ] {
         assert!(text.contains(expected), "manifest lacks {expected}:\n{text}");
     }
