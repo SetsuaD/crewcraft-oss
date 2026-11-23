@@ -12,6 +12,10 @@ publish = false
 [dependencies]
 # The cabinet embedded in the MSI (MSZIP compression).
 cab = "0.6"
+# Release manifests (T501): the format, its parser and the Ed25519 check that servers and clients use.
+crewcraft-update.workspace = true
+# Signing release manifests (T501), the same Ed25519 implementation the update check uses.
+ed25519-dalek.workspace = true
 # gzip for the .tar.gz files and deflate for the .zip files, with the pure-Rust backend.
 flate2 = "1"
 # md5sums in the .deb control archive, which `dpkg --verify` checks (RustCrypto).
@@ -25,6 +29,8 @@ object = { version = "0.37", default-features = false, features = ["read_core", 
 rcgen.workspace = true
 # Renders the app icon's PNG sizes from assets/icon/crewcraft.svg at build time.
 resvg = { version = "0.50", default-features = false }
+# A new release key's random seed (T501).
+rand_core.workspace = true
 # The Android APK's v2 signature (T400): ECDSA P-256 signing and verifying. Already in the tree under rustls.
 ring = "0.17"
 sha2.workspace = true
@@ -34,6 +40,8 @@ time.workspace = true
 uuid = { version = "1", default-features = false, features = ["v5"] }
 # Reads the public key in an APK signing certificate (T400).
 x509-parser.workspace = true
+# A release key's seed is wiped from memory after use (T501).
+zeroize.workspace = true
 
 [lints]
 workspace = true

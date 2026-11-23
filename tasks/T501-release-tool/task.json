@@ -1,0 +1,12 @@
+{
+  "id": "T501-release-tool",
+  "title": "Release tool: release keys, signed release manifests, verification",
+  "crate": "xtask",
+  "files": ["xtask/src/release.rs", "xtask/src/lib.rs", "xtask/src/main.rs", "xtask/Cargo.toml", "Cargo.lock", "docs/RELEASE.md"],
+  "test_path": "xtask/tests/t501_release_tool.rs",
+  "test_cmd": "cargo test -p xtask --test t501_release_tool",
+  "depends_on": ["T500-release-keys", "T307-release-packages", "T400-android-apk"],
+  "spec": "cargo xtask release key --out F makes a random Ed25519 seed and writes it as 64 hex characters to a new file (never over an existing one, mode 0600 on Unix) and prints only the public key; release public --key F prints the public key; reading a key file refuses one that others can read (Unix) or that is not 64 hex characters. release manifest writes crewcraft_update's manifest (product crewcraft, version, channel beta or stable, published YYYY-MM-DD, min-client no newer than the version) with one artifact per package found in --dir for that version: the server .tar.gz/.zip per platform, the desktop AppImage, MSI and DMG, and the aarch64 APK, each with its size and SHA-256 (kinds server/desktop/android, platforms linux-x64, windows-x64, macos-universal, android); a missing package is left out, none at all is an error, and the result must parse. release sign refuses an invalid manifest, signs the exact bytes, checks the signature with open_release and ReleaseKeys before writing it to a new file, and the signature is 64 bytes. release verify opens the manifest with open_release against the pinned public keys (any of several), refuses another product, and with --dir checks each listed file's size and SHA-256.",
+  "status": "done",
+  "context": ["crates/update/src/lib.rs", "crates/update/src/ed25519.rs", "xtask/src/names.rs"]
+}
