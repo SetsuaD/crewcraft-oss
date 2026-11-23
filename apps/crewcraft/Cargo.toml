@@ -7,6 +7,11 @@ license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# The phone self-test (src/selftest.rs, tasks T403 and T422) for the emulator and the simulator. Never in a release:
+# the platform shells' --self-test builds turn it on.
+selftest = ["dep:crewcraft-totp"]
+
 [dependencies]
 # Sealing the saved device record (T313): XChaCha20-Poly1305 under a random key from the OS key store.
 chacha20poly1305.workspace = true
@@ -15,6 +20,8 @@ crewcraft-desktop-ui.workspace = true
 crewcraft-enroll.workspace = true
 crewcraft-proto.workspace = true
 crewcraft-tls.workspace = true
+# Only for the self-test (feature `selftest`): it answers the authenticator step itself.
+crewcraft-totp = { workspace = true, optional = true }
 crewcraft-ui-model.workspace = true
 # The OS key store behind one small API; each platform's store is its own crate below, so no other backend is built.
 keyring-core = "1.0.1"
@@ -62,6 +69,9 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIWindow",
     "UIWindowScene",
 ] }
+# The device key in the Secure Enclave, kept in the app's Keychain (T422; src/ios_keys.rs): the safe wrapper over
+# Apple's Security framework that the macOS key store already uses.
+security-framework = { version = "3.7", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.30.1", default-features = false, features = ["signal", "term"] }

@@ -54,4 +54,6 @@ Fonts are decided: `OFL-1.1` is allowed for fonts only (docs/CLEAN-ROOM.md rule 
 The beta builds are unsigned. Windows warns before running them, and macOS needs the app opened from the context menu.
 
 After the beta, the phone apps (M6) are due 2027-02-28 for Android and 2027-03-31 for iOS: plan and tasks in
-[docs/MOBILE.md](docs/MOBILE.md).
+[docs/MOBILE.md](docs/MOBILE.md). Done so far (2026-11-23): Android T400 to T403 and T405 (build lane, window, phone
+layout, Keystore device key, invitation links), iOS T420 to T422 (build lane, window, Secure Enclave device key). Of
+M5, the release-key check (T500) and the release tool (T501) are done.

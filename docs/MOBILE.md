@@ -86,7 +86,7 @@ and a new layout.
 |---|---|---|
 | T420 | Build lane on a Mac: `cargo xtask ios` builds `apps/crewcraft` for the iOS Simulator and writes `CrewCraft.app` in Rust (`xtask/src/ios.rs`): no Xcode project, asset catalog, storyboard, Swift or Objective-C. The device target (`aarch64-apple-ios`) waits for a signing identity (T424) | done for the simulator |
 | T421 | The egui window on iOS (winit's iOS backend through eframe, wgpu on Metal), the bundled font and the phone layout, the on-screen keyboard for text fields, safe areas | done |
-| T422 | Device key in the Secure Enclave (P-256, non-exportable), used for enrollment and TLS client signatures | |
+| T422 | Device key in the Secure Enclave (P-256, non-exportable), used for enrollment and TLS client signatures | **Done.** The simulator self-test enrolls against a real server and signs in, then signs in again after a restart, with the key in the (simulated) Secure Enclave (below) |
 | T423 | App storage, lifecycle, and `crewcraft://` links (a URL type) | |
 | T424 | Distribution through TestFlight, then the App Store | |
 | T425 | Acceptance on a real iPhone (iOS 17+) | |
@@ -129,6 +129,28 @@ launch argument, `xcrun simctl launch <device> io.github.setsuad.crewcraft --foc
 field the focus and its cursor once the window is up, exactly as a tap would; the keyboard then comes up through the
 same path. To try it by hand, open Simulator.app, turn off **I/O, Keyboard, Connect Hardware Keyboard** so the
 on-screen keyboard shows, and tap a field.
+
+### The device key in the Secure Enclave (T422)
+
+- `crewcraft::ios_keys::IosKeychain` implements the same `HardwareKeys` as the Android Keystore (T403), over the safe
+  `security-framework` crate (no unsafe code): `SecKey::new` with the Secure Enclave token makes a P-256 key, which is
+  then added to the app's Keychain under its alias (`security-framework` makes generated keys permanent only on
+  macOS, so on iOS the key is stored with `ItemAddOptions`; a Secure Enclave key may already be stored, which counts
+  as success) and read back from it. Signing is `ECDSASignatureMessageX962SHA256`. The key's location is read from
+  whether its private half can be exported: a Secure Enclave key cannot. Without a Secure Enclave the key is made in
+  software and the log says so.
+- The Keychain refuses an app without a Keychain access group (`errSecMissingEntitlement`, -34018). A simulator build
+  carries one (`keychain-access-groups` naming the bundle) the way Xcode does for the simulator: linked into the
+  program as its `__TEXT,__entitlements` section, with an ad-hoc signature that claims no entitlements (the simulator
+  will not launch an ad-hoc app whose signature claims restricted ones). A device build gets its entitlements from
+  its provisioning profile (T424).
+- The simulator test: `cargo xtask ios --self-test` builds `crewcraft::selftest` (shared with Android) to run beside
+  the window, for a server named at build time; its lines go to standard error. Run on an iPhone 17 simulator (iOS
+  26.5) against a real `crewcraft-server` on the same Mac: it enrolled and signed in, then signed in again after a
+  restart, with the key reported in `TrustedEnvironment`. The simulator's Secure Enclave is simulated, so the
+  hardware is checked on a real iPhone with T425.
+- `simctl launch --stdout/--stderr` needs absolute paths: with relative ones the launch is refused ("denied by service
+  delegate").
 
 ## Prerequisites outside the code
 

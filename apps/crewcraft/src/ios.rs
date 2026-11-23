@@ -259,6 +259,23 @@ impl log::Log for StderrLog {
 #[cfg(target_os = "ios")]
 static STDERR_LOG: StderrLog = StderrLog;
 
+/// The simulator self-test (T422; `cargo xtask ios --self-test`, never a release) on its own thread while the
+/// window runs: `selftest` with the device key in the Keychain, for the test server fixed when the app was built.
+/// Its lines go to standard error (`simctl launch --console`). It keeps its record in a folder of its own, so the
+/// window beside it starts as on a new phone.
+#[cfg(all(target_os = "ios", feature = "selftest"))]
+fn self_test(keys: std::sync::Arc<dyn crate::hardware_key::HardwareKeys>) {
+    const ACCOUNT: crate::selftest::Account<'static> = crate::selftest::Account {
+        link: env!("CREWCRAFT_SELFTEST_LINK"),
+        email: env!("CREWCRAFT_SELFTEST_EMAIL"),
+        password: env!("CREWCRAFT_SELFTEST_PASSWORD"),
+    };
+    let dir = crate::app::data_dir().map(|dir| dir.join("selftest"));
+    std::thread::spawn(move || {
+        crate::selftest::run(dir.as_deref(), keys, ACCOUNT, "CrewCraft self-test on iOS", &|line| eprintln!("{line}"));
+    });
+}
+
 /// Opens the window on iOS and runs it until the app ends (on iOS the event loop never returns).
 #[cfg(target_os = "ios")]
 pub fn run(focus_first_field: bool) -> std::io::Result<()> {
@@ -281,10 +298,17 @@ pub fn run(focus_first_field: bool) -> std::io::Result<()> {
         ..Default::default()
     };
     let join = crate::app::join_from_link(crate::app::JOIN_TIMEOUT);
+    // The device key lives in the Secure Enclave, kept in the app's Keychain (T422).
+    let keys: std::sync::Arc<dyn crate::hardware_key::HardwareKeys> = std::sync::Arc::new(crate::ios_keys::IosKeychain::new());
+    #[cfg(feature = "selftest")]
+    self_test(keys.clone());
     eframe::run_native(
         "CrewCraft",
         options,
-        Box::new(move |creation| Ok(Box::new(PhoneApp::new(crate::app::DesktopApp::new(&creation.egui_ctx, join), focus_first_field)))),
+        Box::new(move |creation| {
+            let app = crate::app::DesktopApp::with_hardware_keys(&creation.egui_ctx, join, crate::app::data_dir(), keys);
+            Ok(Box::new(PhoneApp::new(app, focus_first_field)))
+        }),
     )
     .map_err(|error| std::io::Error::other(format!("the window could not open: {error}")))
 }

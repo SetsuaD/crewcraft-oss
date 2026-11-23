@@ -1,0 +1,29 @@
+{
+  "id": "T422-secure-enclave-key",
+  "title": "Device key in the iOS Secure Enclave, kept in the app's Keychain",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/src/ios_keys.rs",
+    "apps/crewcraft/src/ios.rs",
+    "apps/crewcraft/src/selftest.rs",
+    "apps/crewcraft/src/hardware_key.rs",
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft/Cargo.toml",
+    "apps/crewcraft-android/src/selftest.rs",
+    "apps/crewcraft-android/Cargo.toml",
+    "xtask/src/ios.rs",
+    "xtask/tests/t420_ios_app.rs",
+    "tasks/T420-ios-app/test.rs",
+    "Cargo.lock",
+    "docs/MOBILE.md",
+    "docs/SECURITY-DESIGN.md",
+    "ROADMAP.md"
+  ],
+  "test_path": "apps/crewcraft/tests/t422_secure_enclave_key.rs",
+  "test_cmd": "cargo test -p crewcraft --test t422_secure_enclave_key",
+  "depends_on": ["T403-hardware-device-key", "T420-ios-app", "T421-ios-window"],
+  "spec": "On iOS, IosKeychain implements hardware_key::HardwareKeys over the safe security-framework API: generate makes a P-256 key with the Secure Enclave token (a software key, logged, where there is none), adds it to the Keychain under its alias with ItemAddOptions (errSecDuplicateItem counts as stored) and returns the key as read back from the Keychain; open finds it by label (errSecItemNotFound is NotFound); delete removes it; sign uses ECDSASignatureMessageX962SHA256; the location is TrustedEnvironment when the private key cannot be exported, otherwise Software; hardware_key::p256_spki wraps the 65-byte point the Keychain returns. The iOS app starts its controller with IosKeychain. The platform-neutral behaviour (the record, its key alias, failures and cleanup) is T403's test; this test checks p256_spki everywhere and, on iOS only, a Keychain round trip. crewcraft::selftest (feature selftest) is the phone self-test shared by Android and iOS; cargo xtask ios --self-test builds it to run beside the window. Every simulator build links simulator_entitlements (keychain-access-groups naming the bundle, no restricted entitlement) into the program as __TEXT,__entitlements. Proven on an iPhone simulator against a real crewcraft-server: enroll and sign in, then sign in again after a restart, key in TrustedEnvironment.",
+  "status": "done",
+  "context": ["docs/MOBILE.md", "apps/crewcraft/src/hardware_key.rs", "apps/crewcraft-android/src/keystore.rs"]
+}

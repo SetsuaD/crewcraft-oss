@@ -112,6 +112,12 @@ pub fn p256_point(spki: &[u8]) -> Option<&[u8]> {
     (point.len() == 65 && point[0] == 0x04).then_some(point)
 }
 
+/// A P-256 SubjectPublicKeyInfo around a 65-byte uncompressed point (how the iOS Keychain hands out a public key),
+/// or `None` if `point` is not one.
+pub fn p256_spki(point: &[u8]) -> Option<Vec<u8>> {
+    (point.len() == 65 && point[0] == 0x04).then(|| [&P256_SPKI_HEADER[..], point].concat())
+}
+
 /// Lets a hardware key sign a certificate request (`rcgen::CertificateParams::serialize_request`).
 pub struct RequestSigner {
     key: Arc<dyn HardwareKey>,

@@ -10,9 +10,13 @@ pub mod enroll_client;
 pub mod enrollment;
 pub mod hardware_key;
 pub mod ios;
+#[cfg(target_os = "ios")]
+pub mod ios_keys;
 pub mod key_vault;
 pub mod lab_client;
 pub mod lab_device;
+#[cfg(feature = "selftest")]
+pub mod selftest;
 pub mod server_endpoint;
 pub mod signed_in;
 pub mod worker;
