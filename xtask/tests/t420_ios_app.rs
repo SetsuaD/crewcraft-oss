@@ -70,6 +70,14 @@ fn arguments() {
     assert_eq!(options.target, IosTarget::SimArm64);
     let default = ios::parse_args(&args(&["--version", "0.1.0", "--out", "o"])).unwrap();
     assert_eq!(default.target, IosTarget::host_default());
+    // The simulator build carries a Keychain access group, so it can keep its device key (T422).
+    let entitlements = ios::simulator_entitlements();
+    assert!(entitlements.contains("<key>keychain-access-groups</key>"));
+    assert!(entitlements.contains("<string>io.github.setsuad.crewcraft</string>"));
+    assert!(!entitlements.contains("application-identifier"), "a restricted entitlement would stop the ad-hoc app from launching");
+    // The simulator self-test of the Keychain device key (T422) is opt-in.
+    assert!(!default.self_test);
+    assert!(ios::parse_args(&args(&["--version", "0.1.0", "--out", "o", "--self-test"])).unwrap().self_test);
     assert!(ios::parse_args(&args(&["--out", "o"])).is_err(), "--version is required");
     assert!(ios::parse_args(&args(&["--version", "0.1.0"])).is_err(), "--out is required");
     assert!(ios::parse_args(&args(&["--version", "0.1.0", "--out", "o", "--target", "sim-x86_64", "--target", "sim-arm64"])).is_err());

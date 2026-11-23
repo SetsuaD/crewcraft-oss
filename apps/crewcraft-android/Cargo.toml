@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 # The emulator self-test of task T403 in place of the window (src/selftest.rs); `cargo xtask apk --self-test` builds
 # it, with the test server's invitation fixed at build time. Never for a release.
-selftest = ["dep:crewcraft-totp"]
+selftest = ["crewcraft/selftest"]
 
 [dependencies]
 crewcraft-client-core.workspace = true
@@ -32,8 +32,6 @@ android_logger = { version = "0.15", default-features = false }
 # android-activity fills in. Both are already part of the build through android-activity.
 jni = { version = "0.22", default-features = false }
 ndk-context = "0.1"
-# Only for the emulator self-test (feature `selftest`): it answers the authenticator step itself.
-crewcraft-totp = { workspace = true, optional = true }
 log = "0.4"
 # The AndroidApp handle (winit's re-export of android-activity, the one eframe runs on): the data path and the
 # soft keyboard.

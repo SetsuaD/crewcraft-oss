@@ -465,10 +465,9 @@ pub fn no_key_store(dir: &Path) -> String {
             .to_owned();
     }
     if cfg!(target_os = "ios") {
-        // The Secure Enclave and the Keychain come with tasks T422 and T423; until then the iPhone app shows its
-        // screens but cannot keep an enrollment.
-        return "This version of CrewCraft cannot use this iPhone's key store yet, so it cannot keep an enrollment and will not \
-                save one."
+        // The device key lives in the Secure Enclave and the app's Keychain (T422).
+        return "CrewCraft could not reach this iPhone's Keychain, so it cannot make a device key or keep an enrollment. Restart \
+                the iPhone and try again."
             .to_owned();
     }
     format!(
