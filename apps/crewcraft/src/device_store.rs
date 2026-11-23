@@ -20,6 +20,12 @@
 //! encrypted with XChaCha20-Poly1305 under the profile's 32-byte key, followed by its 16-byte tag. The associated
 //! data is the version 2 magic line, the profile name's length (`u32` big-endian) and the profile name, so a sealed
 //! record cannot be renamed to another profile or read as another version.
+//!
+//! Hardware format, version 3 (task T403, for a device key kept in a hardware key store such as the Android
+//! Keystore): the magic line `crewcraft device v3`, then the same seven fields as version 1, except that the last one
+//! is the key store's alias for the device key (1 to 64 of `a-z`, `0-9`, `-` and `_`) instead of the key, then the
+//! SHA-256 of everything before it. The record holds no secret; the key store holds the key and signs with it. A
+//! hardware store (`open_hardware`) reads and writes only this version, and the other stores refuse it (`KeyKind`).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -36,12 +42,16 @@ use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::device::{MAX_KEY_DER, StoredDevice};
+use crate::device::{DeviceKey, MAX_KEY_DER, StoredDevice};
+use crate::hardware_key::{HardwareKeyError, HardwareKeys, MAX_ALIAS, valid_alias};
 use crate::key_vault::{KEY_BYTES, KeyVault, VaultError, VaultKey};
 use crate::server_endpoint::{MAX_ADDRESS, MAX_ROOT_DER, ServerEndpoint};
 
 const MAGIC: &[u8] = b"crewcraft device v1\n";
 const SEALED_MAGIC: &[u8] = b"crewcraft device v2\n";
+const HARDWARE_MAGIC: &[u8] = b"crewcraft device v3\n";
+/// The alias `check_key_store` asks a hardware key store about; it is never created.
+const PROBE_ALIAS: &str = "crewcraft-probe";
 const NONCE: usize = 24;
 const TAG: usize = 16;
 /// What sealing adds to a record: the version 2 magic line, the nonce and the tag.
@@ -79,7 +89,20 @@ pub enum StoreError {
     KeyMissing,
     /// A plain store found a sealed record. Only a sealed store, with the key store, can read it.
     Sealed,
+    /// The record's key is of the other kind: a hardware-key record in a desktop store, or a record holding a key in
+    /// a hardware store (or a device of the wrong kind given to `save`).
+    KeyKind,
     Io(io::ErrorKind),
+}
+
+impl From<HardwareKeyError> for StoreError {
+    fn from(error: HardwareKeyError) -> Self {
+        match error {
+            HardwareKeyError::Unavailable => Self::KeyStoreUnavailable,
+            HardwareKeyError::NotFound => Self::KeyMissing,
+            HardwareKeyError::SignFailed | HardwareKeyError::Invalid => Self::Corrupt,
+        }
+    }
 }
 
 impl From<io::Error> for StoreError {
@@ -103,6 +126,8 @@ pub struct DeviceStore {
     dir: PathBuf,
     /// The key store that seals the records; `None` for a plain store.
     vault: Option<Arc<dyn KeyVault>>,
+    /// The hardware key store that holds the device keys, for a hardware store.
+    hardware: Option<Arc<dyn HardwareKeys>>,
 }
 
 impl DeviceStore {
@@ -112,19 +137,31 @@ impl DeviceStore {
     /// if it is not already.
     pub fn open(dir: &Path) -> Result<Self, StoreError> {
         create_private_dir(dir)?;
-        Ok(Self { dir: dir.to_owned(), vault: None })
+        Ok(Self { dir: dir.to_owned(), vault: None, hardware: None })
     }
 
     /// A sealed store in `dir`: each record is sealed under its profile's key in `vault` (version 2), and an unsealed
     /// record found there is sealed the first time it is loaded. The directory is handled as in `open`.
     pub fn open_sealed(dir: &Path, vault: Arc<dyn KeyVault>) -> Result<Self, StoreError> {
         create_private_dir(dir)?;
-        Ok(Self { dir: dir.to_owned(), vault: Some(vault) })
+        Ok(Self { dir: dir.to_owned(), vault: Some(vault), hardware: None })
+    }
+
+    /// A hardware store in `dir`, for devices whose key `keys` holds (version 3): each record names its key's alias
+    /// and holds no secret, and loading one asks `keys` for that key. The directory is handled as in `open`.
+    pub fn open_hardware(dir: &Path, keys: Arc<dyn HardwareKeys>) -> Result<Self, StoreError> {
+        create_private_dir(dir)?;
+        Ok(Self { dir: dir.to_owned(), vault: None, hardware: Some(keys) })
     }
 
     /// Whether this store seals its records.
     pub fn is_sealed(&self) -> bool {
         self.vault.is_some()
+    }
+
+    /// Whether this store keeps hardware-key records.
+    pub fn is_hardware(&self) -> bool {
+        self.hardware.is_some()
     }
 
     /// For a sealed store, ask the key store for `profile`'s key and report only whether it answered
@@ -133,6 +170,12 @@ impl DeviceStore {
     pub fn check_key_store(&self, profile: &str) -> Result<(), StoreError> {
         if !valid_profile(profile) {
             return Err(StoreError::InvalidName);
+        }
+        if let Some(keys) = &self.hardware {
+            return match keys.open(PROBE_ALIAS) {
+                Err(HardwareKeyError::Unavailable) => Err(StoreError::KeyStoreUnavailable),
+                _ => Ok(()),
+            };
         }
         match &self.vault {
             Some(vault) => match vault.load(profile) {
@@ -154,11 +197,26 @@ impl DeviceStore {
     /// Write `device` as `profile`, replacing any earlier record in one step: a reader sees the old record or the
     /// new one, never a mix.
     ///
+    /// A hardware store writes a version 3 record and then deletes the key the replaced record named, if any.
+    ///
     /// A sealed store seals the record under the profile's key. It keeps the key the key store already holds, so the
     /// old record stays readable until the rename, and creates and saves a new random key first when there is none
     /// (or what is there is not a key).
     pub fn save(&self, profile: &str, device: &StoredDevice) -> Result<(), StoreError> {
         let target = self.path(profile)?;
+        if let Some(keys) = &self.hardware {
+            let record = encode_hardware(device, MAX_RECORD)?;
+            // A record replaced by a new enrollment names a key nobody will use again: delete it once the new
+            // record is in place.
+            let replaced = read_bounded(&target).ok().and_then(|bytes| hardware_alias(&bytes));
+            self.replace(profile, &target, &record)?;
+            if let Some(old) = replaced
+                && Some(old.as_str()) != device.hardware_alias()
+            {
+                keys.delete(&old)?;
+            }
+            return Ok(());
+        }
         let record = match &self.vault {
             None => encode(device, MAX_RECORD)?,
             Some(vault) => {
@@ -226,6 +284,15 @@ impl DeviceStore {
         if bytes.len() > MAX_RECORD {
             return Err(StoreError::TooLarge);
         }
+        if let Some(keys) = &self.hardware {
+            if !bytes.starts_with(HARDWARE_MAGIC) {
+                return Err(StoreError::KeyKind);
+            }
+            return decode_hardware(&bytes, keys.as_ref());
+        }
+        if bytes.starts_with(HARDWARE_MAGIC) {
+            return Err(StoreError::KeyKind);
+        }
         let Some(vault) = &self.vault else {
             if bytes.starts_with(SEALED_MAGIC) {
                 return Err(StoreError::Sealed);
@@ -250,14 +317,24 @@ impl DeviceStore {
     ///
     /// The file goes first, so a key store that cannot be reached never leaves a readable record behind; then the
     /// key is deleted, and a key store error is returned even though the record is already gone.
+    ///
+    /// A hardware store reads the record's alias first, deletes the file, then deletes that key from the key store.
     pub fn remove(&self, profile: &str) -> Result<bool, StoreError> {
-        let removed = match fs::remove_file(self.path(profile)?) {
+        let path = self.path(profile)?;
+        let alias = match &self.hardware {
+            Some(_) => read_bounded(&path).ok().and_then(|bytes| hardware_alias(&bytes)),
+            None => None,
+        };
+        let removed = match fs::remove_file(&path) {
             Ok(()) => true,
             Err(error) if error.kind() == io::ErrorKind::NotFound => false,
             Err(error) => return Err(error.into()),
         };
         if let Some(vault) = &self.vault {
             vault.remove(profile)?;
+        }
+        if let (Some(keys), Some(alias)) = (&self.hardware, alias) {
+            keys.delete(&alias)?;
         }
         Ok(removed)
     }
@@ -288,8 +365,23 @@ fn valid_profile(profile: &str) -> bool {
         && profile.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_')
 }
 
-/// The version 1 record of `device`, refused as `TooLarge` past `max` bytes.
+/// The version 1 record of `device` (which must hold a software key), refused as `TooLarge` past `max` bytes.
 fn encode(device: &StoredDevice, max: usize) -> Result<Zeroizing<Vec<u8>>, StoreError> {
+    let key = device.key_pkcs8().ok_or(StoreError::KeyKind)?;
+    encode_fields(MAGIC, device, key, max)
+}
+
+/// The version 3 record of `device` (which must hold a hardware key), refused as `TooLarge` past `max` bytes.
+fn encode_hardware(device: &StoredDevice, max: usize) -> Result<Zeroizing<Vec<u8>>, StoreError> {
+    let alias = device.hardware_alias().ok_or(StoreError::KeyKind)?;
+    if !valid_alias(alias) {
+        return Err(StoreError::KeyKind);
+    }
+    encode_fields(HARDWARE_MAGIC, device, alias.as_bytes(), max)
+}
+
+/// `magic`, the six endpoint and certificate fields, `last` (the key, or its alias) and the digest.
+fn encode_fields(magic: &[u8], device: &StoredDevice, last: &[u8], max: usize) -> Result<Zeroizing<Vec<u8>>, StoreError> {
     let endpoint = device.endpoint();
     let fingerprint = endpoint.fingerprint().to_string();
     let fields: [&[u8]; 7] = [
@@ -299,14 +391,14 @@ fn encode(device: &StoredDevice, max: usize) -> Result<Zeroizing<Vec<u8>>, Store
         endpoint.root_der(),
         device.certificate(),
         device.issuer_certificate(),
-        device.key_pkcs8(),
+        last,
     ];
-    let length = MAGIC.len() + fields.iter().map(|field| 4 + field.len()).sum::<usize>() + DIGEST;
+    let length = magic.len() + fields.iter().map(|field| 4 + field.len()).sum::<usize>() + DIGEST;
     if length > max {
         return Err(StoreError::TooLarge);
     }
     let mut record = Zeroizing::new(Vec::with_capacity(length));
-    record.extend_from_slice(MAGIC);
+    record.extend_from_slice(magic);
     for field in fields {
         let size = u32::try_from(field.len()).map_err(|_| StoreError::TooLarge)?;
         record.extend_from_slice(&size.to_be_bytes());
@@ -317,24 +409,64 @@ fn encode(device: &StoredDevice, max: usize) -> Result<Zeroizing<Vec<u8>>, Store
     Ok(record)
 }
 
-fn decode(bytes: &[u8]) -> Option<StoredDevice> {
+/// The parts of an intact record that starts with `magic`, its last field at most `max_last` bytes.
+struct Parts<'a> {
+    endpoint: ServerEndpoint,
+    leaf: Vec<u8>,
+    issuer: Vec<u8>,
+    last: &'a [u8],
+}
+
+fn decode_parts<'a>(bytes: &'a [u8], magic: &[u8], max_last: usize) -> Option<Parts<'a>> {
     let (body, digest) = bytes.split_at_checked(bytes.len().checked_sub(DIGEST)?)?;
     if Sha256::digest(body).as_slice() != digest {
         return None;
     }
-    let mut fields = Fields(body.strip_prefix(MAGIC)?);
+    let mut fields = Fields(body.strip_prefix(magic)?);
     let address = std::str::from_utf8(fields.field(MAX_ADDRESS)?).ok()?.to_owned();
     let server_name = std::str::from_utf8(fields.field(MAX_SERVER_NAME)?).ok()?.to_owned();
     let fingerprint = RootFingerprint::parse(std::str::from_utf8(fields.field(FINGERPRINT_HEX)?).ok()?)?;
     let root = fields.field(MAX_ROOT_DER)?.to_vec();
     let leaf = fields.field(MAX_CERT)?.to_vec();
     let issuer = fields.field(MAX_CERT)?.to_vec();
-    let key = Zeroizing::new(fields.field(MAX_KEY_DER)?.to_vec());
+    let last = fields.field(max_last)?;
     if !fields.0.is_empty() || leaf.is_empty() || issuer.is_empty() {
         return None;
     }
     let endpoint = ServerEndpoint::new(&address, &server_name, fingerprint, &root).ok()?;
-    StoredDevice::from_parts(endpoint, leaf, issuer, key).ok()
+    Some(Parts { endpoint, leaf, issuer, last })
+}
+
+/// A version 1 record.
+fn decode(bytes: &[u8]) -> Option<StoredDevice> {
+    let parts = decode_parts(bytes, MAGIC, MAX_KEY_DER)?;
+    let key = DeviceKey::Software(Zeroizing::new(parts.last.to_vec()));
+    StoredDevice::from_parts(parts.endpoint, parts.leaf, parts.issuer, key).ok()
+}
+
+/// A version 3 record, with its key from `keys`: `KeyMissing` if the key store no longer holds it,
+/// `KeyStoreUnavailable` if the key store cannot be reached, `Corrupt` for anything else that does not fit.
+fn decode_hardware(bytes: &[u8], keys: &dyn HardwareKeys) -> Result<StoredDevice, StoreError> {
+    let parts = decode_parts(bytes, HARDWARE_MAGIC, MAX_ALIAS).ok_or(StoreError::Corrupt)?;
+    let alias = std::str::from_utf8(parts.last).ok().filter(|alias| valid_alias(alias)).ok_or(StoreError::Corrupt)?;
+    let key = keys.open(alias)?;
+    if key.alias() != alias {
+        return Err(StoreError::Corrupt);
+    }
+    StoredDevice::from_parts(parts.endpoint, parts.leaf, parts.issuer, DeviceKey::Hardware(key)).map_err(|_| StoreError::Corrupt)
+}
+
+/// The alias a version 3 record names, if it is one.
+fn hardware_alias(bytes: &[u8]) -> Option<String> {
+    let parts = decode_parts(bytes, HARDWARE_MAGIC, MAX_ALIAS)?;
+    std::str::from_utf8(parts.last).ok().filter(|alias| valid_alias(alias)).map(str::to_owned)
+}
+
+/// Up to `MAX_RECORD + 1` bytes of `path`.
+fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    File::open(path)?.take(MAX_RECORD as u64 + 1).read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// The associated data of a sealed record: the version 2 magic line and the length-prefixed profile name.

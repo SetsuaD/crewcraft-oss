@@ -6,7 +6,9 @@
 //! runs `DesktopApp` in an eframe window, and `crewcraft-android`, which runs it on Android (T401). Calls: `enrollment`, `device_store`, `worker`, and a `Join` that turns an
 //! invitation link into a server endpoint and an enrollment code (`join_from_link`; tests pass their own). Task T311
 //! moved joining off the window's thread. Task T313 seals the saved device with the key store (`key_vault`; tests
-//! pass an in-memory one), unless the person has opted out with `PLAIN_RECORD_SETTING`.
+//! pass an in-memory one), unless the person has opted out with `PLAIN_RECORD_SETTING`. Task T403 adds phones: with
+//! a hardware key store (`Controller::start_with_hardware_keys`) each enrollment makes its device key inside that
+//! store and the record only names it.
 //!
 //! Everything that does not need a window is in `Controller`, so it is tested without one.
 
@@ -19,9 +21,11 @@ use std::time::Duration;
 use crewcraft_desktop_ui::{Action, Update, Window};
 use crewcraft_enroll::{EnrollmentCode, InvitationLink};
 
+use crate::bootstrap_transport::MAX_CONFIRMATION_WINDOW;
 use crate::device::{DeviceError, StoredDevice};
 use crate::device_store::{DeviceStore, StoreError};
-use crate::enrollment::{Enrollment, EnrollmentEvent};
+use crate::enrollment::{Enrollment, EnrollmentEvent, KeySource};
+use crate::hardware_key::{HardwareKeys, new_alias};
 use crate::key_vault::{OpenVault, SystemVault};
 use crate::lab_client::LabError;
 use crate::server_endpoint::ServerEndpoint;
@@ -154,6 +158,8 @@ pub struct Controller {
     config: WorkerConfig,
     enrollment: Option<(Enrollment, Receiver<EnrollmentEvent>)>,
     worker: Option<(Worker, Receiver<Event>)>,
+    /// The hardware key store new device keys are made in; `None` on the desktop (software keys, sealed records).
+    hardware: Option<Arc<dyn HardwareKeys>>,
 }
 
 impl Controller {
@@ -167,8 +173,32 @@ impl Controller {
     /// data folder or the person has opted out of the key store (`PLAIN_RECORD_SETTING`). When it cannot be opened, or
     /// does not answer, the app says so and still starts; it never falls back to a plain file on its own.
     pub fn start_with_vault(dir: Option<PathBuf>, open_vault: OpenVault<'_>, join: Join, wake: Wake, config: WorkerConfig) -> (Self, Vec<Update>) {
+        Self::start_with_store(dir, |dir| open_store(dir, open_vault), None, join, wake, config)
+    }
+
+    /// Start a phone app whose device keys live in the hardware key store `keys` (the Android Keystore; tests pass
+    /// `hardware_key::MemoryKeys`). The record in `dir` names the key and holds no secret (`DeviceStore::open_hardware`).
+    pub fn start_with_hardware_keys(
+        dir: Option<PathBuf>,
+        keys: Arc<dyn HardwareKeys>,
+        join: Join,
+        wake: Wake,
+        config: WorkerConfig,
+    ) -> (Self, Vec<Update>) {
+        let store_keys = keys.clone();
+        Self::start_with_store(dir, move |dir| DeviceStore::open_hardware(dir, store_keys).map_err(store_problem), Some(keys), join, wake, config)
+    }
+
+    fn start_with_store(
+        dir: Option<PathBuf>,
+        open: impl FnOnce(&Path) -> Result<DeviceStore, String>,
+        hardware: Option<Arc<dyn HardwareKeys>>,
+        join: Join,
+        wake: Wake,
+        config: WorkerConfig,
+    ) -> (Self, Vec<Update>) {
         let mut updates = Vec::new();
-        let store = match dir.as_deref().map(|dir| open_store(dir, open_vault)) {
+        let store = match dir.as_deref().map(open) {
             Some(Ok(store)) => Some(store),
             Some(Err(problem)) => {
                 updates.push(Update::Failed(problem));
@@ -180,7 +210,8 @@ impl Controller {
             }
         };
         let remembered = store.as_ref().and(dir.as_deref()).and_then(read_last_email);
-        let mut controller = Self { store, dir, join: Arc::new(Mutex::new(join)), joining: None, wake, config, enrollment: None, worker: None };
+        let mut controller =
+            Self { store, dir, join: Arc::new(Mutex::new(join)), joining: None, wake, config, enrollment: None, worker: None, hardware };
         let saved = controller.store.as_ref().map(|store| store.load(PROFILE));
         match saved {
             Some(Ok(device)) => {
@@ -211,11 +242,15 @@ impl Controller {
             Action::Enroll { link, password } => {
                 let (sender, receiver) = mpsc::channel();
                 let (join, wake) = (self.join.clone(), self.wake.clone());
+                let key = match &self.hardware {
+                    Some(keys) => KeySource::Hardware { keys: keys.clone(), alias: new_alias(PROFILE) },
+                    None => KeySource::Software,
+                };
                 let spawned = thread::Builder::new().name("crewcraft-join".into()).spawn(move || {
                     let joined = join.lock().map_err(|_| "Enrollment could not start.".to_owned()).and_then(|join| (*join)(link.as_str()));
                     let started = joined.and_then(|(endpoint, code)| {
                         let notify = wake.clone();
-                        Enrollment::start(endpoint, code, &device_name(), &password, move || notify())
+                        Enrollment::start_with_key(endpoint, code, &device_name(), &password, MAX_CONFIRMATION_WINDOW, key, move || notify())
                             .map_err(|_| "Enrollment could not start.".to_owned())
                     });
                     if sender.send(started).is_ok() {
@@ -407,6 +442,7 @@ pub fn store_problem(error: StoreError) -> String {
             "The saved enrollment is sealed with a key from the key store, but CrewCraft is set to keep it in a plain file \
              ({PLAIN_RECORD_SETTING}). Remove that setting, or enroll this device again."
         ),
+        StoreError::KeyKind => "The saved enrollment was made for a different kind of key store. Enroll this device again.".to_owned(),
         StoreError::InvalidName | StoreError::Io(_) => "CrewCraft could not read or write its saved enrollment.".to_owned(),
     }
 }
@@ -414,9 +450,9 @@ pub fn store_problem(error: StoreError) -> String {
 /// What to tell the person when the data folder `dir` has no key store to seal the enrollment with.
 pub fn no_key_store(dir: &Path) -> String {
     if cfg!(target_os = "android") {
-        // The Android Keystore comes with task T403; until then the phone app can show its screens but not enroll.
-        return "This version of CrewCraft cannot use this phone's key store yet, so it cannot keep an enrollment and will not \
-                save one."
+        // The device key lives in the Android Keystore (T403); without it there is nowhere safe to make one.
+        return "CrewCraft could not reach this phone's key store (the Android Keystore), so it cannot make a device key or keep \
+                an enrollment. Restart the phone and try again."
             .to_owned();
     }
     if cfg!(target_os = "ios") {
@@ -449,10 +485,20 @@ impl DesktopApp {
 
     /// The app with its enrollment in `dir`: on Android, a folder in the app's private storage (T401).
     pub fn with_data_dir(context: &eframe::egui::Context, join: Join, dir: Option<PathBuf>) -> Self {
+        Self::with_controller(context, |wake| Controller::start(dir, join, wake, WorkerConfig::default()))
+    }
+
+    /// The app with its enrollment in `dir` and its device key in the hardware key store `keys` (the Android
+    /// Keystore, T403).
+    pub fn with_hardware_keys(context: &eframe::egui::Context, join: Join, dir: Option<PathBuf>, keys: Arc<dyn HardwareKeys>) -> Self {
+        Self::with_controller(context, |wake| Controller::start_with_hardware_keys(dir, keys, join, wake, WorkerConfig::default()))
+    }
+
+    fn with_controller(context: &eframe::egui::Context, start: impl FnOnce(Wake) -> (Controller, Vec<Update>)) -> Self {
         context.set_fonts(crewcraft_desktop_ui::fonts());
         let repaint = context.clone();
         let wake: Wake = Arc::new(move || repaint.request_repaint());
-        let (controller, updates) = Controller::start(dir, join, wake, WorkerConfig::default());
+        let (controller, updates) = start(wake);
         let mut window = Window::new();
         for update in updates {
             window.apply(update);
