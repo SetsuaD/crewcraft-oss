@@ -1,0 +1,12 @@
+{
+  "id": "T500-release-keys",
+  "title": "Check release signatures with Ed25519 over the pinned release keys",
+  "crate": "crewcraft-update",
+  "files": ["crates/update/src/ed25519.rs", "crates/update/src/lib.rs", "crates/update/Cargo.toml", "Cargo.lock"],
+  "test_path": "crates/update/tests/t500_release_keys.rs",
+  "test_cmd": "cargo test -p crewcraft-update --test t500_release_keys",
+  "depends_on": [],
+  "spec": "ReleaseKeys is the SignatureCheck that open_release uses (REQUIREMENTS 2.21, ROADMAP M5). ReleaseKeys::new takes 1 to MAX_RELEASE_KEYS (8) raw 32-byte Ed25519 public keys and refuses an empty list (NoKeys), too many (TooMany), a value that is not a curve point (NotAKey(i)), a small-order key (Weak(i)) and a repeated key (Duplicate(i)); from_hex takes 64-character hex strings in either case. verify is true only for a 64-byte detached signature over the exact message bytes that verify_strict accepts under one of the pinned keys, so several keys can be pinned for rotation; any other length, a non-canonical signature or a changed byte is false. It holds no private key. The RFC 8032 section 7.1 vectors verify, and open_release accepts a manifest signed by a pinned key and refuses one signed by any other.",
+  "status": "done",
+  "context": ["crates/update/tests/update.rs", "docs/REQUIREMENTS.md"]
+}
