@@ -65,7 +65,9 @@ Each is decided when its milestone starts, and recorded here if it adds a row.
   hardware codecs are reached through the operating system.
 - **Android (M6).** The window reaches Android through `android-activity`, `ndk`, `ndk-sys`, `jni` and
   `android_log-sys` (logging), which declare the system's own functions and compile no C. Their FFI is in those
-  crates; the app's only unsafe item is the `android_main` entry symbol (docs/MOBILE.md).
+  crates. The app has two unsafe items: the `android_main` entry symbol, and turning the JVM pointer android-activity
+  records into a `jni` handle (T403), through which it calls the Android Keystore's Java API with no Java source of
+  its own (docs/MOBILE.md).
 - **Android push (M6).** The Google push library is Java; a held connection or a UnifiedPush distributor avoids it.
 - **Platform APIs.** Operating-system services (key stores, camera, notifications, call screens) are reached from Rust
   through bindings. Bindings that only declare the system's own functions, such as `libc` or `windows-sys`, compile no

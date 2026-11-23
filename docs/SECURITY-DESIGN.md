@@ -84,6 +84,17 @@
 > TPM, the Secure Enclave), is still the planned replacement. Until then a session running as the person can export
 > the key, which is the beta's honest limit.
 
+> **Implementation status (Android, task T403).** On Android the device key is generated inside the Android Keystore
+> and is never in the app's memory or files: `AndroidKeystore` (apps/crewcraft-android) asks for a P-256 signing key
+> (SHA-256 only) in StrongBox where the phone has one, otherwise in its trusted environment, and the Keystore signs
+> the enrollment request and every TLS client handshake (`crewcraft::hardware_key`). The saved record (version 3)
+> holds the server's endpoint, the certificates and the key's alias, and no secret; it lives in the app's private
+> storage. The app reads where the Keystore says the key lives (`KeyInfo`) and logs it. A record whose key the
+> Keystore no longer holds is refused, and the person enrolls again; a new enrollment deletes the old key, and a
+> failed one deletes the key it made. What a hardware key does not change: any code running inside the app can still
+> ask the Keystore to sign, so a compromised app can act as the device while it runs, but it cannot copy the key off
+> the phone. The emulator's Keystore is software only, so the emulator test proves the flow, not the hardware.
+
 Device keys are ECDSA P-256 because it is the one algorithm every hardware key store supports (the Secure Enclave
 supports nothing else). The bootstrap key is Ed25519 (software only, short-lived).
 

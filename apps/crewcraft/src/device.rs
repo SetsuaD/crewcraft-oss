@@ -1,10 +1,10 @@
 //! An enrolled device that outlives the process: a fresh P-256 key, enrollment against any server endpoint, and the
-//! record (`StoredDevice`) that `device_store` writes to disk and reads back. Task T304.
+//! record (`StoredDevice`) that `device_store` writes to disk and reads back. Tasks T304 and T403.
 //!
-//! Owns: device key generation, attaching the issued chain to that exact key, and rebuilding a TLS client identity
-//! from a record. Called by the window (enroll once, then load at each start) and by `worker`. Calls
-//! `server_endpoint` for the enrollment and sign-in connections. The in-process lab device (`lab_device`, T229) is
-//! separate and still never exports its key.
+//! Owns: device key generation (in software, or inside a hardware key store through `hardware_key`), attaching the
+//! issued chain to that exact key, and rebuilding a TLS client identity from a record. Called by the window (enroll
+//! once, then load at each start) and by `worker`. Calls `server_endpoint` for the enrollment and sign-in connections.
+//! The in-process lab device (`lab_device`, T229) is separate and still never exports its key.
 
 use std::fmt;
 use std::sync::Arc;
@@ -20,6 +20,7 @@ use zeroize::Zeroizing;
 
 use crate::bootstrap_transport::BootstrapTransportError;
 use crate::enroll_client::{EnrollmentError, EnrollmentRequest, FirstTotpCode, TotpSetup};
+use crate::hardware_key::{HardwareKey, HardwareKeys, RequestSigner, TlsSigningKey, valid_alias};
 use crate::lab_client::LabError;
 use crate::server_endpoint::ServerEndpoint;
 use crate::signed_in::{Credentials, SignedInSession};
@@ -39,12 +40,40 @@ pub enum DeviceError {
     Invalid,
 }
 
-/// A fresh device key and its signed certificate request, before enrollment. Nothing is on disk yet.
+/// Where a device's private key is: in the record (software, the desktop default), or inside a hardware key store
+/// that the record only names.
+pub(crate) enum DeviceKey {
+    Software(Zeroizing<Vec<u8>>),
+    Hardware(Arc<dyn HardwareKey>),
+}
+
+impl DeviceKey {
+    fn signing_key(&self) -> Option<Arc<dyn SigningKey>> {
+        match self {
+            Self::Software(pkcs8) => {
+                if pkcs8.is_empty() || pkcs8.len() > MAX_KEY_DER {
+                    return None;
+                }
+                load_key(pkcs8)
+            }
+            Self::Hardware(key) => {
+                if !valid_alias(key.alias()) {
+                    return None;
+                }
+                TlsSigningKey::new(key.clone()).ok().map(|key| Arc::new(key) as Arc<dyn SigningKey>)
+            }
+        }
+    }
+}
+
+/// A fresh device key and its signed certificate request, before enrollment. Nothing is on disk yet; a hardware key
+/// already exists in its key store and is deleted again if enrollment fails.
 pub struct NewDevice {
-    key_pkcs8: Zeroizing<Vec<u8>>,
+    key: DeviceKey,
     signing_key: Arc<dyn SigningKey>,
     csr: Vec<u8>,
     spki: Vec<u8>,
+    store: Option<Arc<dyn HardwareKeys>>,
 }
 
 impl fmt::Debug for NewDevice {
@@ -54,12 +83,38 @@ impl fmt::Debug for NewDevice {
 }
 
 impl NewDevice {
+    /// A software key, kept in the record (sealed by the device store on the desktop).
     pub fn generate() -> Result<Self, DeviceError> {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(|_| DeviceError::Generate)?;
         let csr = CertificateParams::default().serialize_request(&key).map_err(|_| DeviceError::Generate)?;
         let key_pkcs8 = Zeroizing::new(key.serialize_der());
         let signing_key = load_key(&key_pkcs8).ok_or(DeviceError::Generate)?;
-        Ok(Self { key_pkcs8, signing_key, csr: csr.der().to_vec(), spki: key.subject_public_key_info() })
+        Ok(Self { key: DeviceKey::Software(key_pkcs8), signing_key, csr: csr.der().to_vec(), spki: key.subject_public_key_info(), store: None })
+    }
+
+    /// A key generated inside `store` under `alias`. The certificate request is signed there, and the private key
+    /// never reaches this process.
+    pub fn generate_in(store: Arc<dyn HardwareKeys>, alias: &str) -> Result<Self, DeviceError> {
+        if !valid_alias(alias) {
+            return Err(DeviceError::Generate);
+        }
+        let key = store.generate(alias).map_err(|_| DeviceError::Generate)?;
+        let made = (|| {
+            let request = RequestSigner::new(key.clone()).map_err(|_| DeviceError::Generate)?;
+            let csr = CertificateParams::default().serialize_request(&request).map_err(|_| DeviceError::Generate)?;
+            let signing_key: Arc<dyn SigningKey> = Arc::new(TlsSigningKey::new(key.clone()).map_err(|_| DeviceError::Generate)?);
+            Ok((csr.der().to_vec(), signing_key))
+        })();
+        match made {
+            Ok((csr, signing_key)) => {
+                let spki = key.public_key().to_vec();
+                Ok(Self { key: DeviceKey::Hardware(key), signing_key, csr, spki, store: Some(store) })
+            }
+            Err(error) => {
+                let _ = store.delete(alias);
+                Err(error)
+            }
+        }
     }
 
     /// Enroll at `endpoint` with an invitation code and return the record to save. `prompt` shows the authenticator
@@ -73,23 +128,37 @@ impl NewDevice {
         password: &str,
         prompt: impl FnOnce(TotpSetup<'_>, Instant) -> Option<FirstTotpCode>,
     ) -> Result<StoredDevice, DeviceError> {
-        let connection = endpoint.open_bootstrap(code, confirmation_window).map_err(DeviceError::Bootstrap)?;
-        let request = EnrollmentRequest { device_name, csr: &self.csr, password, expected_spki: &self.spki };
-        let chain = connection.enroll(request, prompt).map_err(DeviceError::Enrollment)?;
-        let identity = CertifiedKey::new(vec![chain.leaf.clone(), chain.issuer.clone()], self.signing_key);
-        identity.keys_match().map_err(|_| DeviceError::KeyMismatch)?;
-        Ok(StoredDevice { endpoint: endpoint.clone(), leaf: chain.leaf.to_vec(), issuer: chain.issuer.to_vec(), key_pkcs8: self.key_pkcs8 })
+        let Self { key, signing_key, csr, spki, store } = self;
+        let enrolled = (|| {
+            let connection = endpoint.open_bootstrap(code, confirmation_window).map_err(DeviceError::Bootstrap)?;
+            let request = EnrollmentRequest { device_name, csr: &csr, password, expected_spki: &spki };
+            let chain = connection.enroll(request, prompt).map_err(DeviceError::Enrollment)?;
+            let identity = CertifiedKey::new(vec![chain.leaf.clone(), chain.issuer.clone()], signing_key);
+            identity.keys_match().map_err(|_| DeviceError::KeyMismatch)?;
+            Ok((chain.leaf.to_vec(), chain.issuer.to_vec()))
+        })();
+        match enrolled {
+            Ok((leaf, issuer)) => Ok(StoredDevice { endpoint: endpoint.clone(), leaf, issuer, key }),
+            Err(error) => {
+                // A key nobody can use any more: remove it from the key store rather than leave it behind.
+                if let (DeviceKey::Hardware(key), Some(store)) = (&key, &store) {
+                    let _ = store.delete(key.alias());
+                }
+                Err(error)
+            }
+        }
     }
 }
 
 /// Everything needed to reconnect as an enrolled device: the server endpoint (address, name, pinned root), the
-/// device certificate and its issuer, and the device's private key. `Debug` shows only the endpoint; there is no
-/// `Display`, and the key bytes are wiped when the record is dropped.
+/// device certificate and its issuer, and the device's private key or, for a hardware key, the key store's handle on
+/// it. `Debug` shows only the endpoint; there is no `Display`, and software key bytes are wiped when the record is
+/// dropped.
 pub struct StoredDevice {
     endpoint: ServerEndpoint,
     leaf: Vec<u8>,
     issuer: Vec<u8>,
-    key_pkcs8: Zeroizing<Vec<u8>>,
+    key: DeviceKey,
 }
 
 impl fmt::Debug for StoredDevice {
@@ -101,8 +170,8 @@ impl fmt::Debug for StoredDevice {
 impl StoredDevice {
     /// Rebuild a record and check that its parts fit together: a usable endpoint whose root matches its
     /// fingerprint, and a key that matches the device certificate.
-    pub(crate) fn from_parts(endpoint: ServerEndpoint, leaf: Vec<u8>, issuer: Vec<u8>, key_pkcs8: Zeroizing<Vec<u8>>) -> Result<Self, DeviceError> {
-        let device = Self { endpoint, leaf, issuer, key_pkcs8 };
+    pub(crate) fn from_parts(endpoint: ServerEndpoint, leaf: Vec<u8>, issuer: Vec<u8>, key: DeviceKey) -> Result<Self, DeviceError> {
+        let device = Self { endpoint, leaf, issuer, key };
         device.certified_key()?;
         Ok(device)
     }
@@ -120,8 +189,20 @@ impl StoredDevice {
         &self.issuer
     }
 
-    pub(crate) fn key_pkcs8(&self) -> &[u8] {
-        &self.key_pkcs8
+    /// The PKCS#8 private key, for a software key; `None` for a hardware key.
+    pub(crate) fn key_pkcs8(&self) -> Option<&[u8]> {
+        match &self.key {
+            DeviceKey::Software(pkcs8) => Some(pkcs8),
+            DeviceKey::Hardware(_) => None,
+        }
+    }
+
+    /// The key store's alias for a hardware key; `None` for a software key.
+    pub fn hardware_alias(&self) -> Option<&str> {
+        match &self.key {
+            DeviceKey::Software(_) => None,
+            DeviceKey::Hardware(key) => Some(key.alias()),
+        }
     }
 
     /// A TLS client identity for this device, for `ServerEndpoint::sign_in` or `worker::Worker::start`.
@@ -136,10 +217,7 @@ impl StoredDevice {
     }
 
     fn certified_key(&self) -> Result<CertifiedKey, DeviceError> {
-        if self.key_pkcs8.is_empty() || self.key_pkcs8.len() > MAX_KEY_DER {
-            return Err(DeviceError::Invalid);
-        }
-        let key = load_key(&self.key_pkcs8).ok_or(DeviceError::Invalid)?;
+        let key = self.key.signing_key().ok_or(DeviceError::Invalid)?;
         let chain = vec![CertificateDer::from(self.leaf.clone()), CertificateDer::from(self.issuer.clone())];
         let identity = CertifiedKey::new(chain, key);
         identity.keys_match().map_err(|_| DeviceError::Invalid)?;

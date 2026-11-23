@@ -8,6 +8,7 @@ pub mod device;
 pub mod device_store;
 pub mod enroll_client;
 pub mod enrollment;
+pub mod hardware_key;
 pub mod ios;
 pub mod key_vault;
 pub mod lab_client;

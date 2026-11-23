@@ -1002,10 +1002,13 @@ dependencies = [
  "crewcraft",
  "crewcraft-client-core",
  "crewcraft-desktop-ui",
+ "crewcraft-totp",
  "eframe",
  "egui",
  "egui_kittest",
+ "jni",
  "log",
+ "ndk-context",
  "winit",
 ]
 

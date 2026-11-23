@@ -6,6 +6,7 @@
 
 use std::fmt;
 use std::io;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,6 +17,7 @@ use zeroize::Zeroizing;
 use crate::bootstrap_transport::MAX_CONFIRMATION_WINDOW;
 use crate::device::{DeviceError, NewDevice, StoredDevice};
 use crate::enroll_client::FirstTotpCode;
+use crate::hardware_key::HardwareKeys;
 use crate::server_endpoint::ServerEndpoint;
 
 /// The authenticator setup link (`otpauth://...`). It holds the person's TOTP secret: show it only as a QR code or a
@@ -44,6 +46,24 @@ pub enum EnrollmentEvent {
     /// Enrollment stopped. `DeviceError::Enrollment(EnrollmentError::ConfirmationUnknown(_))` means the server may
     /// have activated the device; an administrator must recover it.
     Failed(DeviceError),
+}
+
+/// Where a new device key is made.
+#[derive(Clone)]
+pub enum KeySource {
+    /// In this process, and kept in the device record (the desktop; the record is sealed there).
+    Software,
+    /// Inside a hardware key store, under `alias` (task T403); the record only names it.
+    Hardware { keys: Arc<dyn HardwareKeys>, alias: String },
+}
+
+impl fmt::Debug for KeySource {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Software => output.write_str("Software"),
+            Self::Hardware { alias, .. } => output.debug_struct("Hardware").field("alias", alias).finish_non_exhaustive(),
+        }
+    }
 }
 
 /// The window's handle on one enrollment. Dropping it cancels a pending confirmation. The thread is not joined: it
@@ -80,6 +100,19 @@ impl Enrollment {
         confirmation_window: Duration,
         wake: impl Fn() + Send + 'static,
     ) -> io::Result<(Self, Receiver<EnrollmentEvent>)> {
+        Self::start_with_key(endpoint, code, device_name, password, confirmation_window, KeySource::Software, wake)
+    }
+
+    /// As `start_with_window`, with the device key made where `key` says.
+    pub fn start_with_key(
+        endpoint: ServerEndpoint,
+        code: EnrollmentCode,
+        device_name: &str,
+        password: &str,
+        confirmation_window: Duration,
+        key: KeySource,
+        wake: impl Fn() + Send + 'static,
+    ) -> io::Result<(Self, Receiver<EnrollmentEvent>)> {
         let (codes, code_queue) = mpsc::channel::<FirstTotpCode>();
         let (events, event_queue) = mpsc::channel();
         let device_name = device_name.to_owned();
@@ -90,7 +123,11 @@ impl Enrollment {
                     wake();
                 }
             };
-            let result = NewDevice::generate().and_then(|device| {
+            let generated = match &key {
+                KeySource::Software => NewDevice::generate(),
+                KeySource::Hardware { keys, alias } => NewDevice::generate_in(keys.clone(), alias),
+            };
+            let result = generated.and_then(|device| {
                 device.enroll(&endpoint, &code, confirmation_window, &device_name, &password, |setup, deadline| {
                     emit(EnrollmentEvent::AuthenticatorSetup(AuthenticatorSetup(Zeroizing::new(setup.protected_uri().to_owned()))));
                     code_queue.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok()

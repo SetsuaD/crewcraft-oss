@@ -22,7 +22,7 @@ and a new layout.
 | T400 | Build lane: `cargo xtask apk` cross-compiles `aarch64-linux-android` (and `x86_64-linux-android` for the emulator) with the Android NDK and packages an APK around a `NativeActivity` (no Java), signed with a test key | **Done.** The APK installs on an emulator (Android 14, x86_64) and its log shows `crewcraft <version> (protocol <n>) on Android` |
 | T401 | The egui window on Android through `eframe`'s Android support (`android-activity`), with the bundled font and the keyboard shown for text fields | **Done.** The enrollment screen renders on the emulator; tapping a field raises the soft keyboard and typing (on it, or with `adb shell input text`) reaches the field |
 | T402 | Phone layout in `crewcraft-desktop-ui`: one pane at a time with back navigation, a bottom tab bar, larger touch targets, the composer above the keyboard | headless tests (egui_kittest) at phone sizes |
-| T403 | Device key in Android Keystore: a P-256 key generated inside the Keystore (hardware-backed where the phone has it), used for the enrollment request and for every TLS client signature through a custom rustls signer, so the private key never leaves the Keystore | an instrumented test on the emulator enrolls and signs in; the key's attestation says where it lives |
+| T403 | Device key in Android Keystore: a P-256 key generated inside the Keystore (hardware-backed where the phone has it), used for the enrollment request and for every TLS client signature through a custom rustls signer, so the private key never leaves the Keystore | **Done.** The emulator self-test enrolls against a real server and signs in, then signs in again after a restart; the Keystore's `KeyInfo` says where the key lives (below) |
 | T404 | App storage and lifecycle: the device record and last email in the app's private storage; reconnect after the app returns to the foreground | enroll, kill the app, reopen: it goes straight to sign-in |
 | T405 | Invitation links open the app: an intent filter for `crewcraft://enroll` | tapping a link in a message opens the enrollment screen with the link filled in |
 | T406 | Release packaging: a signed APK beside the desktop assets in the release, with `SHA256SUMS.txt`; a Play Store bundle (AAB) when the store listing exists | the APK installs on a real phone from the release page |
@@ -35,21 +35,38 @@ and a new layout.
   `classes.dex`. `android-activity` (through winit and eframe) runs the app's `android_main` on its own thread, and
   that opens the same `DesktopApp` and `Window` as the desktop, with the bundled Inter font, rendered with OpenGL ES
   (glow). eframe's screen-reader support needs GameActivity (Java) on Android, so it is off there for now.
-- The one exception to `unsafe_code = "forbid"`: android-activity finds the entry point by its symbol name, and
-  `#[unsafe(no_mangle)] fn android_main` is unsafe code to the compiler. `apps/crewcraft-android` lowers the lint to
-  `deny` and allows it on that one function only (`#[expect(unsafe_code)]` with the reason); everything else in the
-  crate, and every other crate, stays `forbid`. No reviewed dependency exports that symbol for an app.
+- The exceptions to `unsafe_code = "forbid"`, both in `apps/crewcraft-android`, which lowers the lint to `deny` and
+  allows it on two functions only (`#[expect(unsafe_code)]` with the reason): android-activity finds the entry point
+  by its symbol name, and `#[unsafe(no_mangle)] fn android_main` is unsafe code to the compiler; and `java_vm`
+  (T403) turns the JVM pointer android-activity records (in `ndk-context`) into a `jni::JavaVM` handle. Everything
+  else in the crate, and every other crate, stays `forbid`. No reviewed dependency exports that symbol for an app.
 - The soft keyboard: winit asks for it when egui wants text input, and the app also asks explicitly
   (`show_soft_input`) when a text field gains the focus and hides it when none has the focus. On Android, typing
   arrives as key events that winit maps to characters, which egui turns into text.
-- The app's data folder is `<internal data path>/crewcraft` (`/data/user/<user>/<package>/files/crewcraft`). Until
-  T403 adds the Android Keystore there is no key store to seal the enrollment with, so the enrollment screen says the
-  phone cannot keep an enrollment yet, as the desktop does on a computer without one.
+- The app's data folder is `<internal data path>/crewcraft` (`/data/user/<user>/<package>/files/crewcraft`). The
+  device key lives in the Android Keystore (T403, below), and the record there only names it.
 - `cargo xtask apk` (docs/RELEASE.md) builds it. The APK zip, its alignment and its v2 signature are written in
   Rust; the NDK's clang links the library and `aapt2` compiles the manifest and icon (docs/NON-RUST-DEPENDENCIES.md).
 - Known gaps for the next tasks: the window draws under the status bar and right up to the screen's edges (safe
   areas and margins with T402's layout and T404), and the keyboard covers the lower part of the window rather than
   resizing it (the composer above the keyboard is T402's).
+
+### The device key in the Android Keystore (T403)
+
+- `crewcraft::hardware_key` is the platform-neutral half, shared with the iOS Secure Enclave (T422): a key store
+  (`HardwareKeys`) makes, finds and deletes P-256 keys by alias, and adapters let such a key sign the certificate
+  request (rcgen) and the TLS 1.3 client handshake (rustls, `ecdsa_secp256r1_sha256` only). The controller starts
+  with `Controller::start_with_hardware_keys`; each enrollment makes a new key, `crewcraft-default-` and 16 random
+  hex digits, and the device store keeps a version 3 record that names it (`DeviceStore::open_hardware`).
+- `apps/crewcraft-android/src/keystore.rs` is the Android half, in Rust over JNI: `KeyPairGenerator("EC",
+  "AndroidKeyStore")` with a `KeyGenParameterSpec` for signing with SHA-256 on `secp256r1`, in StrongBox first and
+  otherwise in the trusted environment; `Signature("SHA256withECDSA")` to sign; `KeyInfo` to say where the key
+  lives (security level on Android 12 and later, `isInsideSecureHardware` before).
+- The emulator test: `cargo xtask apk --self-test` builds `selftest.rs` in place of the window, for a server named
+  at build time. It joins from the invitation link, makes the key in the Keystore, enrolls, saves and reloads the
+  record, and signs in over mutual TLS; started again, it signs in from the saved record. Run against a real
+  `crewcraft-server` on the Android 14 emulator, see the T403 pull request for the log. The emulator's Keystore
+  is software, so the hardware level is checked on a real phone with T407.
 
 ## iOS (due 2027-03-31)
 

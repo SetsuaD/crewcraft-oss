@@ -57,7 +57,7 @@ pub const SYSTEM_LIBRARIES: [&str; 9] =
 
 pub const USAGE: &str = "\
 usage: cargo xtask apk --version <version> --out <dir> [--target aarch64|x86_64]
-                       [--keystore <file> --key-alias <alias>]
+                       [--keystore <file> --key-alias <alias>] [--self-test]
 
 Builds the Android app (apps/crewcraft-android) for one ABI, aarch64 (phones, the default) or x86_64 (the
 emulator), and writes crewcraft-<version>-android-<arch>.apk into <dir>. Needs ANDROID_HOME (the SDK, with
@@ -66,7 +66,11 @@ build-tools and platforms;android-34) and the NDK (ANDROID_NDK_HOME, or the newe
 Without --keystore the APK is signed with a test key, made on the first build and kept under the target folder
 (target/xtask-apk/test-signing-key/), so later test builds install over earlier ones. --keystore signs with a
 release key instead, through the build-tools' apksigner; the keystore's password is read from
-CREWCRAFT_APK_KEYSTORE_PASS. See docs/RELEASE.md.";
+CREWCRAFT_APK_KEYSTORE_PASS. See docs/RELEASE.md.
+
+--self-test builds the emulator self-test of the Android Keystore (task T403) in place of the window, as
+crewcraft-<version>-android-<arch>-selftest.apk, for the test server named by CREWCRAFT_SELFTEST_LINK,
+CREWCRAFT_SELFTEST_EMAIL and CREWCRAFT_SELFTEST_PASSWORD. It is never signed with a release key.";
 
 /// An Android ABI the app is built for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,11 +251,14 @@ pub struct Options {
     pub abi: Abi,
     /// A release keystore and the alias of the key in it, from `--keystore` and `--key-alias`.
     pub keystore: Option<(PathBuf, String)>,
+    /// `--self-test`: the emulator self-test build (feature `selftest`).
+    pub self_test: bool,
 }
 
 /// Parses the arguments after `apk`.
 pub fn parse_args(args: &[String]) -> Result<Options> {
     let (mut version, mut out, mut abi, mut keystore, mut alias) = (None, None, None, None, None);
+    let mut self_test = false;
     let mut rest = args.iter();
     while let Some(flag) = rest.next() {
         let mut value = || rest.next().ok_or_else(|| Error::new(format!("{flag} needs a value\n\n{USAGE}")));
@@ -261,6 +268,7 @@ pub fn parse_args(args: &[String]) -> Result<Options> {
             "--target" => abi = Some(Abi::parse(value()?)?),
             "--keystore" => keystore = Some(PathBuf::from(value()?)),
             "--key-alias" => alias = Some(value()?.clone()),
+            "--self-test" => self_test = true,
             _ => return Err(Error::new(format!("unknown argument {flag:?}\n\n{USAGE}"))),
         }
     }
@@ -272,7 +280,10 @@ pub fn parse_args(args: &[String]) -> Result<Options> {
         (None, None) => None,
         _ => return Err(Error::new(format!("--keystore and --key-alias go together\n\n{USAGE}"))),
     };
-    Ok(Options { version, out, abi: abi.unwrap_or(Abi::Aarch64), keystore })
+    if self_test && keystore.is_some() {
+        return Err(Error::new(format!("a --self-test build is never signed with a release key\n\n{USAGE}")));
+    }
+    Ok(Options { version, out, abi: abi.unwrap_or(Abi::Aarch64), keystore, self_test })
 }
 
 /// The Android SDK and NDK pieces the build uses.
@@ -333,7 +344,7 @@ fn run_tool(command: &mut Command, what: &str) -> Result<()> {
 }
 
 /// Builds the app library for `abi` with the NDK and returns its contents.
-fn cargo_build(root: &Path, sdk: &Sdk, abi: Abi, epoch: u64) -> Result<Vec<u8>> {
+fn cargo_build(root: &Path, sdk: &Sdk, abi: Abi, epoch: u64, self_test: bool) -> Result<Vec<u8>> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let triple = abi.triple();
     println!("== building {APP_CRATE} for {triple}");
@@ -345,10 +356,13 @@ fn cargo_build(root: &Path, sdk: &Sdk, abi: Abi, epoch: u64) -> Result<Vec<u8>> 
     // 16 KiB pages: the library loads on phones with 4 KiB or 16 KiB pages.
     let mut rustflags = dist::release_rustflags(root);
     rustflags.push("\u{1f}-Clink-arg=-Wl,-z,max-page-size=16384");
+    let mut command = Command::new(&cargo);
+    command.current_dir(root).args(["build", "--release", "--locked", "--target", triple, "-p", APP_CRATE]);
+    if self_test {
+        command.args(["--features", "selftest"]);
+    }
     run_tool(
-        Command::new(&cargo)
-            .current_dir(root)
-            .args(["build", "--release", "--locked", "--target", triple, "-p", APP_CRATE])
+        command
             .env(format!("CARGO_TARGET_{}_LINKER", env_triple.to_uppercase()), &clang)
             .env(format!("CC_{env_triple}"), &clang)
             .env(format!("AR_{env_triple}"), sdk.llvm_bin.join("llvm-ar"))
@@ -474,7 +488,7 @@ pub fn run(options: &Options) -> Result<()> {
     }
     let sdk = Sdk::locate()?;
     let abi = options.abi;
-    let library = cargo_build(&root, &sdk, abi, epoch)?;
+    let library = cargo_build(&root, &sdk, abi, epoch, options.self_test)?;
     let needed = check_library(&library, abi)?;
     println!("   lib{LIB_NAME}.so links {}", needed.join(", "));
     let work = dist::work_dir(&root, &format!("android-{}", abi.name()))?;
@@ -490,6 +504,10 @@ pub fn run(options: &Options) -> Result<()> {
         apk::verify_v2(&signed)?;
     }
     fs::create_dir_all(&options.out).context(|| format!("creating {}", options.out.display()))?;
-    dist::write_asset(&options.out, &file_name(&options.version, abi), &signed, false)?;
+    let mut name = file_name(&options.version, abi);
+    if options.self_test {
+        name = name.replace(".apk", "-selftest.apk");
+    }
+    dist::write_asset(&options.out, &name, &signed, false)?;
     Ok(())
 }

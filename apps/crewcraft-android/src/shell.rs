@@ -4,16 +4,26 @@
 //! Owns: starting the log, the window and the controller with the activity's private data folder, and showing or
 //! hiding the soft keyboard as text fields gain and lose the focus. winit also asks for the keyboard when egui
 //! wants text input; asking here as well, explicitly, makes it appear on phones where winit's implicit request is
-//! ignored. Called by: `android-activity` (`android_main`). Calls: `crewcraft::app`, eframe, the crate root.
+//! ignored. The controller keeps the device key in the Android Keystore (`keystore`, T403). A `selftest` build runs
+//! the emulator self-test instead of the window. Called by: `android-activity` (`android_main`). Calls:
+//! `crewcraft::app`, eframe, `keystore`, `selftest`, the crate root.
 
+#[cfg(not(feature = "selftest"))]
+use std::sync::Arc;
+
+#[cfg(not(feature = "selftest"))]
 use eframe::egui;
 use winit::platform::android::activity::AndroidApp;
 
+#[cfg(not(feature = "selftest"))]
 use crewcraft::app::{DesktopApp, JOIN_TIMEOUT, join_from_link};
+#[cfg(not(feature = "selftest"))]
+use crewcraft::hardware_key::HardwareKeys;
 
 /// The app's entry point, called by `android-activity` on its own thread once the activity is created; returning
 /// ends the app.
-// The only unsafe code in this crate (see Cargo.toml): android-activity finds this function by its symbol name.
+// One of the crate's two pieces of unsafe code (see Cargo.toml): android-activity finds this function by its symbol
+// name.
 #[expect(unsafe_code, reason = "android-activity calls the app through the unmangled symbol android_main")]
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
@@ -21,12 +31,29 @@ fn android_main(app: AndroidApp) {
     std::panic::set_hook(Box::new(|panic| log::error!("CrewCraft stopped: {panic}")));
     log::info!("{}", crate::version_line());
     let dir = crate::data_dir(app.internal_data_path().as_deref());
+    #[cfg(feature = "selftest")]
+    self_test(&app, dir);
+    #[cfg(not(feature = "selftest"))]
+    window(app, dir);
+}
+
+/// The app's window, with the device key in the Android Keystore (T403). Without a JVM handle there is no Keystore,
+/// and the app says that it cannot keep an enrollment (the desktop key store it falls back to does not exist here).
+#[cfg(not(feature = "selftest"))]
+fn window(app: AndroidApp, dir: Option<std::path::PathBuf>) {
+    let keystore = crate::keystore::AndroidKeystore::new().ok().map(|keys| Arc::new(keys) as Arc<dyn HardwareKeys>);
     let options = eframe::NativeOptions { android_app: Some(app.clone()), renderer: eframe::Renderer::Glow, ..Default::default() };
     let join = join_from_link(JOIN_TIMEOUT);
     let started = eframe::run_native(
         "CrewCraft",
         options,
-        Box::new(move |creation| Ok(Box::new(PhoneApp { inner: DesktopApp::with_data_dir(&creation.egui_ctx, join, dir), app, keyboard: false }))),
+        Box::new(move |creation| {
+            let inner = match keystore {
+                Some(keys) => DesktopApp::with_hardware_keys(&creation.egui_ctx, join, dir, keys),
+                None => DesktopApp::with_data_dir(&creation.egui_ctx, join, dir),
+            };
+            Ok(Box::new(PhoneApp { inner, app, keyboard: false }))
+        }),
     );
     match started {
         Ok(()) => log::info!("CrewCraft closed"),
@@ -34,7 +61,19 @@ fn android_main(app: AndroidApp) {
     }
 }
 
+/// The emulator self-test (`selftest`) on its own thread, while this thread keeps answering Android's events so the
+/// activity stays responsive; the app ends when the test does.
+#[cfg(feature = "selftest")]
+fn self_test(app: &AndroidApp, dir: Option<std::path::PathBuf>) {
+    let test = std::thread::spawn(move || crate::selftest::run(dir.as_deref()));
+    while !test.is_finished() {
+        app.poll_events(Some(std::time::Duration::from_millis(200)), |_| {});
+    }
+    let _ = test.join();
+}
+
 /// The desktop app plus the soft keyboard.
+#[cfg(not(feature = "selftest"))]
 struct PhoneApp {
     inner: DesktopApp,
     app: AndroidApp,
@@ -42,6 +81,7 @@ struct PhoneApp {
     keyboard: bool,
 }
 
+#[cfg(not(feature = "selftest"))]
 impl eframe::App for PhoneApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         eframe::App::ui(&mut self.inner, ui, frame);
