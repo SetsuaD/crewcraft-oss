@@ -1,0 +1,32 @@
+{
+  "id": "T240-session-resume",
+  "title": "Resume a session from the same device without a new code, for 12 hours",
+  "crate": "crewcraft-server",
+  "files": [
+    "crates/proto/src/signin.rs",
+    "crates/accounts/src/sessions.rs",
+    "crates/server-core/src/account_store.rs",
+    "apps/crewcraft-server/src/device_session.rs",
+    "apps/crewcraft-server/src/stored_device_auth.rs",
+    "apps/crewcraft-server/src/lab_server.rs",
+    "apps/crewcraft-server/src/listener.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/server_endpoint.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/ticket_file.rs",
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft/src/connect.rs",
+    "apps/crewcraft/tests/t303_connection_worker.rs",
+    "tasks/T303-connection-worker/test.rs",
+    "docs/SECURITY-DESIGN.md",
+    "docs/MOBILE.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t240_session_resume.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t240_session_resume",
+  "depends_on": ["T114-sessions", "T148-device-bound-session", "T152-signin-codec", "T223-stored-device-auth", "T303-connection-worker", "T310-system-chat"],
+  "spec": "Two more first requests on a device connection (signin::Opening): Resume (tag 35) and End (tag 36), each followed by the 43-character session token a sign-in returned; replies Accepted with the same token or Refused for Resume, Ended (tag 165) for End. decode_request still refuses both. The server resumes a session only over the connection of the device it belongs to (the exact live certificate), while less than 12 hours (ABSOLUTE_MS) have passed since the sign-in, however long it was idle (Sessions::resume_hash_for, AccountStore::resume_session_by_hash); End revokes it only for that device (end_session_by_hash, journaled). DeviceAuth gains resume and end, refusing by default. The client keeps the token (ChatSession::token, SignedInSession::resume_ticket, ResumeTicket with a redacted Debug) and the worker resumes: after a lost connection it keeps the window signed in and resumes when the server answers; a TicketKeeper keeps the ticket between runs, and a held ticket is tried at start. A resume that fails after the TLS handshake (refused, or a server that cannot resume) forgets the ticket and reports SessionEnded (the window: signed out, 'Your session has ended. Sign in again with a new code.'). Signing out asks the server to end the session and forgets the ticket; a new enrollment forgets it too. The app keeps the ticket in resume-ticket in its data folder (email and token, one per line, owner-only, written atomically, a looser or linked file ignored).",
+  "status": "done",
+  "context": ["apps/crewcraft-server/tests/t310_system_chat.rs", "crates/accounts/src/sessions.rs", "docs/SECURITY-DESIGN.md"]
+}

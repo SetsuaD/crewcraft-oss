@@ -84,6 +84,29 @@ impl DeviceAuth for StoredDeviceAuth {
         Ok(Some(CommittedSignIn { user: self.user.clone(), token, session }))
     }
 
+    fn resume(&self, token: &str, now_ms: u64) -> Result<Option<CommittedSignIn<Self::Session>>, AuthError> {
+        if !self.validity.contains(&unix_seconds(now_ms)) {
+            return Err(AuthError::UnauthorizedDevice);
+        }
+        let mut store = self.store.lock().map_err(|_| AuthError::Unavailable)?;
+        if !store.healthy() {
+            return Err(AuthError::Unavailable);
+        }
+        let hash = token_hash(token);
+        let Some(live) = store.resume_session_by_hash(&hash, &self.leaf_der, now_ms) else {
+            return Ok(None);
+        };
+        if live.user != self.user || live.device != self.device_id.to_string() {
+            return Ok(None);
+        }
+        Ok(Some(CommittedSignIn { user: self.user.clone(), token: token.to_owned(), session: StoredSession(hash) }))
+    }
+
+    fn end(&self, token: &str, now_ms: u64) -> Result<bool, AuthError> {
+        let mut store = self.store.lock().map_err(|_| AuthError::Unavailable)?;
+        store.end_session_by_hash(&token_hash(token), &self.leaf_der, now_ms).map_err(|_| AuthError::Unavailable)
+    }
+
     fn with_live_session<T>(&self, session: &Self::Session, now_ms: u64, action: impl FnOnce() -> T) -> Result<Option<T>, AuthError> {
         if !self.validity.contains(&unix_seconds(now_ms)) {
             return Ok(None);

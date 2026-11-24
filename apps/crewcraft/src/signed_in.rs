@@ -13,7 +13,7 @@ use crewcraft_client_core::room_view::Shown;
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::request::FEATURE_LIST_ROOMS;
-use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn};
+use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
 use zeroize::Zeroizing;
 
 use crate::chat_session::ChatSession;
@@ -61,6 +61,39 @@ impl fmt::Debug for Credentials {
     }
 }
 
+/// What reopens a signed-in session without a password or code (task T240): the person's email and the session token
+/// the server returned. The server accepts it only from the same device, within 12 hours of the sign-in. Wiped from
+/// memory when dropped; `Debug` shows neither field.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ResumeTicket {
+    email: String,
+    token: Zeroizing<String>,
+}
+
+impl ResumeTicket {
+    /// `None` unless the email is valid for a sign-in and the token has the form the server issues.
+    pub fn new(email: &str, token: &str) -> Option<Self> {
+        let email_ok = !email.is_empty() && email.len() <= MAX_EMAIL_BYTES && !email.chars().any(char::is_control);
+        let token_ok = token.len() == TOKEN_LEN && token.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+        (email_ok && token_ok).then(|| Self { email: email.to_owned(), token: Zeroizing::new(token.to_owned()) })
+    }
+
+    pub fn email(&self) -> &str {
+        &self.email
+    }
+
+    /// The session token: a secret, to be stored only where the device record is.
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+}
+
+impl fmt::Debug for ResumeTicket {
+    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
+        output.write_str("ResumeTicket { .. }")
+    }
+}
+
 pub(crate) fn valid_room(room: &str) -> bool {
     !room.is_empty() && room.len() <= MAX_NAME && room.chars().all(|ch| !ch.is_control() && !ch.is_whitespace())
 }
@@ -73,16 +106,46 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
     let chat = ChatSession::connect(stream, set_deadline, credentials, hello, settings, FRAME_TIMEOUT, deadline).map_err(LabError::Chat)?;
-    Ok(SignedInSession { chat })
+    Ok(SignedInSession { chat, email: credentials.email.to_owned() })
+}
+
+/// As `sign_in`, reopening the session `ticket` names instead (task T240). A ticket the server no longer accepts is
+/// `LabError::Chat(ChatError::SignInRefused)`.
+pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> Result<SignedInSession, LabError> {
+    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS, client: client.into() };
+    let settings = Settings::new(ticket.email());
+    let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
+    let deadline = Instant::now() + OPERATION_TIMEOUT;
+    let chat = ChatSession::resume(stream, set_deadline, ticket.email(), ticket.token(), hello, settings, FRAME_TIMEOUT, deadline)
+        .map_err(LabError::Chat)?;
+    Ok(SignedInSession { chat, email: ticket.email().to_owned() })
+}
+
+/// Ask the server to end the session `ticket` names (task T240), over a fresh device connection.
+pub(crate) fn end(mut stream: Transport, ticket: &ResumeTicket) -> Result<(), LabError> {
+    let deadline = Instant::now() + OPERATION_TIMEOUT;
+    crate::chat_session::end_session(
+        &mut stream,
+        |stream: &mut Transport, deadline| stream.get_mut().set_deadline(deadline),
+        ticket.token(),
+        deadline,
+    )
+    .map_err(LabError::Chat)
 }
 
 /// An authenticated connection. Dropping it ends the local session. Commands use the same connection and the same
 /// room views until the connection closes.
 pub struct SignedInSession {
     chat: ChatSession<Transport, SetDeadline>,
+    email: String,
 }
 
 impl SignedInSession {
+    /// The ticket that reopens this session later from this device without a new code (task T240).
+    pub fn resume_ticket(&self) -> Option<ResumeTicket> {
+        ResumeTicket::new(&self.email, self.chat.token())
+    }
+
     /// `text` comes from the caller's protected input and is sent only on this connection.
     pub fn post(&mut self, room: &str, text: &str) -> Result<u64, LabError> {
         if !valid_room(room) {

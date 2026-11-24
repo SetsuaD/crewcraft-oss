@@ -6,6 +6,7 @@
 //! device certificate. Holds no account logic and reads no credentials.
 
 use std::fmt;
+use std::io;
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,7 +70,12 @@ pub(crate) fn connect(
         let mut connection = ClientConnection::new(config.clone(), server_name.clone()).map_err(|_| LabError::Trust)?;
         let interrupt = tcp.try_clone().ok();
         let mut socket = DeadlineSocket::new(tcp, Instant::now() + TLS_TIMEOUT);
-        connection.complete_io(&mut socket).map_err(|_| LabError::Handshake)?;
+        // A TLS failure (an alert, a certificate that does not verify) is `Handshake`; the connection dropping during
+        // the handshake (a server restarting, task T240) is a connection problem that trying again can fix.
+        connection.complete_io(&mut socket).map_err(|error| match error.kind() {
+            io::ErrorKind::InvalidData => LabError::Handshake,
+            kind => LabError::Connect(kind),
+        })?;
         if connection.is_handshaking() || connection.wants_write() {
             return Err(LabError::Handshake);
         }

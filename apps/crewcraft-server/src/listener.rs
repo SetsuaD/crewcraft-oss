@@ -2,10 +2,10 @@
 //! network server (`bind_network`, task T230).
 
 use std::io;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -39,7 +39,9 @@ impl Listener {
     }
 
     /// Accept until `shutdown` becomes true or accepting a peer fails. At capacity,
-    /// drop new sockets without writing to them. Join active handlers before returning.
+    /// drop new sockets without writing to them. Join active handlers before returning: each open connection's read
+    /// side is shut first, so a request in progress still gets its answer but a client that keeps its connection
+    /// open (a signed-in app polls every few seconds) cannot keep the server from stopping (task T240).
     ///
     /// The handler receives a blocking socket and owns its handshake and application deadlines.
     pub fn serve<F>(self, shutdown: &AtomicBool, handler: F) -> io::Result<()>
@@ -50,13 +52,20 @@ impl Listener {
         let mut workers = Vec::new();
         let outcome = self.accept_until(shutdown, &handler, &mut workers);
         drop(self.socket);
+        for worker in &workers {
+            if let Ok(held) = worker.peer.lock()
+                && let Some(peer) = held.as_ref()
+            {
+                let _ = peer.shutdown(Shutdown::Read);
+            }
+        }
         for worker in workers {
-            let _ = worker.join();
+            let _ = worker.thread.join();
         }
         outcome
     }
 
-    fn accept_until<F>(&self, shutdown: &AtomicBool, handler: &Arc<F>, workers: &mut Vec<JoinHandle<()>>) -> io::Result<()>
+    fn accept_until<F>(&self, shutdown: &AtomicBool, handler: &Arc<F>, workers: &mut Vec<Worker>) -> io::Result<()>
     where
         F: Fn(TcpStream) + Send + Sync + 'static,
     {
@@ -68,11 +77,16 @@ impl Listener {
                         continue;
                     }
                     let handler = Arc::clone(handler);
-                    workers.push(thread::Builder::new().spawn(move || {
+                    let watch = Arc::new(Mutex::new(peer.try_clone().ok()));
+                    let release = Release(Arc::clone(&watch));
+                    let thread = thread::Builder::new().spawn(move || {
+                        // Let go of the second handle when the handler ends (or panics), so its socket closes then.
+                        let _release = release;
                         if peer.set_nonblocking(false).is_ok() {
                             handler(peer);
                         }
-                    })?);
+                    })?;
+                    workers.push(Worker { thread, peer: watch });
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(IDLE_POLL),
                 Err(error) if matches!(error.kind(), io::ErrorKind::Interrupted | io::ErrorKind::ConnectionAborted) => {}
@@ -83,11 +97,28 @@ impl Listener {
     }
 }
 
-fn reap_finished(workers: &mut Vec<JoinHandle<()>>) {
+/// One connection's handler thread, and a second handle on its socket to end it at shutdown (dropped by the handler
+/// thread when it ends, so it never keeps a finished connection open).
+struct Worker {
+    thread: JoinHandle<()>,
+    peer: Arc<Mutex<Option<TcpStream>>>,
+}
+
+/// Drops the second socket handle when the handler thread ends.
+struct Release(Arc<Mutex<Option<TcpStream>>>);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        let mut held = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        held.take();
+    }
+}
+
+fn reap_finished(workers: &mut Vec<Worker>) {
     let mut index = 0;
     while index < workers.len() {
-        if workers[index].is_finished() {
-            let _ = workers.swap_remove(index).join();
+        if workers[index].thread.is_finished() {
+            let _ = workers.swap_remove(index).thread.join();
         } else {
             index += 1;
         }

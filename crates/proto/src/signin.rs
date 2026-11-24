@@ -5,6 +5,11 @@
 //! Exactly one frame contains each payload. Device identity and authentication are supplied by the server.
 //! Codec errors describe malformed payloads. A well-formed request that fails authentication always gets the
 //! same `Refused` reply, with no reason field.
+//!
+//! Task T240 adds two more first requests (`Opening`): resume (tag 35) and end (tag 36), each followed by the
+//! 43-byte token an earlier sign-in returned. Resume reopens that session on the same device without a password or
+//! code (answered `Accepted` with the same token, or `Refused`); end revokes it (answered with tag 165, `Ended`, alone,
+//! whether or not there was a session to end).
 
 use std::fmt;
 
@@ -16,8 +21,68 @@ pub const CODE_LEN: usize = 6;
 pub const TOKEN_LEN: usize = 43;
 
 const SIGN_IN: u8 = 34;
+const RESUME: u8 = 35;
+const END: u8 = 36;
 const ACCEPTED: u8 = 163;
 const REFUSED: u8 = 164;
+const ENDED: u8 = 165;
+
+/// The first request on a device connection (task T240): a full sign-in, or a session token from an earlier one.
+#[derive(PartialEq, Eq)]
+pub enum Opening<'a> {
+    SignIn(SignIn<'a>),
+    /// Reopen the session this token belongs to, on the same device.
+    Resume {
+        token: &'a str,
+    },
+    /// End the session this token belongs to.
+    End {
+        token: &'a str,
+    },
+}
+
+impl fmt::Debug for Opening<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SignIn(_) => f.write_str("SignIn { .. }"),
+            Self::Resume { .. } => f.write_str("Resume { token: .. }"),
+            Self::End { .. } => f.write_str("End { token: .. }"),
+        }
+    }
+}
+
+/// Encode a first request.
+pub fn encode_opening(opening: &Opening<'_>) -> Result<Vec<u8>, CodecError> {
+    let (tag, token) = match opening {
+        Opening::SignIn(sign_in) => return encode_request(sign_in),
+        Opening::Resume { token } => (RESUME, token),
+        Opening::End { token } => (END, token),
+    };
+    check_token(token)?;
+    let mut out = vec![tag];
+    out.extend_from_slice(token.as_bytes());
+    Ok(out)
+}
+
+/// Decode exactly one first request: a sign-in, a resume or an end.
+pub fn decode_opening(input: &[u8]) -> Result<Opening<'_>, CodecError> {
+    match input.first() {
+        Some(&SIGN_IN) => decode_request(input).map(Opening::SignIn),
+        Some(&tag @ (RESUME | END)) => {
+            let token = utf8(input.get(1..).ok_or(CodecError::Truncated)?)?;
+            if token.len() < TOKEN_LEN {
+                return Err(CodecError::Truncated);
+            }
+            if token.len() > TOKEN_LEN {
+                return Err(CodecError::TrailingBytes);
+            }
+            check_token(token)?;
+            Ok(if tag == RESUME { Opening::Resume { token } } else { Opening::End { token } })
+        }
+        Some(&tag) => Err(CodecError::BadKind(tag)),
+        None => Err(CodecError::Truncated),
+    }
+}
 
 #[derive(PartialEq, Eq)]
 pub struct SignIn<'a> {
@@ -34,8 +99,12 @@ impl fmt::Debug for SignIn<'_> {
 
 #[derive(PartialEq, Eq)]
 pub enum Reply<'a> {
-    Accepted { token: &'a str },
+    Accepted {
+        token: &'a str,
+    },
     Refused,
+    /// The answer to `Opening::End` (task T240).
+    Ended,
 }
 
 impl fmt::Debug for Reply<'_> {
@@ -43,6 +112,7 @@ impl fmt::Debug for Reply<'_> {
         match self {
             Self::Accepted { .. } => f.write_str("Accepted { token: .. }"),
             Self::Refused => f.write_str("Refused"),
+            Self::Ended => f.write_str("Ended"),
         }
     }
 }
@@ -81,6 +151,7 @@ pub fn decode_request(input: &[u8]) -> Result<SignIn<'_>, CodecError> {
 pub fn encode_reply(reply: &Reply<'_>) -> Result<Vec<u8>, CodecError> {
     match reply {
         Reply::Refused => Ok(vec![REFUSED]),
+        Reply::Ended => Ok(vec![ENDED]),
         Reply::Accepted { token } => {
             check_token(token)?;
             let mut out = vec![ACCEPTED];
@@ -100,6 +171,7 @@ pub fn decode_reply(input: &[u8]) -> Result<Reply<'_>, CodecError> {
             Reply::Accepted { token }
         }
         REFUSED => Reply::Refused,
+        ENDED => Reply::Ended,
         _ => return Err(CodecError::BadKind(tag)),
     };
     if !input.is_empty() {

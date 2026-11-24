@@ -194,6 +194,24 @@ person's lock, and read back after every write that changes it. With an external
 retry after 60 seconds on failure, keep the last good grant at most 24 hours during an outage, never borrow grace for a
 fresh sign-in (REQUIREMENTS.md section 4).
 
+**Resuming a session (task T240).** A session ends after 30 minutes without a request, and 12 hours after its
+sign-in however busy it is. The sign-in returns a session token (32 random bytes; the server keeps only its SHA-256),
+and a device that lost its connection can reopen the same session with it instead of a password and a new code, as
+long as:
+
+- it presents the token over a TLS connection with the exact certificate of the device the session belongs to, so a
+  copied token is useless without that device's private key (sealed by the OS key store, or held by the phone's
+  hardware key store); and
+- less than 12 hours have passed since the sign-in. The 30-minute idle limit does not apply to a resume: a phone
+  in the background for an hour comes back without a code, but never more than 12 hours after the person last
+  typed one.
+
+Signing out asks the server to end the session (it is revoked and journaled), and the app forgets the token.
+Revoking the device or resetting the person's authenticator ends it as before. The app keeps the token in
+`resume-ticket` in its data folder, owner-only, next to the device record; a new enrollment discards it. This was the
+owner's decision of 2026-11-24 ("12 h resume ticket"), weighing a fresh code on every phone reconnect against the
+device-bound token.
+
 ## 6. The web client
 
 A browser can only present a client certificate from its OS certificate store. The desktop client (D2) registers the

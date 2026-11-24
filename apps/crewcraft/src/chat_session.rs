@@ -12,7 +12,8 @@ use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
 use crewcraft_proto::request::{FEATURE_LIST_ROOMS, Request, Response};
-use crewcraft_proto::signin::{self, SignIn};
+use crewcraft_proto::signin::{self, Opening, SignIn};
+use zeroize::Zeroizing;
 
 const SIGN_IN_REPLY_LIMIT: usize = 1 + signin::TOKEN_LEN;
 const WELCOME_LIMIT: usize = 9 + MAX_NAME;
@@ -50,6 +51,8 @@ pub struct ChatSession<S, D> {
     frame_timeout: Duration,
     session: ClientSession,
     closed: bool,
+    /// The session token the server returned; it resumes this session later (task T240). Wiped on drop.
+    token: Zeroizing<String>,
 }
 
 impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
@@ -64,11 +67,48 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         frame_timeout: Duration,
         deadline: Instant,
     ) -> Result<Self, ChatError> {
+        let opening = Opening::SignIn(SignIn { email: credentials.email, password: credentials.password, code: credentials.code });
+        Self::open(stream, set_deadline, &opening, credentials.email, hello, settings, frame_timeout, deadline)
+    }
+
+    /// As `connect`, but reopening the session `token` belongs to instead of signing in (task T240). A token the server
+    /// no longer accepts is `SignInRefused`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resume(
+        stream: S,
+        set_deadline: D,
+        email: &str,
+        token: &str,
+        hello: Hello,
+        settings: Settings,
+        frame_timeout: Duration,
+        deadline: Instant,
+    ) -> Result<Self, ChatError> {
+        Self::open(stream, set_deadline, &Opening::Resume { token }, email, hello, settings, frame_timeout, deadline)
+    }
+
+    /// The session token, for a later `resume`. A secret: keep it as the device record is kept, never in a log.
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open(
+        stream: S,
+        set_deadline: D,
+        opening: &Opening<'_>,
+        email: &str,
+        hello: Hello,
+        settings: Settings,
+        frame_timeout: Duration,
+        deadline: Instant,
+    ) -> Result<Self, ChatError> {
         let versions = hello.min_version..=hello.max_version;
         let supported_features = hello.features;
-        let client = Client::new(credentials.email, settings);
-        let mut chat = Self { stream, set_deadline, frame_timeout, session: ClientSession::new(hello, client), closed: false };
-        chat.authenticate(credentials, deadline)?;
+        let client = Client::new(email, settings);
+        let mut chat =
+            Self { stream, set_deadline, frame_timeout, session: ClientSession::new(hello, client), closed: false, token: Zeroizing::default() };
+        chat.token = chat.authenticate(opening, deadline)?;
 
         let hello = chat.session.start().map_err(ChatError::Session)?;
         chat.write_frame(&hello, deadline)?;
@@ -171,15 +211,16 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         self.session.client_mut().inbox().view(room)
     }
 
-    fn authenticate(&mut self, credentials: &SignIn<'_>, deadline: Instant) -> Result<(), ChatError> {
-        let request = signin::encode_request(credentials).map_err(|_| ChatError::SignInProtocol)?;
-        let framed = frame::encode(&request).map_err(|_| ChatError::SignInProtocol)?;
+    fn authenticate(&mut self, opening: &Opening<'_>, deadline: Instant) -> Result<Zeroizing<String>, ChatError> {
+        let request = Zeroizing::new(signin::encode_opening(opening).map_err(|_| ChatError::SignInProtocol)?);
+        let framed = Zeroizing::new(frame::encode(&request).map_err(|_| ChatError::SignInProtocol)?);
         self.write_frame(&framed, deadline)?;
 
         let reply = self.read_frame(SIGN_IN_REPLY_LIMIT, deadline)?;
         match signin::decode_reply(reply.payload()).map_err(|_| ChatError::SignInProtocol)? {
-            signin::Reply::Accepted { .. } => Ok(()),
+            signin::Reply::Accepted { token } => Ok(Zeroizing::new(token.to_owned())),
             signin::Reply::Refused => Err(ChatError::SignInRefused),
+            signin::Reply::Ended => Err(ChatError::SignInProtocol),
         }
     }
 
@@ -243,5 +284,29 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
                 Err(ChatError::Io(result.err().map_or(io::ErrorKind::UnexpectedEof, |error| error.kind())))
             }
         }
+    }
+}
+
+/// End the session `token` belongs to (task T240), over a stream whose device that session belongs to: the server
+/// revokes it and answers `Ended` whether or not there was one. `set_deadline` bounds each frame as in `connect`.
+pub fn end_session<S: Read + Write>(
+    stream: &mut S,
+    mut set_deadline: impl FnMut(&mut S, Instant),
+    token: &str,
+    deadline: Instant,
+) -> Result<(), ChatError> {
+    let request = Zeroizing::new(signin::encode_opening(&Opening::End { token }).map_err(|_| ChatError::SignInProtocol)?);
+    let framed = Zeroizing::new(frame::encode(&request).map_err(|_| ChatError::SignInProtocol)?);
+    set_deadline(stream, deadline);
+    stream.write_all(&framed).and_then(|()| stream.flush()).map_err(|error| ChatError::Io(error.kind()))?;
+    set_deadline(stream, deadline);
+    let reply = match frame::read_frame(stream, SIGN_IN_REPLY_LIMIT) {
+        Ok(Some(reply)) => reply,
+        Ok(None) => return Err(ChatError::Io(io::ErrorKind::UnexpectedEof)),
+        Err(error) => return Err(ChatError::Io(error.kind())),
+    };
+    match signin::decode_reply(reply.payload()).map_err(|_| ChatError::SignInProtocol)? {
+        signin::Reply::Ended => Ok(()),
+        _ => Err(ChatError::SignInProtocol),
     }
 }

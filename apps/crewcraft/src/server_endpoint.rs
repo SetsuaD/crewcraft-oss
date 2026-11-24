@@ -24,7 +24,7 @@ use rustls::{CertificateError, ClientConfig, ClientConnection, DigitallySignedSt
 use crate::bootstrap_transport::{BootstrapConnection, BootstrapTransportError, open_bootstrap};
 use crate::connect::{self, Connection, Transport};
 use crate::lab_client::LabError;
-use crate::signed_in::{Credentials, SignedInSession, sign_in};
+use crate::signed_in::{Credentials, ResumeTicket, SignedInSession, sign_in};
 
 /// Longest accepted root certificate.
 pub const MAX_ROOT_DER: usize = 16 * 1024;
@@ -119,6 +119,20 @@ impl ServerEndpoint {
 
     pub(crate) fn sign_in_over(&self, transport: Transport, credentials: &Credentials) -> Result<SignedInSession, LabError> {
         sign_in(transport, &credentials.sign_in(), CLIENT_NAME)
+    }
+
+    /// Connect as `device` and reopen the session `ticket` names, without a password or code (task T240).
+    pub fn resume(&self, device: Arc<dyn ResolvesClientCert>, ticket: &ResumeTicket) -> Result<SignedInSession, LabError> {
+        crate::signed_in::resume(self.connect(device)?.transport, ticket, CLIENT_NAME)
+    }
+
+    pub(crate) fn resume_over(&self, transport: Transport, ticket: &ResumeTicket) -> Result<SignedInSession, LabError> {
+        crate::signed_in::resume(transport, ticket, CLIENT_NAME)
+    }
+
+    /// Connect as `device` and ask the server to end the session `ticket` names (task T240).
+    pub fn end_session(&self, device: Arc<dyn ResolvesClientCert>, ticket: &ResumeTicket) -> Result<(), LabError> {
+        crate::signed_in::end(self.connect(device)?.transport, ticket)
     }
 
     /// `fetch_root`, then `new` with the root it returned: the endpoint for an invitation that carries only the

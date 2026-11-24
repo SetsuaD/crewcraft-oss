@@ -57,16 +57,34 @@ impl Sessions {
         self.validate_key_matching(hex(token_sha256), now_ms, |session| session.user == user && session.device == device)
     }
 
+    /// Resume a session by the SHA-256 of its token after its connection was lost (task T240): the same identity rules
+    /// as `validate_hash_for`, but live for `ABSOLUTE_MS` from creation however long it sat idle (a phone in the
+    /// background). A success refreshes `last_seen_ms`; an expired session is removed.
+    pub fn resume_hash_for(&mut self, token_sha256: &[u8; 32], user: &str, device: &str, now_ms: u64) -> Option<Session> {
+        self.check_key(hex(token_sha256), now_ms, false, |session| session.user == user && session.device == device)
+    }
+
+    /// Whether the session with this token hash belongs to `user` on `device` (live or not yet removed). Nothing changes.
+    pub fn owned_by(&self, token_sha256: &[u8; 32], user: &str, device: &str) -> bool {
+        self.sessions.get(&hex(token_sha256)).is_some_and(|session| session.user == user && session.device == device)
+    }
+
     fn validate_matching(&mut self, token: &str, now_ms: u64, matches_identity: impl FnOnce(&Session) -> bool) -> Option<Session> {
         self.validate_key_matching(token_key(token), now_ms, matches_identity)
     }
 
     fn validate_key_matching(&mut self, key: String, now_ms: u64, matches_identity: impl FnOnce(&Session) -> bool) -> Option<Session> {
+        self.check_key(key, now_ms, true, matches_identity)
+    }
+
+    /// The live session under `key` for a matching identity, with the idle limit checked only when `idle` is true.
+    fn check_key(&mut self, key: String, now_ms: u64, idle: bool, matches_identity: impl FnOnce(&Session) -> bool) -> Option<Session> {
         let session = self.sessions.get_mut(&key)?;
         if !matches_identity(session) {
             return None;
         }
-        if now_ms.saturating_sub(session.last_seen_ms) < IDLE_MS && now_ms.saturating_sub(session.created_ms) < ABSOLUTE_MS {
+        let awake = !idle || now_ms.saturating_sub(session.last_seen_ms) < IDLE_MS;
+        if awake && now_ms.saturating_sub(session.created_ms) < ABSOLUTE_MS {
             session.last_seen_ms = now_ms;
             return Some(session.clone());
         }
