@@ -19,4 +19,5 @@ pub mod lab_device;
 pub mod selftest;
 pub mod server_endpoint;
 pub mod signed_in;
+pub mod ticket_file;
 pub mod worker;

@@ -561,6 +561,30 @@ impl<L: AppendLog> AccountStore<L> {
         self.sessions.validate_hash_for(token_sha256, &device.user, &device.id.to_string(), now_ms)
     }
 
+    /// Resume a session by the SHA-256 of its token on a new connection (task T240): the leaf must be the live device's
+    /// exact active certificate and the session that device's, as in `continue_session_by_hash`, and the session lives
+    /// for `ABSOLUTE_MS` from its creation however long it was idle. `None` otherwise, or when poisoned.
+    pub fn resume_session_by_hash(&mut self, token_sha256: &[u8; 32], leaf_der: &[u8], now_ms: u64) -> Option<Session> {
+        let device = self.admit(leaf_der, now_ms).ok()?;
+        self.sessions.resume_hash_for(token_sha256, &device.user, &device.id.to_string(), now_ms)
+    }
+
+    /// End a session by the SHA-256 of its token, asked over the connection of the device it belongs to (task T240).
+    /// `Ok(false)` (and nothing written) when the leaf is not a live device, or the session is unknown or another
+    /// device's.
+    pub fn end_session_by_hash(&mut self, token_sha256: &[u8; 32], leaf_der: &[u8], now_ms: u64) -> Result<bool, StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
+        let Ok(device) = self.admit(leaf_der, now_ms) else {
+            return Ok(false);
+        };
+        if !self.sessions.owned_by(token_sha256, &device.user, &device.id.to_string()) {
+            return Ok(false);
+        }
+        self.commit(AccountOp::SessionRevoked { token_sha256: *token_sha256 }).map(|()| true)
+    }
+
     /// End one session; `Ok(false)` (and nothing written) when the token is unknown.
     pub fn revoke_session(&mut self, token: &str) -> Result<bool, StoreError> {
         let hash = token_hash(token);

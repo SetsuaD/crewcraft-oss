@@ -340,14 +340,16 @@ fn a_server_that_goes_away_produces_a_failure_and_the_worker_finds_it_again() {
     server.stop();
     let failed = expect(&events, "failure", |event| matches!(event, Event::Failed(_)));
     assert!(matches!(failed, Event::Failed(Problem::Lost(_) | Problem::Protocol)), "{failed:?}");
-    expect(&events, "disconnected", |event| *event == Event::Disconnected);
     alice.send(Command::Post { room: room.clone(), text: "while away".into() });
     let refused = expect(&events, "post failure", |event| matches!(event, Event::PostFailed { .. }));
     assert_eq!(refused, Event::PostFailed { room: room.clone(), text: "while away".into(), problem: Problem::NotSignedIn });
 
-    // The server comes back at the same address: the worker's backoff finds it and reports Connected, and a sign-in
-    // with a fresh code restores the open room.
+    // The server comes back at the same address: the worker's backoff finds it and, holding a resume ticket (T240),
+    // tries to resume. This test server cannot resume a session (it closes the connection, as a server older than
+    // T240 does), so the worker reports SessionEnded and Connected, and a sign-in with a fresh code restores the open
+    // room.
     let _back = ChatServer::start(&lab, &address.to_string());
+    expect(&events, "session ended", |event| *event == Event::SessionEnded);
     expect(&events, "reconnected", |event| *event == Event::Connected);
     alice.sign_in(credentials(ALICE));
     let signed_in = expect(&events, "signed in", |event| matches!(event, Event::SignedIn { .. }));

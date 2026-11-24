@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use crewcraft_proto::frame::{self, MAX_FRAME};
 use crewcraft_proto::handshake::ServerSide;
-use crewcraft_proto::signin::{self, CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn};
+use crewcraft_proto::signin::{self, CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, Opening, SignIn};
 use crewcraft_server_core::durable::DurableServer;
 use crewcraft_server_core::session::{DurableSessionError, Phase, Session};
 
@@ -31,6 +31,20 @@ pub trait DeviceAuth {
     /// Return the canonical user, token, and handle only after the account session is committed.
     /// An ordinary credential failure returns `Ok(None)`; an ineligible device or unavailable store returns an error.
     fn sign_in(&self, credentials: SignIn<'_>, now_ms: u64) -> Result<Option<CommittedSignIn<Self::Session>>, AuthError>;
+
+    /// Reopen the session `token` belongs to, for this same device (task T240): the session must still be within its
+    /// absolute lifetime, however long it was idle. `Ok(None)` refuses it. The default refuses every resume.
+    fn resume(&self, token: &str, now_ms: u64) -> Result<Option<CommittedSignIn<Self::Session>>, AuthError> {
+        let _ = (token, now_ms);
+        Ok(None)
+    }
+
+    /// End the session `token` belongs to, if it is this device's (task T240). False if there was none to end. The
+    /// default ends nothing.
+    fn end(&self, token: &str, now_ms: u64) -> Result<bool, AuthError> {
+        let _ = (token, now_ms);
+        Ok(false)
+    }
 
     /// Check that this session and its device remain authorized at `now_ms` and hold that authorization throughout
     /// `action`. A revoked or expired session returns `Ok(None)` without calling `action`.
@@ -73,8 +87,19 @@ pub fn serve<S: Read + Write, A: DeviceAuth>(
             let Some(first) = frame::read_frame(stream, MAX_SIGN_IN_FRAME)? else {
                 return Ok(());
             };
-            let credentials = signin::decode_request(first.payload()).map_err(|_| DeviceSessionError::InvalidSignIn)?;
-            auth.sign_in(credentials, now_ms()).map_err(DeviceSessionError::Auth)?
+            match signin::decode_opening(first.payload()).map_err(|_| DeviceSessionError::InvalidSignIn)? {
+                Opening::SignIn(credentials) => auth.sign_in(credentials, now_ms()).map_err(DeviceSessionError::Auth)?,
+                Opening::Resume { token } => auth.resume(token, now_ms()).map_err(DeviceSessionError::Auth)?,
+                Opening::End { token } => {
+                    auth.end(token, now_ms()).map_err(DeviceSessionError::Auth)?;
+                    let payload = signin::encode_reply(&signin::Reply::Ended).map_err(|_| DeviceSessionError::InvalidSignInReply)?;
+                    let reply = frame::encode(&payload).map_err(|_| DeviceSessionError::InvalidSignInReply)?;
+                    reset_deadline(stream)?;
+                    stream.write_all(&reply)?;
+                    stream.flush()?;
+                    return Ok(());
+                }
+            }
         };
 
         let reply = match &signed_in {

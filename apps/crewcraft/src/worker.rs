@@ -5,9 +5,13 @@
 //! `crewcraft_ui_model::Command`s through `Worker`'s methods and reads `Event`s from the channel `Worker::start`
 //! returns. Calls `server_endpoint` and `signed_in`.
 //!
-//! Every sign-in needs a fresh authenticator code, so the worker cannot sign in again by itself. After a lost
-//! connection it reports `Failed` and `Disconnected`, then retries the mutual TLS connection with exponential backoff
-//! and reports `Connected` once the server answers; the window then asks for a new code and calls `sign_in`.
+//! Every sign-in needs a fresh authenticator code, so the worker cannot sign in again by itself. What it can do is
+//! resume (task T240): a sign-in returns a resume ticket, which the worker keeps (and hands to its `TicketKeeper` to
+//! keep between runs), and which reopens the same session from this device without a code for up to 12 hours. After a
+//! lost connection it reports `Failed`, retries the mutual TLS connection with exponential backoff and, holding a
+//! ticket, resumes and reports `SignedIn` again; the window stays where it was. Without a ticket, or when the server
+//! refuses it (`SessionEnded`), it reports `Disconnected`, then `Connected` once the server answers; the window then
+//! asks for a new code and calls `sign_in`. Signing out asks the server to end the session and forgets the ticket.
 //!
 //! Live updates: the server answers requests and does not push between them, so the worker polls each followed room
 //! every `WorkerConfig::poll_interval`.
@@ -33,7 +37,7 @@ use crate::chat_session::ChatError;
 use crate::connect::{Connection, interrupt};
 use crate::lab_client::LabError;
 use crate::server_endpoint::ServerEndpoint;
-use crate::signed_in::{Credentials, SignedInSession, valid_room};
+use crate::signed_in::{Credentials, ResumeTicket, SignedInSession, valid_room};
 
 /// The most rooms one worker follows (and polls).
 pub const MAX_FOLLOWED: usize = 64;
@@ -78,6 +82,33 @@ pub enum Event {
     Failed(Problem),
     /// The signed-in session ended (lost, or signed out).
     Disconnected,
+    /// The server no longer accepts the resume ticket (more than 12 hours since the sign-in, signed out elsewhere, or
+    /// the device was revoked): sign in again with a new code (task T240).
+    SessionEnded,
+}
+
+/// Where the worker keeps its session's resume ticket between runs (task T240). The app keeps it next to the device
+/// record; `Worker::start` keeps it in memory only.
+pub trait TicketKeeper: Send {
+    /// The ticket saved by an earlier run, if any.
+    fn load(&self) -> Option<ResumeTicket>;
+    /// Keep `ticket`, replacing any earlier one.
+    fn save(&self, ticket: &ResumeTicket);
+    /// Forget the ticket.
+    fn clear(&self);
+}
+
+/// Keeps nothing between runs.
+struct MemoryOnly;
+
+impl TicketKeeper for MemoryOnly {
+    fn load(&self) -> Option<ResumeTicket> {
+        None
+    }
+
+    fn save(&self, _: &ResumeTicket) {}
+
+    fn clear(&self) {}
 }
 
 /// Why something did not work, without detail that could identify a credential.
@@ -228,6 +259,20 @@ impl Worker {
         config: WorkerConfig,
         wake: impl Fn() + Send + 'static,
     ) -> io::Result<(Self, Receiver<Event>)> {
+        Self::start_with_keeper(endpoint, device, config, Box::new(MemoryOnly), wake)
+    }
+
+    /// As `start`, keeping the resume ticket with `keeper` (task T240). A ticket `keeper` already holds is tried at
+    /// once: the worker resumes that session without a sign-in, or reports `SessionEnded` if the server refuses it.
+    pub fn start_with_keeper(
+        endpoint: ServerEndpoint,
+        device: Arc<dyn ResolvesClientCert>,
+        config: WorkerConfig,
+        keeper: Box<dyn TicketKeeper>,
+        wake: impl Fn() + Send + 'static,
+    ) -> io::Result<(Self, Receiver<Event>)> {
+        let ticket = keeper.load();
+        let retry = ticket.as_ref().map(|_| Retry { at: Instant::now(), wait: config.first_retry });
         let (inputs, input_queue) = mpsc::channel();
         let (events, event_queue) = mpsc::channel();
         let shared = Arc::new(Shared { stop: AtomicBool::new(false), socket: Mutex::new(None) });
@@ -247,7 +292,9 @@ impl Worker {
             seen: BTreeMap::new(),
             unread: BTreeMap::new(),
             next_poll: Instant::now(),
-            retry: None,
+            retry,
+            keeper,
+            ticket,
         };
         let thread = thread::Builder::new().name("crewcraft-connection".into()).spawn(move || run.run(&input_queue))?;
         Ok((Self { inputs: Some(inputs), shared, thread: Some(thread) }, event_queue))
@@ -310,6 +357,9 @@ struct Run {
     unread: BTreeMap<String, u32>,
     next_poll: Instant,
     retry: Option<Retry>,
+    keeper: Box<dyn TicketKeeper>,
+    /// The current session's resume ticket (task T240).
+    ticket: Option<ResumeTicket>,
 }
 
 impl Run {
@@ -333,8 +383,10 @@ impl Run {
                 Some(Input::Command(Command::Post { room, text })) => self.post(room, text),
                 Some(Input::SignOut) => {
                     self.retry = None;
-                    if self.session.is_some() {
-                        self.end_session();
+                    let was_signed_in = self.session.is_some();
+                    self.end_session();
+                    self.end_remote_session();
+                    if was_signed_in {
                         self.emit(Event::Disconnected);
                     }
                 }
@@ -373,40 +425,61 @@ impl Run {
         };
         self.emit(Event::Connected);
         match self.endpoint.sign_in_over(connection.transport, credentials) {
-            Ok(mut session) => {
-                let listed = match session.list_rooms() {
-                    Ok(listed) => listed,
-                    Err(error) => {
-                        let problem = problem(error);
-                        if problem.ends_session() {
-                            return self.fail_connection(problem, false);
-                        }
-                        // A refusal leaves the session usable; carry on with the rooms already followed.
-                        self.emit(Event::Failed(problem));
-                        None
-                    }
-                };
-                self.session = Some(session);
-                self.me = credentials.email().to_owned();
-                if let Some(rooms) = listed {
-                    self.adopt(rooms);
-                }
-                let rooms = self.followed.iter().cloned().collect();
-                self.emit(Event::SignedIn { email: self.me.clone(), rooms });
-                self.poll(true);
-            }
+            Ok(session) => self.start_session(session, credentials.email()),
             Err(error) => self.fail_connection(problem(error), false),
         }
     }
 
-    /// Report a connection-ending problem and, when it can help, schedule a reconnection attempt.
+    /// Take over a session that was just signed in or resumed: keep its resume ticket, list the person's rooms, report
+    /// `SignedIn` and poll.
+    fn start_session(&mut self, mut session: SignedInSession, email: &str) {
+        if let Some(ticket) = session.resume_ticket() {
+            self.keeper.save(&ticket);
+            self.ticket = Some(ticket);
+        }
+        let listed = match session.list_rooms() {
+            Ok(listed) => listed,
+            Err(error) => {
+                let problem = problem(error);
+                if problem.ends_session() {
+                    return self.fail_connection(problem, false);
+                }
+                // A refusal leaves the session usable; carry on with the rooms already followed.
+                self.emit(Event::Failed(problem));
+                None
+            }
+        };
+        self.session = Some(session);
+        self.me = email.to_owned();
+        if let Some(rooms) = listed {
+            self.adopt(rooms);
+        }
+        let rooms = self.followed.iter().cloned().collect();
+        self.emit(Event::SignedIn { email: self.me.clone(), rooms });
+        self.poll(true);
+    }
+
+    /// Report a connection-ending problem and, when it can help, schedule a reconnection attempt. With a resume ticket
+    /// and a problem that retrying can fix, the session is not reported as ended: the retry resumes it.
     fn fail_connection(&mut self, problem: Problem, was_signed_in: bool) {
         self.end_session();
         self.emit(Event::Failed(problem));
-        if was_signed_in {
+        let resumable = self.ticket.is_some() && problem.retryable();
+        if was_signed_in && !resumable {
             self.emit(Event::Disconnected);
         }
         self.retry = problem.retryable().then(|| Retry { at: Instant::now() + self.config.first_retry, wait: self.config.first_retry });
+    }
+
+    /// Forget the resume ticket, asking the server to end its session first (best effort: an unreachable server
+    /// lets the session run out on its own).
+    fn end_remote_session(&mut self) {
+        let Some(ticket) = self.ticket.take() else {
+            return;
+        };
+        self.keeper.clear();
+        let _ = self.endpoint.end_session(self.device.clone(), &ticket);
+        self.shared.set_socket(None);
     }
 
     /// Handle a failed request: a connection-ending one ends the session, any other is only reported.
@@ -426,6 +499,22 @@ impl Run {
         };
         match self.connect() {
             Ok(connection) => {
+                if let Some(ticket) = self.ticket.clone() {
+                    match self.endpoint.resume_over(connection.transport, &ticket) {
+                        Ok(session) => return self.start_session(session, ticket.email()),
+                        Err(_) => {
+                            // The server answered the TLS handshake but did not reopen the session: it refused the
+                            // ticket, or it is too old to resume and closed the connection. Either way retrying will
+                            // not help: forget the ticket and sign in again with a code.
+                            self.ticket = None;
+                            self.keeper.clear();
+                            self.shared.set_socket(None);
+                            self.emit(Event::SessionEnded);
+                            self.emit(Event::Connected);
+                            return;
+                        }
+                    }
+                }
                 drop(connection);
                 self.shared.set_socket(None);
                 self.emit(Event::Connected);

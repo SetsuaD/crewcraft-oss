@@ -214,6 +214,25 @@ impl<A: DeviceAuth> DeviceAuth for BeforeSignIn<A> {
         Ok(result)
     }
 
+    fn resume(&self, token: &str, now_ms: u64) -> Result<Option<CommittedSignIn<Self::Session>>, AuthError> {
+        if Instant::now() >= self.deadline {
+            return Err(AuthError::Unavailable);
+        }
+        let result = self.inner.resume(token, now_ms)?;
+        if Instant::now() >= self.deadline {
+            return Err(AuthError::Unavailable);
+        }
+        self.signed_in.set(result.is_some());
+        Ok(result)
+    }
+
+    fn end(&self, token: &str, now_ms: u64) -> Result<bool, AuthError> {
+        if Instant::now() >= self.deadline {
+            return Err(AuthError::Unavailable);
+        }
+        self.inner.end(token, now_ms)
+    }
+
     fn with_live_session<T>(&self, session: &Self::Session, now_ms: u64, action: impl FnOnce() -> T) -> Result<Option<T>, AuthError> {
         self.inner.with_live_session(session, now_ms, action)
     }

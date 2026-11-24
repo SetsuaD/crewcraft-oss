@@ -31,6 +31,7 @@ use crate::key_vault::{OpenVault, SystemVault};
 use crate::lab_client::LabError;
 use crate::server_endpoint::ServerEndpoint;
 use crate::signed_in::Credentials;
+use crate::ticket_file::TicketFile;
 use crate::worker::{Event, Worker, WorkerConfig};
 
 /// The one saved server profile of the first beta. Several servers come later.
@@ -356,6 +357,10 @@ impl Controller {
             {
                 updates.push(Update::Failed(store_problem(error)));
             }
+            // A new enrollment is a new device: a resume ticket from the old one would only be refused.
+            if let Some(dir) = self.dir.as_deref() {
+                crate::worker::TicketKeeper::clear(&TicketFile::new(dir));
+            }
             updates.extend(self.use_device(&device));
         }
         if let Some((_, events)) = &self.worker {
@@ -388,7 +393,15 @@ impl Controller {
             Err(error) => return vec![Update::NeedsEnrollment, Update::Failed(enrollment_problem(error))],
         };
         let wake = self.wake.clone();
-        match Worker::start(device.endpoint().clone(), identity, self.config, move || wake()) {
+        // The resume ticket (T240) is kept next to the saved device, so a restart can reopen the session without a
+        // code; with nowhere to keep the device, it is kept in memory only.
+        let started = match (&self.store, self.dir.as_deref()) {
+            (Some(_), Some(dir)) => {
+                Worker::start_with_keeper(device.endpoint().clone(), identity, self.config, Box::new(TicketFile::new(dir)), move || wake())
+            }
+            _ => Worker::start(device.endpoint().clone(), identity, self.config, move || wake()),
+        };
+        match started {
             Ok(worker) => {
                 self.worker = Some(worker);
                 vec![Update::Enrolled { server }]
@@ -408,6 +421,7 @@ pub fn worker_update(event: Event) -> Vec<Update> {
         Event::PostFailed { room, problem, .. } => vec![Update::Failed(format!("A message to {room} was not sent: {problem}"))],
         Event::Failed(problem) => vec![Update::Failed(problem.to_string())],
         Event::Disconnected => vec![Update::SignedOut, Update::Failed("The connection was lost. Sign in again with a new code.".to_owned())],
+        Event::SessionEnded => vec![Update::SignedOut, Update::Failed("Your session has ended. Sign in again with a new code.".to_owned())],
     }
 }
 
