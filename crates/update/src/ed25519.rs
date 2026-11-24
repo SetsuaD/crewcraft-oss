@@ -21,6 +21,19 @@ pub const SIGNATURE_BYTES: usize = 64;
 /// The most release keys that may be pinned at once (the current key, its successor, and room for an emergency key).
 pub const MAX_RELEASE_KEYS: usize = 8;
 
+/// The public halves of CrewCraft's release keys (task T502), as 64 hex characters. A server or app built from this
+/// source installs only releases signed by one of them. To replace a key, add its successor here one release before
+/// signing with it, then remove the old one (docs/RELEASE.md).
+pub const PINNED_RELEASE_KEYS: &[&str] = &[
+    // Release key 1, made 2026-11-24.
+    "4e80d59df55a73d42cea0e49ab61aeaee0ef784e057aeff873f1035cba32f2bf",
+];
+
+/// `PINNED_RELEASE_KEYS` as a `SignatureCheck`.
+pub fn pinned_release_keys() -> Result<ReleaseKeys, KeyError> {
+    ReleaseKeys::from_hex(PINNED_RELEASE_KEYS)
+}
+
 /// Why a list of release keys was refused. The index is the key's position in the list given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyError {

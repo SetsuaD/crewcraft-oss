@@ -1,0 +1,12 @@
+{
+  "id": "T502-pinned-release-keys",
+  "title": "Pin CrewCraft's release public key in the source",
+  "crate": "crewcraft-update",
+  "files": ["crates/update/src/ed25519.rs", "crates/update/tests/t502_pinned_release_keys.rs", "docs/RELEASE.md"],
+  "test_path": "crates/update/tests/t502_pinned_release_keys.rs",
+  "test_cmd": "cargo test -p crewcraft-update --test t502_pinned_release_keys",
+  "depends_on": ["T500-release-keys", "T501-release-tool"],
+  "spec": "crewcraft_update::ed25519::PINNED_RELEASE_KEYS lists the public halves of CrewCraft's release keys as 64 lowercase hex characters, 1 to MAX_RELEASE_KEYS of them, all distinct and valid; it holds release key 1 (4e80d59d...b32f2bf, made 2026-11-24). pinned_release_keys() is them as a ReleaseKeys SignatureCheck, which refuses a signature no pinned key made. docs/RELEASE.md records the pinned key, how to rotate it, and where the private key is kept.",
+  "status": "done",
+  "context": ["crates/update/src/ed25519.rs", "docs/RELEASE.md"]
+}
