@@ -246,5 +246,12 @@ cargo xtask release verify --manifest dist/crewcraft-0.2.0.release.toml --signat
   and SHA-256, so a client checks the download against the signed manifest.
 - `sign` checks the new signature with the public key before writing it, and never overwrites a file. `verify` is
   what a server or client does on receipt: the signature against the pinned keys, then each file.
-- Not yet: pinning the release keys in the server and the apps, the server's self-update and the apps' updaters (the
-  rest of M5).
+- **The pinned key** (task T502): `crewcraft_update::ed25519::PINNED_RELEASE_KEYS` holds the public half of release
+  key 1 (made 2026-11-24), and `pinned_release_keys()` is the check a server or app builds from it. Its public half is
+  `4e80d59df55a73d42cea0e49ab61aeaee0ef784e057aeff873f1035cba32f2bf`. Verify a release against it with
+  `cargo xtask release verify ... --public 4e80d59df55a73d42cea0e49ab61aeaee0ef784e057aeff873f1035cba32f2bf`.
+- **Where the private key is kept.** In the release owner's secrets vault, so a build agent can sign a release on
+  request, and only a release the owner has approved; offline on the owner's own machine, with a backup, so losing
+  one copy loses nothing; and, later, on a hardware security key for releases that need it (support in
+  `cargo xtask release` is planned).
+- Not yet: the server's self-update and the apps' updaters (the rest of M5), which will use the pinned key.
