@@ -252,6 +252,21 @@ cargo xtask release verify --manifest dist/crewcraft-0.2.0.release.toml --signat
   `cargo xtask release verify ... --public 4e80d59df55a73d42cea0e49ab61aeaee0ef784e057aeff873f1035cba32f2bf`.
 - **Where the private key is kept.** In the release owner's secrets vault, so a build agent can sign a release on
   request, and only a release the owner has approved; offline on the owner's own machine, with a backup, so losing
-  one copy loses nothing; and, later, on a hardware security key for releases that need it (support in
-  `cargo xtask release` is planned).
+  one copy loses nothing; and on a hardware security key for releases that need it (below).
+- **Signing with a hardware security key** (task T503). A key made on a device such as a YubiKey never leaves it, so
+  it is a new key: pin its public half (`PINNED_RELEASE_KEYS`) in a release before the first release it signs.
+  `cargo xtask release public --pem <file>` turns the device's exported Ed25519 public key (a `BEGIN PUBLIC KEY`
+  PEM) into the hex to pin. To sign, write a small signer program for your device: it is run with the manifest's path
+  as its only argument, may ask for the PIN or a touch on the terminal, and prints the raw Ed25519 signature over the
+  manifest's exact bytes (64 bytes, or 128 hex characters) on standard output. Then:
+
+  ```sh
+  cargo xtask release sign --manifest dist/crewcraft-0.2.0.release.toml --signer ~/bin/crewcraft-yubikey-sign \
+    --public <device-public-key-hex> --out dist/crewcraft-0.2.0.release.toml.sig
+  ```
+
+  `sign` keeps the signature only if it verifies with `--public`, and never overwrites a file. The device must make a
+  plain Ed25519 signature of the bytes (for a YubiKey, an Ed25519 key in its PIV application, firmware 5.7 or later);
+  an OpenPGP or SSH signature is a different format and is refused. The tests use a test key and a script in place of
+  a device; the first time with a real device, sign a test manifest and check it with `release verify`.
 - Not yet: the server's self-update and the apps' updaters (the rest of M5), which will use the pinned key.

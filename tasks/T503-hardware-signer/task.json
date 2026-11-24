@@ -1,0 +1,12 @@
+{
+  "id": "T503-hardware-signer",
+  "title": "Release tool: sign with a key held on a hardware security key",
+  "crate": "xtask",
+  "files": ["xtask/src/release.rs", "docs/RELEASE.md"],
+  "test_path": "xtask/tests/t503_hardware_signer.rs",
+  "test_cmd": "cargo test -p xtask --test t503_hardware_signer",
+  "depends_on": ["T501-release-tool", "T502-pinned-release-keys"],
+  "spec": "release sign --manifest M --signer P --public H --out S runs P with M's path as its only argument (terminal input and error output passed through, so a device can ask for its PIN or a touch), takes what it prints on standard output as the signature (64 raw bytes, or 128 hex characters with surrounding white space), refuses an invalid manifest, a signer that fails or prints anything else, and a signature that does not verify with open_release against H, and writes the 64 bytes to a new file only. --signer needs --public and cannot be combined with --key. release public --pem F prints the 64-hex-character public key in an Ed25519 SubjectPublicKeyInfo PEM (BEGIN PUBLIC KEY; LF or CRLF line ends) and refuses other PEM types, invalid base64 and other algorithms. release public takes --key or --pem, not both.",
+  "status": "done",
+  "context": ["xtask/src/release.rs", "crates/update/src/ed25519.rs", "docs/RELEASE.md"]
+}

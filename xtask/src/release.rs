@@ -7,6 +7,11 @@
 //! files against pinned public keys, as a server or client will (`crewcraft_update::open_release` with
 //! `ed25519::ReleaseKeys`). Called by: `main.rs`. Calls: `crewcraft-update`, `ed25519-dalek`, `names`, `android`.
 //!
+//! A key held on a hardware security key (task T503) signs through `sign --signer <program> --public <hex>`: the
+//! program is the owner's own wrapper around the device's tool, given the manifest's path and printing the raw
+//! signature; the signature is checked against `--public` before it is written. `public --pem <file>` turns the
+//! device's exported public key (SubjectPublicKeyInfo PEM) into the hex that is pinned.
+//!
 //! The release key never goes into the repository or a build machine's log; where it is kept is the release owner's
 //! decision (docs/RELEASE.md).
 
@@ -28,20 +33,23 @@ use crate::{Context, Error, Result};
 
 pub const USAGE: &str = "\
 usage: cargo xtask release key --out <new-key-file>
-       cargo xtask release public --key <key-file>
+       cargo xtask release public --key <key-file> | --pem <public-key.pem>
        cargo xtask release manifest --version <version> --channel beta|stable --published <YYYY-MM-DD>
                                     --min-client <version> --dir <packages-dir> --out <manifest>
        cargo xtask release sign --manifest <manifest> --key <key-file> --out <signature>
+       cargo xtask release sign --manifest <manifest> --signer <program> --public <hex> --out <signature>
        cargo xtask release verify --manifest <manifest> --signature <signature> --public <hex>[,<hex>...]
                                   [--dir <packages-dir>]
 
 Signed release manifests (milestone M5, docs/RELEASE.md):
   key       makes a new release key in a new, owner-only file and prints its public key (hex). The file holds the
             private key: keep it off build machines and out of the repository.
-  public    prints the public key of a key file.
+  public    prints the public key of a key file, or of an Ed25519 public key in PEM (a hardware key's export).
   manifest  writes the release manifest for the packages in <packages-dir> (the server and desktop packages from
             `cargo xtask dist` and the phone APK from `cargo xtask apk`), with each file's size and SHA-256.
-  sign      signs a manifest: a detached 64-byte Ed25519 signature, checked before it is written.
+  sign      signs a manifest: a detached 64-byte Ed25519 signature, checked before it is written. With --signer, a
+            hardware key signs: <program> is run with the manifest's path and prints the signature (64 bytes, or
+            128 hex characters), which must verify with --public.
   verify    checks a signed manifest against the pinned public keys, as a server or client will, and with --dir
             also each listed file's size and SHA-256.";
 
@@ -53,8 +61,10 @@ pub const PRODUCT: &str = "crewcraft";
 pub enum Command {
     Key { out: PathBuf },
     Public { key: PathBuf },
+    PublicPem { pem: PathBuf },
     Manifest(ManifestOptions),
     Sign { manifest: PathBuf, key: PathBuf, out: PathBuf },
+    SignWith { manifest: PathBuf, signer: PathBuf, public: String, out: PathBuf },
     Verify { manifest: PathBuf, signature: PathBuf, public: Vec<String>, dir: Option<PathBuf> },
 }
 
@@ -86,9 +96,9 @@ pub fn parse_args(args: &[String]) -> Result<Command> {
     }
     let allowed: &[&str] = match command.as_str() {
         "key" => &["--out"],
-        "public" => &["--key"],
+        "public" => &["--key", "--pem"],
         "manifest" => &["--version", "--channel", "--published", "--min-client", "--dir", "--out"],
-        "sign" => &["--manifest", "--key", "--out"],
+        "sign" => &["--manifest", "--key", "--signer", "--public", "--out"],
         "verify" => &["--manifest", "--signature", "--public", "--dir"],
         _ => return Err(Error::new(format!("unknown release command {command:?}\n\n{USAGE}"))),
     };
@@ -99,7 +109,11 @@ pub fn parse_args(args: &[String]) -> Result<Command> {
     let need = |name: &str| get(name).ok_or_else(|| Error::new(format!("release {command} needs {name}\n\n{USAGE}")));
     Ok(match command.as_str() {
         "key" => Command::Key { out: need("--out")?.into() },
-        "public" => Command::Public { key: need("--key")?.into() },
+        "public" => match (get("--key"), get("--pem")) {
+            (Some(key), None) => Command::Public { key: key.into() },
+            (None, Some(pem)) => Command::PublicPem { pem: pem.into() },
+            _ => return Err(Error::new(format!("release public takes --key or --pem\n\n{USAGE}"))),
+        },
         "manifest" => {
             let channel = need("--channel")?;
             if channel != "beta" && channel != "stable" {
@@ -121,7 +135,14 @@ pub fn parse_args(args: &[String]) -> Result<Command> {
                 out: need("--out")?.into(),
             })
         }
-        "sign" => Command::Sign { manifest: need("--manifest")?.into(), key: need("--key")?.into(), out: need("--out")?.into() },
+        "sign" => match (get("--key"), get("--signer"), get("--public")) {
+            (Some(key), None, None) => Command::Sign { manifest: need("--manifest")?.into(), key: key.into(), out: need("--out")?.into() },
+            (None, Some(signer), Some(public)) => {
+                Command::SignWith { manifest: need("--manifest")?.into(), signer: signer.into(), public, out: need("--out")?.into() }
+            }
+            (None, Some(_), None) => return Err(Error::new(format!("release sign --signer needs --public\n\n{USAGE}"))),
+            _ => return Err(Error::new(format!("release sign takes --key, or --signer with --public\n\n{USAGE}"))),
+        },
         _ => Command::Verify {
             manifest: need("--manifest")?.into(),
             signature: need("--signature")?.into(),
@@ -140,6 +161,10 @@ pub fn run(command: &Command) -> Result<()> {
             println!("public key: {public}");
         }
         Command::Public { key } => println!("{}", public_key(key)?),
+        Command::PublicPem { pem } => {
+            let text = fs::read_to_string(pem).context(|| format!("reading {}", pem.display()))?;
+            println!("{}", public_key_from_pem(&text)?);
+        }
         Command::Manifest(options) => {
             let text = manifest_text(options)?;
             write_new(&options.out, text.as_bytes())?;
@@ -151,6 +176,13 @@ pub fn run(command: &Command) -> Result<()> {
             let signature = sign(&bytes, key)?;
             write_new(out, &signature)?;
             println!("wrote {} (signed by {})", out.display(), public_key(key)?);
+        }
+        Command::SignWith { manifest, signer, public, out } => {
+            let bytes = fs::read(manifest).context(|| format!("reading {}", manifest.display()))?;
+            let printed = run_signer(signer, manifest)?;
+            let signature = sign_with(&bytes, &printed, public)?;
+            write_new(out, &signature)?;
+            println!("wrote {} (signed by {public}, through {})", out.display(), signer.display());
         }
         Command::Verify { manifest, signature, public, dir } => {
             let release = verify(manifest, signature, public, dir.as_deref())?;
@@ -249,6 +281,56 @@ pub fn sign(manifest: &[u8], key: &Path) -> Result<Vec<u8>> {
     Ok(signature)
 }
 
+/// Runs a hardware key's signer: `signer <manifest>`, with the terminal's input and error output passed through (so
+/// the device's tool can ask for its PIN or a touch), returning what it printed. A signer that fails is an error.
+pub fn run_signer(signer: &Path, manifest: &Path) -> Result<Vec<u8>> {
+    let output = std::process::Command::new(signer)
+        .arg(manifest)
+        .stdin(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .context(|| format!("running the signer {}", signer.display()))?;
+    if !output.status.success() {
+        return Err(Error::new(format!("the signer {} failed ({})", signer.display(), output.status)));
+    }
+    Ok(output.stdout)
+}
+
+/// The signature a hardware key's signer printed for `manifest` (which must be a valid manifest): 64 raw bytes, or
+/// 128 hex characters with any surrounding white space. It is returned only if it verifies with `public` (hex).
+pub fn sign_with(manifest: &[u8], printed: &[u8], public: &str) -> Result<Vec<u8>> {
+    let text = std::str::from_utf8(manifest).map_err(|_| Error::new("the manifest is not UTF-8 text"))?;
+    parse_manifest(text).map_err(|error| Error::new(format!("refusing to sign an invalid manifest: {error}")))?;
+    let pinned = ReleaseKeys::from_hex(&[public]).map_err(|error| Error::new(format!("--public: {error}")))?;
+    let signature = if printed.len() == 64 {
+        printed.to_vec()
+    } else {
+        let hex_text = std::str::from_utf8(printed).map(str::trim).unwrap_or("");
+        from_hex(hex_text)
+            .filter(|bytes| bytes.len() == 64)
+            .ok_or_else(|| Error::new(format!("the signer printed {} bytes, not a signature (64 bytes, or 128 hex characters)", printed.len())))?
+    };
+    open_release(manifest, &signature, &pinned)
+        .map_err(|error| Error::new(format!("the signer's signature does not verify with --public: {error}")))?;
+    Ok(signature)
+}
+
+/// The public key, as hex, in an Ed25519 SubjectPublicKeyInfo PEM (`-----BEGIN PUBLIC KEY-----`), the form a hardware
+/// key's tool exports.
+pub fn public_key_from_pem(text: &str) -> Result<String> {
+    const SPKI_PREFIX: [u8; 12] = [0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
+    let body = text
+        .trim()
+        .strip_prefix("-----BEGIN PUBLIC KEY-----")
+        .and_then(|rest| rest.trim_end().strip_suffix("-----END PUBLIC KEY-----"))
+        .ok_or_else(|| Error::new("not a PEM public key (-----BEGIN PUBLIC KEY-----)"))?;
+    let der = from_base64(body).ok_or_else(|| Error::new("the PEM public key is not valid base64"))?;
+    match der.strip_prefix(&SPKI_PREFIX[..]) {
+        Some(key) if key.len() == 32 => Ok(hex(key)),
+        _ => Err(Error::new("the PEM public key is not an Ed25519 key")),
+    }
+}
+
 /// Checks the signed manifest against the public keys (hex) and, with `dir`, each listed file.
 pub fn verify(manifest: &Path, signature: &Path, public: &[String], dir: Option<&Path>) -> Result<Release> {
     let keys: Vec<&str> = public.iter().map(String::as_str).collect();
@@ -317,4 +399,49 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn from_hex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    let (pairs, _) = text.as_bytes().as_chunks::<2>();
+    pairs.iter().map(|pair| std::str::from_utf8(&pair[..]).ok().and_then(|pair| u8::from_str_radix(pair, 16).ok())).collect()
+}
+
+/// Standard base64 (with padding), ignoring line breaks and other white space.
+fn from_base64(text: &str) -> Option<Vec<u8>> {
+    let mut bits: u32 = 0;
+    let mut count = 0;
+    let mut out = Vec::new();
+    let mut padding = 0;
+    for byte in text.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => {
+                padding += 1;
+                0
+            }
+            _ => return None,
+        };
+        if padding > 0 && byte != b'=' {
+            return None;
+        }
+        bits = (bits << 6) | u32::from(value);
+        count += 1;
+        if count == 4 {
+            out.extend_from_slice(&bits.to_be_bytes()[1..]);
+            bits = 0;
+            count = 0;
+        }
+    }
+    if count != 0 || padding > 2 {
+        return None;
+    }
+    out.truncate(out.len() - padding);
+    Some(out)
 }
