@@ -28,6 +28,19 @@
 //!
 //! Any other message, an out-of-order one, a malformed frame, or a peer whose invitation is no longer live is closed
 //! without a reply. Sign-in and chat requests cannot even be decoded here (the tags are disjoint).
+//!
+//! Enrolling through the server's identity provider (task T611i, SECURITY-DESIGN.md section 9) replaces the password
+//! and the authenticator on a server that has one (`Enroller::with_external`), and only there: such a server refuses
+//! `Redeem` with `ERR_WRONG_PATH`, and any other server refuses `RedeemExternal` the same way.
+//! 1. `RedeemExternal` takes the same checks and limits as `Redeem` and stages the device, then asks the provider to
+//!    begin (`ExternalEnrollment::begin`: a nonce bound to this bootstrap key) and answers `ExternalStart`.
+//! 2. `ConfirmExternal`, on the same connection and attempt, takes the limits, then has the provider exchange the code
+//!    and verify the ID token (`ExternalEnrollment::verify`). The token's email must be the invitation's. Then ONE
+//!    `Services::activate` commits the activation with the binding (`ActivationRecord::external`) and only then is the
+//!    leaf sent. A refused check closes with `ERR_EXTERNAL_REFUSED` and nothing durable; the nonce was used, so the person
+//!    starts again on a new connection.
+//! Both provider calls may reach the network: the connection stops at them (`take_external_job`) so that
+//! `receive_shared` makes them with no lock held, exactly as it does the password hash.
 
 mod admission;
 mod staging;
@@ -44,11 +57,12 @@ use zeroize::{Zeroize, Zeroizing};
 use crewcraft_accounts::password;
 use crewcraft_pki::{Authority, Claims, csr_key_id};
 use crewcraft_proto::bootstrap::{BootstrapRequest, BootstrapResponse, decode_bootstrap_request, encode_bootstrap_response};
+use crewcraft_accounts::identity::normalize_email;
 use crewcraft_proto::frame::{Decoder, encode};
 use crewcraft_server_core::devices::MAX_NAME_CHARS;
 use rand_core::{OsRng, RngCore};
 
-use staging::{Candidate, StageError, Staging};
+use staging::{Candidate, Confirmed, StageError, Staging};
 
 /// A malformed or unacceptable request (device name, signing request). The connection is closed after it.
 pub const ERR_BAD_REQUEST: u16 = 1;
@@ -60,14 +74,22 @@ pub const ERR_RATE_LIMITED: u16 = 3;
 pub const ERR_BAD_CODE: u16 = 4;
 /// Anything the server could not complete (including a refused or failed durable commit). The connection is closed after it.
 pub const ERR_UNAVAILABLE: u16 = 5;
+/// This server enrolls the other way: through its identity provider (`RedeemExternal`) or with a password (`Redeem`).
+/// The connection is closed after it (task T611i).
+pub const ERR_WRONG_PATH: u16 = 6;
+/// The identity provider did not sign this person in, or as someone other than the invitation's person. Nothing is
+/// durable; the connection is closed after it (task T611i).
+pub const ERR_EXTERNAL_REFUSED: u16 = 7;
 
 /// Everything that becomes durable together before the device is given its certificate.
 #[derive(Clone)]
 pub struct ActivationRecord {
     /// The account: the invitation's canonical email.
     pub email: String,
-    /// The account password, as an Argon2id PHC string. Never the password.
-    pub password_phc: String,
+    /// The account password, as an Argon2id PHC string. Never the password. `None` for enrollment through a provider.
+    pub password_phc: Option<String>,
+    /// The provider identity the person is bound to in the same record (task T611i); `None` for a password enrollment.
+    pub external: Option<ExternalBinding>,
     /// The device id the certificate carries (`OU=device-<id>`), which the store must allocate.
     pub device_id: u64,
     /// The device's identity: SHA-256 of its public key's SubjectPublicKeyInfo, stable across renewals.
@@ -95,6 +117,91 @@ impl std::fmt::Debug for ActivationRecord {
             .field("device_id", &self.device_id)
             .field("device_name", &self.device_name)
             .finish_non_exhaustive()
+    }
+}
+
+/// A provider identity, `(issuer, subject)`, as the account store binds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalBinding {
+    pub issuer: String,
+    pub subject: String,
+}
+
+/// What the app needs to open the provider's sign-in page (task T611i).
+#[derive(Clone, PartialEq, Eq)]
+pub struct EnrollmentStart {
+    pub issuer: String,
+    pub client_id: String,
+    pub authorization_endpoint: String,
+    /// Bound to the bootstrap key, usable once.
+    pub nonce: String,
+}
+
+impl std::fmt::Debug for EnrollmentStart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EnrollmentStart").field("issuer", &self.issuer).field("client_id", &self.client_id).finish_non_exhaustive()
+    }
+}
+
+/// A person the provider signed in, after every check of the ID token (and the authorizer, if any) passed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedIdentity {
+    pub issuer: String,
+    pub subject: String,
+    /// The token's `email` claim; it must be the invitation's address.
+    pub email: Option<String>,
+}
+
+/// The server's identity provider, for enrollment through it (task T611i). `crewcraft-server` implements it over its
+/// external sign-in. Both calls may reach the network; the connection makes them with no lock held.
+pub trait ExternalEnrollment: Send + Sync {
+    /// Begin: the provider's issuer, client id, authorization endpoint and a fresh nonce bound to `bootstrap_pub`.
+    /// `None` when the provider cannot be reached.
+    fn begin(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> Option<EnrollmentStart>;
+    /// Exchange `code` and verify the ID token against `bootstrap_pub`'s nonce (once), and ask the authorizer if there
+    /// is one. `None` on any failure.
+    fn verify(&self, bootstrap_pub: &[u8; 32], code: &str, verifier: &str, redirect_uri: &str, now_ms: u64) -> Option<VerifiedIdentity>;
+}
+
+/// A provider call the connection is waiting on (`BootstrapConnection::take_external_job`). Run it with no lock held,
+/// then give the outcome to `finish_external`.
+pub struct ExternalJob {
+    key: [u8; 32],
+    now_ms: u64,
+    kind: JobKind,
+}
+
+enum JobKind {
+    Begin,
+    Verify { code: Zeroizing<String>, verifier: Zeroizing<String>, redirect_uri: String },
+}
+
+impl std::fmt::Debug for ExternalJob {
+    // The code and the verifier are never printed.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.kind {
+            JobKind::Begin => "ExternalJob(begin)",
+            JobKind::Verify { .. } => "ExternalJob(verify, ..)",
+        })
+    }
+}
+
+/// What a provider call gave back.
+#[derive(Debug)]
+pub enum ExternalOutcome {
+    Begun(Option<EnrollmentStart>),
+    Verified(Option<VerifiedIdentity>),
+}
+
+impl ExternalJob {
+    /// Make the provider call. Takes as long as the provider does: hold no lock.
+    pub fn run(&self, provider: &dyn ExternalEnrollment) -> ExternalOutcome {
+        match &self.kind {
+            JobKind::Begin => ExternalOutcome::Begun(provider.begin(&self.key, self.now_ms)),
+            JobKind::Verify { code, verifier, redirect_uri } => {
+                ExternalOutcome::Verified(provider.verify(&self.key, code, verifier, redirect_uri, self.now_ms))
+            }
+        }
     }
 }
 
@@ -159,6 +266,8 @@ pub struct Enroller<S: Services> {
     authority: Authority,
     services: S,
     poisoned: Arc<AtomicBool>,
+    /// The identity provider people enroll through; `None` on a server that enrolls with passwords (task T611i).
+    external: Option<Arc<dyn ExternalEnrollment>>,
 }
 
 impl<S: Services> std::fmt::Debug for Enroller<S> {
@@ -169,7 +278,18 @@ impl<S: Services> std::fmt::Debug for Enroller<S> {
 
 impl<S: Services> Enroller<S> {
     pub fn new(authority: Authority, services: S) -> Self {
-        Self { staging: Staging::new(), authority, services, poisoned: Arc::new(AtomicBool::new(false)) }
+        Self { staging: Staging::new(), authority, services, poisoned: Arc::new(AtomicBool::new(false)), external: None }
+    }
+
+    /// Enroll through `provider` instead of a password and an authenticator (task T611i).
+    pub fn with_external(mut self, provider: Arc<dyn ExternalEnrollment>) -> Self {
+        self.external = Some(provider);
+        self
+    }
+
+    /// Whether people enroll through the server's identity provider.
+    pub fn enrolls_externally(&self) -> bool {
+        self.external.is_some()
     }
 
     pub fn authority(&self) -> &Authority {
@@ -233,15 +353,33 @@ struct Awaiting {
     totp_uri: String,
 }
 
+/// An enrollment through the provider, staged (task T611i).
+struct StagedExternal {
+    attempt: u64,
+    csr: Vec<u8>,
+}
+
+/// A provider call in flight for request `request_id`.
+struct AwaitingExternal {
+    attempt: u64,
+    csr: Vec<u8>,
+    request_id: u32,
+}
+
 enum State {
     Start,
     AwaitingHash(Box<Awaiting>),
     Staged(Box<Staged>),
+    AwaitingBegin(Box<AwaitingExternal>),
+    StagedExternal(Box<StagedExternal>),
+    AwaitingVerify(Box<AwaitingExternal>),
     Done,
 }
 
 enum Step {
     NeedsHash(Zeroizing<String>),
+    /// Stop until the provider call `take_external_job` hands out is made and its outcome given to `finish_external`.
+    NeedsExternal,
     Reply(Vec<u8>),
     ReplyAndClose(Vec<u8>),
     Close,
@@ -300,13 +438,25 @@ pub fn receive_shared<S: Services>(
         conn.closed = true;
         return Output { bytes, open: false };
     };
+    let external = guard.external.clone();
     let mut progress = conn.receive_step(&mut guard, input);
     drop(guard);
     loop {
         match progress {
             Progress::Done(out) => {
                 bytes.extend(out.bytes);
-                return Output { bytes, open: out.open };
+                // A provider call (task T611i), made with no lock held like the hash.
+                let Some(job) = conn.take_external_job() else { return Output { bytes, open: out.open } };
+                let Some(provider) = &external else {
+                    conn.closed = true;
+                    return Output { bytes, open: false };
+                };
+                let outcome = job.run(provider.as_ref());
+                let Ok(mut guard) = enroller.lock() else {
+                    conn.closed = true;
+                    return Output { bytes, open: false };
+                };
+                progress = conn.finish_external(&mut guard, outcome);
             }
             Progress::NeedsHash { bytes: before, job } => {
                 bytes.extend(before);
@@ -330,6 +480,8 @@ pub struct BootstrapConnection {
     decoder: Decoder,
     state: State,
     closed: bool,
+    /// The provider call the connection waits on (task T611i).
+    job: Option<ExternalJob>,
 }
 
 impl std::fmt::Debug for BootstrapConnection {
@@ -341,7 +493,7 @@ impl std::fmt::Debug for BootstrapConnection {
 impl BootstrapConnection {
     /// A connection for the peer admitted as `Class::Bootstrap(bootstrap_pub)` from `source`.
     pub fn new(bootstrap_pub: [u8; 32], source: &str) -> Self {
-        Self { key: bootstrap_pub, source: source.to_string(), decoder: Decoder::new(), state: State::Start, closed: false }
+        Self { key: bootstrap_pub, source: source.to_string(), decoder: Decoder::new(), state: State::Start, closed: false, job: None }
     }
 
     pub fn is_closed(&self) -> bool {
@@ -358,7 +510,13 @@ impl BootstrapConnection {
             match progress {
                 Progress::Done(out) => {
                     bytes.extend(out.bytes);
-                    return Output { bytes, open: out.open };
+                    let Some(job) = self.take_external_job() else { return Output { bytes, open: out.open } };
+                    let Some(provider) = enroller.external.clone() else {
+                        self.closed = true;
+                        return Output { bytes, open: false };
+                    };
+                    let outcome = job.run(provider.as_ref());
+                    progress = self.finish_external(enroller, outcome);
                 }
                 Progress::NeedsHash { bytes: before, job } => {
                     bytes.extend(before);
@@ -408,8 +566,8 @@ impl BootstrapConnection {
     }
 
     fn drive<S: Services>(&mut self, enroller: &mut Enroller<S>, mut bytes: Vec<u8>) -> Progress {
-        if matches!(self.state, State::AwaitingHash(_)) {
-            // Frames wait until the hash is supplied.
+        if matches!(self.state, State::AwaitingHash(_) | State::AwaitingBegin(_) | State::AwaitingVerify(_)) {
+            // Frames wait until the hash, or the provider's answer, is supplied.
             return Progress::Done(Output { bytes, open: !self.closed });
         }
         loop {
@@ -429,6 +587,7 @@ impl BootstrapConnection {
                     break;
                 }
                 Step::NeedsHash(password) => return Progress::NeedsHash { bytes, job: HashJob { password } },
+                Step::NeedsExternal => return Progress::Done(Output { bytes, open: !self.closed }),
                 Step::Close => {
                     self.closed = true;
                     break;
@@ -443,13 +602,149 @@ impl BootstrapConnection {
         let staged = matches!(self.state, State::Staged(_));
         let start = matches!(self.state, State::Start);
         match request {
+            // One server, one way in (task T611i).
+            BootstrapRequest::Redeem { .. } if start && enroller.external.is_some() => error_close(id, ERR_WRONG_PATH),
+            BootstrapRequest::RedeemExternal { .. } if start && enroller.external.is_none() => error_close(id, ERR_WRONG_PATH),
             BootstrapRequest::Redeem { device_name, csr, password } if start || staged => {
                 // The decoded password is wiped when this arm ends.
                 let password = Zeroizing::new(password);
                 self.redeem(enroller, id, &device_name, csr, &password)
             }
             BootstrapRequest::ConfirmTotp { code } if staged => self.confirm(enroller, id, &code),
+            BootstrapRequest::RedeemExternal { device_name, csr } if start => self.redeem_external(enroller, id, &device_name, csr),
+            BootstrapRequest::ConfirmExternal { code, verifier, redirect_uri } if matches!(self.state, State::StagedExternal(_)) => {
+                self.confirm_external(enroller, id, Zeroizing::new(code), Zeroizing::new(verifier), redirect_uri)
+            }
             _ => Step::Close,
+        }
+    }
+
+    /// The provider call this connection waits on, if any (task T611i). Run it with no lock held (`ExternalJob::run`)
+    /// and give the outcome to `finish_external`.
+    pub fn take_external_job(&mut self) -> Option<ExternalJob> {
+        self.job.take()
+    }
+
+    /// Resume after a provider call with its outcome: answer `RedeemExternal` with `ExternalStart`, or commit the
+    /// enrollment for `ConfirmExternal`. Re-checks the enroller, which may have been poisoned meanwhile.
+    pub fn finish_external<S: Services>(&mut self, enroller: &mut Enroller<S>, outcome: ExternalOutcome) -> Progress {
+        let state = std::mem::replace(&mut self.state, State::Done);
+        if self.closed || enroller.is_poisoned() {
+            self.closed = true;
+            return Progress::Done(Output { bytes: Vec::new(), open: false });
+        }
+        let step = match (state, outcome) {
+            (State::AwaitingBegin(awaiting), ExternalOutcome::Begun(Some(start))) => {
+                let AwaitingExternal { attempt, csr, request_id } = *awaiting;
+                let reply = BootstrapResponse::ExternalStart {
+                    issuer: start.issuer,
+                    client_id: start.client_id,
+                    authorization_endpoint: start.authorization_endpoint,
+                    nonce: start.nonce,
+                };
+                match frame(request_id, reply) {
+                    Some(bytes) => {
+                        self.state = State::StagedExternal(Box::new(StagedExternal { attempt, csr }));
+                        Step::Reply(bytes)
+                    }
+                    None => Step::Close,
+                }
+            }
+            (State::AwaitingBegin(awaiting), ExternalOutcome::Begun(None)) => {
+                enroller.staging.finish(&self.key);
+                error_close(awaiting.request_id, ERR_UNAVAILABLE)
+            }
+            (State::AwaitingVerify(awaiting), ExternalOutcome::Verified(identity)) => self.activate_external(enroller, *awaiting, identity),
+            _ => Step::Close,
+        };
+        let bytes = match step {
+            Step::Reply(bytes) => bytes,
+            Step::ReplyAndClose(bytes) => {
+                self.closed = true;
+                return Progress::Done(Output { bytes, open: false });
+            }
+            Step::NeedsHash(_) | Step::NeedsExternal | Step::Close => {
+                self.closed = true;
+                return Progress::Done(Output { bytes: Vec::new(), open: false });
+            }
+        };
+        self.drive(enroller, bytes)
+    }
+
+    /// `RedeemExternal`: the checks and limits of `redeem`, with no password, then a provider call to begin.
+    fn redeem_external<S: Services>(&mut self, e: &mut Enroller<S>, id: u32, device_name: &str, csr: Vec<u8>) -> Step {
+        let now = e.services.now_ms();
+        let Some(Preview { email, .. }) = e.services.preview(&self.key, now) else { return Step::Close };
+        let name = device_name.trim();
+        if name.is_empty() || name.chars().count() > MAX_NAME_CHARS || name.chars().any(char::is_control) {
+            return error_close(id, ERR_BAD_REQUEST);
+        }
+        let Ok(key_id) = csr_key_id(&csr) else { return error_close(id, ERR_BAD_REQUEST) };
+        if e.services.key_registered(&key_id) || e.services.has_person(&email) {
+            return error_close(id, ERR_UNAVAILABLE);
+        }
+        // The person has no authenticator: this secret is sealed in the account and shown to no one, so no code made
+        // from it can ever be typed.
+        let Some(mut drawn) = e.services.new_totp_secret() else { return error_close(id, ERR_UNAVAILABLE) };
+        let secret = Zeroizing::new(drawn);
+        drawn.zeroize();
+        let services = &e.services;
+        e.staging.retain_live(|key| services.preview(key, now).is_some());
+        let candidate = Candidate { email: &email, device_name: name, key_id, secret };
+        let begun = match e.staging.begin(&self.source, &self.key, candidate, now) {
+            Ok(begun) => begun,
+            Err(StageError::RateLimited) => return error_close(id, ERR_RATE_LIMITED),
+            Err(_) => return error_close(id, ERR_UNAVAILABLE),
+        };
+        self.state = State::AwaitingBegin(Box::new(AwaitingExternal { attempt: begun.attempt, csr, request_id: id }));
+        self.job = Some(ExternalJob { key: self.key, now_ms: now, kind: JobKind::Begin });
+        Step::NeedsExternal
+    }
+
+    /// `ConfirmExternal`: the limits, then a provider call to verify the sign-in.
+    fn confirm_external<S: Services>(
+        &mut self,
+        e: &mut Enroller<S>,
+        id: u32,
+        code: Zeroizing<String>,
+        verifier: Zeroizing<String>,
+        redirect_uri: String,
+    ) -> Step {
+        let State::StagedExternal(staged) = std::mem::replace(&mut self.state, State::Done) else { return Step::Close };
+        let now = e.services.now_ms();
+        if e.services.preview(&self.key, now).is_none() {
+            return Step::Close;
+        }
+        match e.staging.take_external(&self.source, &self.key, staged.attempt, now) {
+            Ok(()) => {}
+            Err(StageError::RateLimited) => return error_close(id, ERR_RATE_LIMITED),
+            Err(_) => return Step::Close,
+        }
+        let StagedExternal { attempt, csr } = *staged;
+        self.state = State::AwaitingVerify(Box::new(AwaitingExternal { attempt, csr, request_id: id }));
+        self.job = Some(ExternalJob { key: self.key, now_ms: now, kind: JobKind::Verify { code, verifier, redirect_uri } });
+        Step::NeedsExternal
+    }
+
+    /// The provider verified someone (or refused): check it is the invitation's person, then commit once with the binding.
+    fn activate_external<S: Services>(&mut self, e: &mut Enroller<S>, awaiting: AwaitingExternal, identity: Option<VerifiedIdentity>) -> Step {
+        let AwaitingExternal { attempt, csr, request_id: id } = awaiting;
+        let now = e.services.now_ms();
+        let Some(Preview { email, next_device_id }) = e.services.preview(&self.key, now) else { return Step::Close };
+        let same_person = |claimed: &str| normalize_email(claimed).is_ok_and(|claimed| claimed == email);
+        let Some(identity) = identity.filter(|identity| identity.email.as_deref().is_some_and(same_person)) else {
+            // The nonce is spent: this attempt cannot be finished. The invitation stays live for a new connection.
+            e.staging.finish(&self.key);
+            return error_close(id, ERR_EXTERNAL_REFUSED);
+        };
+        let confirmed = match e.staging.confirmed_external(&self.key, attempt) {
+            Some(confirmed) if confirmed.email == email => confirmed,
+            _ => return Step::Close,
+        };
+        let binding = ExternalBinding { issuer: identity.issuer, subject: identity.subject };
+        match self.commit(e, id, &email, next_device_id, &csr, &confirmed, None, Some(binding), now) {
+            Committed::Done(step) => step,
+            Committed::NotWritten => error_close(id, ERR_UNAVAILABLE),
         }
     }
 
@@ -493,7 +788,6 @@ impl BootstrapConnection {
         let now = e.services.now_ms();
         // Re-check against the store immediately before the invitation is used.
         let Some(Preview { email, next_device_id }) = e.services.preview(&self.key, now) else { return Step::Close };
-        let mut next_device_id = next_device_id;
         let confirmed = match e.staging.confirm(&self.source, &self.key, staged.attempt, code, now) {
             Ok(confirmed) if confirmed.email == email => confirmed,
             Err(StageError::BadCode) => {
@@ -503,18 +797,43 @@ impl BootstrapConnection {
             Err(StageError::RateLimited) => return error_close(id, ERR_RATE_LIMITED),
             _ => return Step::Close,
         };
-        // Build the leaf with the device id the store will allocate and commit once. If the id moved in between (nothing
-        // was written), build again with the new id; a second move is a refusal.
+        match self.commit(e, id, &email, next_device_id, &staged.csr, &confirmed, Some(staged.password_phc.clone()), None, now) {
+            Committed::Done(step) => step,
+            Committed::NotWritten => {
+                // The journal left the file exactly as before. The staged setup is untouched, so the client may send
+                // ConfirmTotp again on this connection (within the source limit).
+                self.state = State::Staged(staged);
+                error_open(id, ERR_UNAVAILABLE)
+            }
+        }
+    }
+
+    /// Build the leaf with the device id the store will allocate and commit once. If the id moved in between (nothing
+    /// was written), build again with the new id; a second move is a refusal.
+    #[allow(clippy::too_many_arguments)]
+    fn commit<S: Services>(
+        &mut self,
+        e: &mut Enroller<S>,
+        id: u32,
+        email: &str,
+        mut next_device_id: u64,
+        csr: &[u8],
+        confirmed: &Confirmed,
+        password_phc: Option<String>,
+        external: Option<ExternalBinding>,
+        now: u64,
+    ) -> Committed {
         for round in 0..2 {
             let device_id = next_device_id;
-            let claims = Claims { person: &email, device_id };
-            let issued = match e.authority.prepare_device(&staged.csr, &claims, now) {
+            let claims = Claims { person: email, device_id };
+            let issued = match e.authority.prepare_device(csr, &claims, now) {
                 Ok(issued) if issued.key_id == confirmed.key_id => issued,
-                _ => return error_close(id, ERR_UNAVAILABLE),
+                _ => return Committed::Done(error_close(id, ERR_UNAVAILABLE)),
             };
             let record = ActivationRecord {
-                email: email.clone(),
-                password_phc: staged.password_phc.clone(),
+                email: email.to_owned(),
+                password_phc: password_phc.clone(),
+                external: external.clone(),
                 device_id,
                 key_id: confirmed.key_id,
                 device_name: confirmed.device_name.clone(),
@@ -531,33 +850,34 @@ impl BootstrapConnection {
                     e.staging.finish(&self.key);
                     let reply =
                         BootstrapResponse::Activated { certificate: issued.certificate, issuer_certificate: e.authority.certificate().to_vec() };
-                    return frame(id, reply).map_or(Step::Close, Step::ReplyAndClose);
+                    return Committed::Done(frame(id, reply).map_or(Step::Close, Step::ReplyAndClose));
                 }
                 Ok(_) => {
                     // Durable under a different id than the certificate claims: the identity is split. Release nothing.
                     e.poison();
-                    return error_close(id, ERR_UNAVAILABLE);
+                    return Committed::Done(error_close(id, ERR_UNAVAILABLE));
                 }
                 Err(CommitFailure::OrdinalMoved) if round == 0 => {
                     // Nothing was written; the store says which id it would assign now.
                     match e.services.preview(&self.key, now) {
                         Some(moved) => next_device_id = moved.next_device_id,
-                        None => return Step::Close,
+                        None => return Committed::Done(Step::Close),
                     }
                 }
-                Err(CommitFailure::NotWritten) => {
-                    // The journal left the file exactly as before. The staged setup is untouched, so the client may send
-                    // ConfirmTotp again on this connection (within the source limit).
-                    self.state = State::Staged(staged);
-                    return error_open(id, ERR_UNAVAILABLE);
-                }
-                Err(CommitFailure::Refused | CommitFailure::OrdinalMoved) => return error_close(id, ERR_UNAVAILABLE),
+                Err(CommitFailure::NotWritten) => return Committed::NotWritten,
+                Err(CommitFailure::Refused | CommitFailure::OrdinalMoved) => return Committed::Done(error_close(id, ERR_UNAVAILABLE)),
                 Err(CommitFailure::Ambiguous) => {
                     e.poison();
-                    return error_close(id, ERR_UNAVAILABLE);
+                    return Committed::Done(error_close(id, ERR_UNAVAILABLE));
                 }
             }
         }
-        error_close(id, ERR_UNAVAILABLE)
+        Committed::Done(error_close(id, ERR_UNAVAILABLE))
     }
+}
+
+/// How `commit` ended: a reply (or close), or nothing written so the caller decides whether a retry is possible.
+enum Committed {
+    Done(Step),
+    NotWritten,
 }
