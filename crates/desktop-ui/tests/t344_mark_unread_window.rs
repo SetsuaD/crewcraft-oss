@@ -80,7 +80,7 @@ fn a_remote_rewind_stays_visible_in_the_selected_room_until_read_back_as_read() 
     h.run();
     assert_eq!(h.state().selected_room(), Some(ROOM));
     assert!(h.query_by_label("Chat (2)").is_none());
-    h.get_by_label(ROOM);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, ROOM);
 }
 
 #[test]
