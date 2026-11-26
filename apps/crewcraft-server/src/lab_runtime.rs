@@ -26,6 +26,7 @@ use crate::lab_bootstrap::bootstrap_handler_with;
 use crate::lab_installation::LabInstallation;
 use crate::lab_server::{BootstrapStream, LabOptions, LabServer};
 use crate::lab_state::LabState;
+use crate::media_link::MediaLink;
 use crate::server_name::ServerName;
 use crate::stored_device_auth::StoredDeviceAuth;
 
@@ -40,6 +41,8 @@ pub struct LabRuntime {
     ownership: LabState,
     /// Sign-in through an external identity provider, when `identity.toml` configures one (task T611f).
     external: Option<Arc<ExternalSignIn>>,
+    /// The media server's control connection, when `media.toml` configures one (task T360b3).
+    media: Option<MediaLink>,
 }
 
 impl LabRuntime {
@@ -48,6 +51,14 @@ impl LabRuntime {
     pub fn with_external(mut self, external: Arc<ExternalSignIn>) -> Self {
         self.external = Some(external);
         self
+    }
+
+    /// Issue media credentials for `issuer`'s media server on every started or joined call (task T360b2), and run
+    /// `link` beside the listener to tell that media server whom to drop (task T360b3).
+    pub fn with_media(mut self, issuer: crewcraft_server_core::media::MediaIssuer, link: MediaLink) -> io::Result<Self> {
+        self.server.rooms().lock().map_err(|_| io::Error::other("the room store is unavailable"))?.set_media(issuer);
+        self.media = Some(link);
+        Ok(self)
     }
 
     /// Bind with the installation's original trust anchor and a freshly signed localhost server certificate.
@@ -82,7 +93,7 @@ impl LabRuntime {
         let accounts = Arc::new(Mutex::new(accounts));
         let admission: Arc<dyn Admission> = Arc::new(InstalledAdmission { accounts: accounts.clone(), now_ms: now_ms.clone() });
         let server = bind(options, identity, roots, admission, rooms)?;
-        Ok(Self { server, accounts, issuer, now_ms, ownership, external: None })
+        Ok(Self { server, accounts, issuer, now_ms, ownership, external: None, media: None })
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -133,7 +144,7 @@ impl LabRuntime {
         B: Fn([u8; 32], &mut BootstrapStream) + Send + Sync + 'static,
         S: FnOnce(&dyn Fn() -> bool, &Mutex<AccountStore>, &Mutex<DurableServer>, &dyn Fn() -> u64) + Send,
     {
-        let Self { server, accounts, issuer, now_ms, ownership, external } = self;
+        let Self { server, accounts, issuer, now_ms, ownership, external, media } = self;
         let bootstrap = make_bootstrap(accounts.clone(), issuer)?;
         let throttle = Arc::new(Mutex::new(Throttle::new()));
         let rooms = server.rooms();
@@ -144,6 +155,15 @@ impl LabRuntime {
                     let (accounts, rooms, now_ms, finished) = (&accounts, &rooms, &now_ms, &finished);
                     let stopped = move || shutdown.load(Ordering::Acquire) || finished.load(Ordering::Acquire);
                     Some(thread::Builder::new().name("control".into()).spawn_scoped(scope, move || beside(&stopped, accounts, rooms, &**now_ms))?)
+                }
+                None => None,
+            };
+            // The media server's control connection, on its own thread over the live room store (task T360b3).
+            let media_side = match &media {
+                Some(link) => {
+                    let (rooms, now_ms, finished) = (&rooms, &now_ms, &finished);
+                    let stopped = move || shutdown.load(Ordering::Acquire) || finished.load(Ordering::Acquire);
+                    Some(thread::Builder::new().name("media".into()).spawn_scoped(scope, move || link.run(&stopped, rooms, &**now_ms))?)
                 }
                 None => None,
             };
@@ -162,6 +182,9 @@ impl LabRuntime {
             );
             finished.store(true, Ordering::Release);
             if let Some(side) = side {
+                let _ = side.join();
+            }
+            if let Some(side) = media_side {
                 let _ = side.join();
             }
             result

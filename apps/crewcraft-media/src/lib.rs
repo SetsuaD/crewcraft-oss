@@ -17,8 +17,8 @@
 //!
 //! Around this core (T363b): [`config`] reads `media.toml` and the chat server's key, [`serve`] drives the core from a
 //! UDP socket until told to stop, and [`intake`] is the seam requests come in through (joins, drops, ended calls). The
-//! chat server's control connection (mutual TLS) implements [`intake::Intake`] in a later task; until then the binary
-//! admits no one.
+//! binary, `apps/crewcraft-media-server` (T360b3), adds the chat server's control connection (mutual TLS), which feeds
+//! [`intake`]; it lives apart so this crate, the media path, stays pure Rust.
 
 pub mod config;
 pub mod intake;

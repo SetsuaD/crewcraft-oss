@@ -87,6 +87,13 @@ certificate made with RustCrypto (P-256 and `x509-cert`) instead of `rcgen`. A p
 AWS-LC, `cc`, `cmake` or `ring` in its tree. The provider is a crate of its own (`crates/media-crypto`), tested against
 str0m's interface in memory (two peers completing DTLS and exchanging SRTP) before the media server uses it.
 
+**Control channel: rustls + ring, decided by the project lead 2026-11-26; the media path stays pure Rust; revisit if
+an audited pure-Rust rustls provider appears.** The chat server's control connection to the media server (mutual
+TLS, "Admission" above) uses the same audited TLS stack as the chat server, `crewcraft-tls` (rustls with ring). So
+the media server is two crates: `apps/crewcraft-media`, the media path (admission, forwarding, the serving loop), still
+pure Rust and checked by `tools/rust-only.sh`; and `apps/crewcraft-media-server`, the binary, which adds the control
+listener and links ring. The owner may overrule this.
+
 **Built (T362a).** `crates/media-crypto` is that provider: `crewcraft_media_crypto::provider()` is handed to
 `RtcConfig::set_crypto_provider`. Its tests check the SRTP ciphers and hashes against published vectors (RFC 3711 B.2,
 FIPS-197, the GCM test cases, RFC 2202), the certificate (self-signed P-256, its PKCS#8 key loads, fresh each time),
@@ -108,13 +115,27 @@ clients against the server in memory. Still to come: the binary (socket loop, co
 that brings offers and credentials), the chat server's control connection that calls `drop_person` and `end_call`,
 `CallJoin` issuing credentials (T360b2), video and keyframe requests, and telling clients who is in which section.
 
-**Built (T363b).** The binary: `crewcraft-media <media.toml>` reads its settings in the strict TOML subset (server
+**Built (T363b).** The binary (now `crewcraft-media-server <media.toml>`, see T360b3) reads its settings in the strict TOML subset (server
 name, listen address, public address for the ICE candidate, the chat server's key file and a call size cap) and the
 key, a file next to it that must be owner-only like the server's other keys. One UDP socket drives the core: requests
 in, datagrams in, str0m's timeouts, datagrams out. Ctrl+C or SIGTERM closes every session, sends the goodbyes and
 exits. Requests come through `crewcraft_media::intake`: an in-process seam (`Intake`, with a channel `Handle`) that
 the chat server's control connection will implement; until it does, the binary admits no one. The test runs the loop
 on loopback UDP with two str0m clients.
+
+**Built (T360b3).** The control connection. The media server's `media.toml` gains an optional `[control]` section (a
+TCP listen address, its certificate and owner-only key, and the only CA a chat server's client certificate may chain
+to); the chat server's own `media.toml` in its data directory names the media server (its name, the UDP address clients
+are told, its control address), the chat server's media key (made at the first start, owner-only, with `media.key.pub`
+for the media server's `chat-server-key`), the CA the media server's certificate must chain to, and the chat server's
+client certificate and owner-only key. A thread beside the chat server's listener sweeps the calls every 50 ms (a
+stopped heartbeat drops someone without waiting for traffic), takes the `DropPerson` and `EndCall` events and sends each
+over mutual TLS until the media server acknowledges it (`crewcraft_proto::media_control`); a broken connection is made
+again and the unacknowledged events sent again, which is safe because both are idempotent. The test runs both servers
+on loopback with two str0m clients over real UDP: removing one from the room closes their media session at once, the
+end of the call closes everyone, and a certificate from another CA cannot drop anyone. Joins still have no network
+intake: how a client's offer reaches the media server (through the chat server, or straight to the media server) is
+the next decision.
 
 ## Audio (T360e) and video (T360f): decisions first
 

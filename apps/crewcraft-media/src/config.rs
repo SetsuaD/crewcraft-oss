@@ -1,7 +1,8 @@
 //! The media server's settings (task T363b): `media.toml`, in the strict TOML subset of `crewcraft-strict-toml`, and
 //! the chat server's public media key it names.
 //!
-//! Owns: reading and checking both files. Called by: `main.rs` and [`crate::serve::bind`].
+//! Owns: reading and checking both files, and naming the control connection's files (read by the binary,
+//! `apps/crewcraft-media-server`, which owns TLS). Called by: that binary and [`crate::serve::bind`].
 //!
 //! ```toml
 //! [media]
@@ -12,6 +13,12 @@
 //! chat-server-key = "chat-server.key" # a file next to media.toml: the chat server's Ed25519 media key, 64 hex
 //!                                      # characters; owner-only, like the server's other keys
 //! max-call-size = 64                  # optional, 1 to MAX_CALL_SIZE (the default)
+//!
+//! [control]                           # optional: the chat server's control connection (mutual TLS, T360b3)
+//! listen = "0.0.0.0:7443"             # the TCP socket the chat server connects to
+//! certificate = "media.pem"           # this server's certificate chain, for `server-name`
+//! key = "media-key.pem"               # its private key; owner-only
+//! chat-server-ca = "chat-ca.pem"      # the CA the chat server's client certificate must chain to (no other is trusted)
 //! ```
 
 use std::io;
@@ -39,6 +46,18 @@ pub struct Settings {
     /// The key file's name, in the same directory as `media.toml`.
     pub chat_server_key: String,
     pub max_call_size: usize,
+    /// The control connection, when `[control]` is there.
+    pub control: Option<ControlSettings>,
+}
+
+/// `[control]`: where the chat server's control connection is accepted, and the files that secure it (each a plain
+/// file name next to `media.toml`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlSettings {
+    pub listen: SocketAddr,
+    pub certificate: String,
+    pub key: String,
+    pub chat_server_ca: String,
 }
 
 /// Everything the media server needs to start: the settings and the key they name.
@@ -52,6 +71,16 @@ fn bad(line: usize, key: &str, reason: &'static str) -> toml::Error {
     toml::Error::BadValue { line, key: key.to_owned(), reason }
 }
 
+/// A plain file name next to `media.toml`: no directory, not hidden.
+fn file_name(section: &toml::Section, section_name: &str, key: &str) -> Result<String, toml::Error> {
+    let (name, line) = section.req_str(section_name, key)?;
+    let plain = !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('.')
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'));
+    if plain { Ok(name.to_owned()) } else { Err(bad(line, key, "a plain file name next to media.toml")) }
+}
+
 fn address(text: &str, line: usize, key: &str) -> Result<SocketAddr, toml::Error> {
     text.parse().map_err(|_| bad(line, key, "an IP address and port, such as \"203.0.113.10:3478\""))
 }
@@ -59,7 +88,7 @@ fn address(text: &str, line: usize, key: &str) -> Result<SocketAddr, toml::Error
 /// Read `media.toml`.
 pub fn parse(text: &str) -> Result<Settings, toml::Error> {
     let doc = toml::parse(text, MAX_FILE_BYTES)?;
-    doc.check_sections(&["media"], &[])?;
+    doc.check_sections(&["media", "control"], &[])?;
     let media = doc.require("media")?;
     media.check_keys("media", &["server-name", "listen", "public-address", "chat-server-key", "max-call-size"])?;
 
@@ -87,14 +116,7 @@ pub fn parse(text: &str) -> Result<Settings, toml::Error> {
         return Err(bad(listen_line, "listen", "a specific address, or set public-address (an unspecified address is no ICE candidate)"));
     }
 
-    let (key_file, line) = media.req_str("media", "chat-server-key")?;
-    let plain_file = !key_file.is_empty()
-        && key_file.len() <= 255
-        && !key_file.starts_with('.')
-        && key_file.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'));
-    if !plain_file {
-        return Err(bad(line, "chat-server-key", "a plain file name next to media.toml"));
-    }
+    let key_file = file_name(media, "media", "chat-server-key")?;
 
     let max_call_size = match media.opt_int("max-call-size")? {
         None => MAX_CALL_SIZE,
@@ -104,7 +126,21 @@ pub fn parse(text: &str) -> Result<Settings, toml::Error> {
         },
     };
 
-    Ok(Settings { server_name: server_name.to_owned(), listen, public_address, chat_server_key: key_file.to_owned(), max_call_size })
+    let control = match doc.sections.get("control") {
+        None => None,
+        Some(section) => {
+            section.check_keys("control", &["listen", "certificate", "key", "chat-server-ca"])?;
+            let (text, line) = section.req_str("control", "listen")?;
+            Some(ControlSettings {
+                listen: address(text, line, "listen")?,
+                certificate: file_name(section, "control", "certificate")?,
+                key: file_name(section, "control", "key")?,
+                chat_server_ca: file_name(section, "control", "chat-server-ca")?,
+            })
+        }
+    };
+
+    Ok(Settings { server_name: server_name.to_owned(), listen, public_address, chat_server_key: key_file, max_call_size, control })
 }
 
 /// The chat server's media key from a key file's text: 64 hexadecimal characters, then at most one line ending.
@@ -128,7 +164,7 @@ fn invalid(message: String) -> io::Error {
 
 /// A regular file of at most `max` bytes (a symbolic link is refused). `owner_only` also refuses, on Unix, a file
 /// anyone but its owner can read or write, like the server's other keys.
-fn read_file(path: &Path, max: u64, owner_only: bool) -> io::Result<String> {
+pub fn read_file(path: &Path, max: u64, owner_only: bool) -> io::Result<String> {
     let shown = path.display();
     let meta = std::fs::symlink_metadata(path).map_err(|e| invalid(format!("{shown}: {e}")))?;
     if !meta.is_file() || meta.len() > max {

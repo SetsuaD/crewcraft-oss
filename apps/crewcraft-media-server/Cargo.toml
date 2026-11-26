@@ -1,0 +1,32 @@
+[package]
+name = "crewcraft-media-server"
+description = "The CrewCraft media server binary: the media path from crewcraft-media plus the chat server's control connection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Unlike crewcraft-media (the media path, pure Rust), this crate links ring through crewcraft-tls for the control
+# connection, the same TLS stack as the chat server (docs/CALLS.md "The media server's crypto", docs/NON-RUST-DEPENDENCIES.md).
+[dependencies]
+crewcraft-media = { path = "../crewcraft-media" }
+# The control messages (T360b3) and their frames.
+crewcraft-proto.workspace = true
+# Mutual TLS for the control connection.
+crewcraft-tls.workspace = true
+rustls.workspace = true
+# Stop serving cleanly on Ctrl+C and SIGTERM, as the chat server does (`termination`).
+ctrlc = { version = "3.4", features = ["termination"] }
+
+[dev-dependencies]
+# T360b3: the chat server's side of the control connection, end to end with this one.
+crewcraft-server = { path = "../crewcraft-server" }
+crewcraft-server-core.workspace = true
+crewcraft-media-auth = { path = "../../crates/media-auth" }
+crewcraft-media-crypto = { path = "../../crates/media-crypto" }
+str0m = { version = "0.26", default-features = false }
+rcgen.workspace = true
+
+[lints]
+workspace = true
