@@ -71,6 +71,8 @@ pub const FEATURE_FILES: u32 = 4;
 pub const FEATURE_THREADS: u32 = 8;
 /// The handshake feature bit for reactions: `React` and the `Reacted` push (task T341a).
 pub const FEATURE_REACTIONS: u32 = 16;
+/// The handshake feature bit for archive rooms: the `Archived` and `Sent` pushes (task T350d1).
+pub const FEATURE_ARCHIVE: u32 = 32;
 /// The first byte of an id frame.
 pub const ID_TAG: u8 = 133;
 /// The first byte of a bytes frame (task T330d).

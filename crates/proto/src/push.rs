@@ -12,6 +12,10 @@
 //! - tag 70 `Attached` (task T330c; 68 and 69 stay unassigned): `u8 count (1 to MAX_ATTACHMENTS) | count × (16 file id | str name | u64 size |
 //!   u8 has image size | [u32 width | u32 height])`. Its `cursor` is the message's own; it follows that message's
 //!   `Posted` and advances nothing. Only a client that agreed to `request::FEATURE_FILES` is sent it.
+//! - tag 73 `Archived` (task T350d1): no fields. Sent after a `Sync` of an archive room (docs/IMPORT.md), before its
+//!   events; its `cursor` is 0 and it advances nothing.
+//! - tag 74 `Sent` (task T350d1): `u64 sent_ms`. The original time of the imported message at `cursor`; it follows
+//!   that message's `Posted` and advances nothing. Both only to a client that agreed to `request::FEATURE_ARCHIVE`.
 //! - tag 72 `Reacted` (task T341a): `u64 target | str author | u8 reaction (1 to REACTIONS.len()) | u8 on (0 or 1)`.
 //!   An event of its own: it advances the cursor like `Other`. A client that did not agree to
 //!   `request::FEATURE_REACTIONS` is sent `Other` in its place.
@@ -29,6 +33,9 @@ pub const MAX_MENTIONS: usize = 32;
 pub const ATTACHED: u8 = 70;
 /// The tag of `Push::Threaded` (task T340a).
 pub const THREADED: u8 = 71;
+/// The tags of `Push::Archived` and `Push::Sent` (task T350d1).
+pub const ARCHIVED: u8 = 73;
+pub const SENT: u8 = 74;
 /// The tag of `Push::Reacted` (task T341a).
 pub const REACTED: u8 = 72;
 /// The reactions, by code: code `n` is `REACTIONS[n - 1]` (task T341a). A fixed set, as Teams has, named in words: the
@@ -101,6 +108,18 @@ pub enum Push {
         author: String,
         reaction: u8,
         on: bool,
+    },
+    /// `room` is an archive room: read-only, imported from another system (task T350d1). `cursor` is 0.
+    Archived {
+        room: String,
+        cursor: u64,
+    },
+    /// The imported message at `cursor` was first sent at `sent_ms` (Unix milliseconds) in the system it came from
+    /// (task T350d1).
+    Sent {
+        room: String,
+        cursor: u64,
+        sent_ms: u64,
     },
 }
 
@@ -213,6 +232,17 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
             out.push(*reaction);
             out.push(u8::from(*on));
         }
+        Push::Archived { room, cursor } => {
+            out.push(ARCHIVED);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+        }
+        Push::Sent { room, cursor, sent_ms } => {
+            out.push(SENT);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&sent_ms.to_be_bytes());
+        }
         Push::Threaded { room, cursor, parent } => {
             out.push(THREADED);
             write_str(&mut out, room, 1, MAX_NAME)?;
@@ -253,7 +283,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(64..=67).contains(&tag) && tag != ATTACHED && tag != THREADED && tag != REACTED {
+    if !(64..=67).contains(&tag) && tag != ATTACHED && tag != THREADED && tag != REACTED && tag != ARCHIVED && tag != SENT {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -293,6 +323,8 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         }
         67 => Push::Other { room, cursor },
         THREADED => Push::Threaded { room, cursor, parent: read_u64(bytes, &mut pos)? },
+        ARCHIVED => Push::Archived { room, cursor },
+        SENT => Push::Sent { room, cursor, sent_ms: read_u64(bytes, &mut pos)? },
         REACTED => {
             let target = read_u64(bytes, &mut pos)?;
             let author = read_string(bytes, &mut pos, 1, MAX_NAME)?;

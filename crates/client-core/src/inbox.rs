@@ -56,6 +56,15 @@ impl Inbox {
             self.views.get_mut(&room)?.attach(cursor, files);
             return Some((Apply::Duplicate, Notify::None));
         }
+        // An archive room's flag and an imported message's original time advance nothing either (task T350d1).
+        if let Push::Archived { room, .. } = push {
+            self.views.get_mut(&room)?.set_archived();
+            return Some((Apply::Duplicate, Notify::None));
+        }
+        if let Push::Sent { room, cursor, sent_ms } = push {
+            self.views.get_mut(&room)?.sent(cursor, sent_ms);
+            return Some((Apply::Duplicate, Notify::None));
+        }
         // So does a reply's thread (task T340a).
         if let Push::Threaded { room, cursor, parent } = push {
             self.views.get_mut(&room)?.thread(cursor, parent);
@@ -84,7 +93,7 @@ impl Inbox {
             }
             Push::Deleted { room, cursor, target } => (room.as_str(), *cursor, Change::Deleted { target: *target }, false, None, None),
             Push::Other { room, cursor } => (room.as_str(), *cursor, Change::Other, false, None, None),
-            Push::Attached { .. } | Push::Threaded { .. } | Push::Reacted { .. } => return None,
+            Push::Attached { .. } | Push::Threaded { .. } | Push::Reacted { .. } | Push::Archived { .. } | Push::Sent { .. } => return None,
         };
 
         let is_direct = self.direct.get(room).copied().unwrap_or(false);
