@@ -8,6 +8,7 @@ use std::path::Path;
 
 use crewcraft_server_core::account_store::{AccountStore, StoreError};
 use crewcraft_server_core::durable::{DurableError, DurableServer};
+use crewcraft_server_core::file_store::FileStore;
 use crewcraft_server_core::seal::{KeyFileError, ServiceKey};
 
 use crate::issuer_custody::{IssuerCustodyError, LabIssuer};
@@ -17,6 +18,8 @@ const SERVICE_KEY: &str = "service.key";
 const ISSUER: &str = "issuer.state";
 const ACCOUNTS: &str = "accounts.journal";
 const ROOMS: &str = "rooms.journal";
+/// The folder of uploaded files (`crewcraft_server_core::file_store`).
+const FILES: &str = "files";
 
 #[derive(Debug)]
 pub enum InstallationError {
@@ -49,6 +52,8 @@ impl LabInstallation {
         let issuer = LabIssuer::initialize(&path.join(ISSUER), &key, now_ms).map_err(InstallationError::Issuer)?;
         let accounts = AccountStore::create(&path.join(ACCOUNTS), key).map_err(InstallationError::Accounts)?;
         let rooms = DurableServer::open(&path.join(ROOMS)).map_err(InstallationError::Rooms)?;
+        // Uploaded files (docs/FILES.md, task T330b), in the same data directory.
+        let rooms = rooms.with_files(FileStore::open(&path.join(FILES))?)?;
 
         #[cfg(unix)]
         {
@@ -71,6 +76,8 @@ impl LabInstallation {
         let issuer = LabIssuer::load(&path.join(ISSUER), &key, Some(expected_root), now_ms).map_err(InstallationError::Issuer)?;
         let accounts = AccountStore::open(&path.join(ACCOUNTS), key).map_err(InstallationError::Accounts)?;
         let rooms = DurableServer::open(&path.join(ROOMS)).map_err(InstallationError::Rooms)?;
+        // Uploaded files (docs/FILES.md, task T330b), in the same data directory.
+        let rooms = rooms.with_files(FileStore::open(&path.join(FILES))?)?;
         Ok(Self { ownership, issuer, accounts, rooms })
     }
 }

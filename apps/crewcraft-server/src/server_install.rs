@@ -20,7 +20,7 @@ use crewcraft_enroll::EnrollmentCode;
 use crewcraft_enroll::invitation::{InvitationLink, LinkError, write_link};
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_proto::handshake::ServerSide;
-use crewcraft_proto::request::{FEATURE_LIST_ROOMS, FEATURE_SEARCH};
+use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_SEARCH};
 use sha2::{Digest, Sha256};
 
 use crate::lab_admin::{self, AdminError, LabRoot};
@@ -98,7 +98,7 @@ impl ServerConfig {
                 signed_in_frame: Duration::from_secs(120),
                 bootstrap: Duration::from_secs(120),
             },
-            protocol: ServerSide { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH, name: "CrewCraft".into() },
+            protocol: ServerSide { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES, name: "CrewCraft".into() },
         }
     }
 }

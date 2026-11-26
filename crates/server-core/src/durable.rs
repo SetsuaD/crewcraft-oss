@@ -13,7 +13,10 @@ use std::collections::{HashMap, HashSet};
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::request::{MAX_AUTHOR, MAX_HITS, MAX_SNIPPET, SearchHit};
 
+use rand_core::{OsRng, RngCore};
+
 use crate::cursor_log::Since;
+use crate::file_store::{FileStore, FinishError};
 use crate::html_text::html_text;
 use crate::journal::{Journal, JournalError};
 use crate::op::{Op, decode_op, encode_op};
@@ -45,6 +48,55 @@ pub struct DurableServer {
     previews: HashMap<String, HashMap<u64, (String, String)>>,
     /// Every finished upload's record, by file id (docs/FILES.md, task T330a).
     files: HashMap<[u8; 16], StoredFile>,
+    /// Where uploaded bytes are kept; `None` until `with_files` (task T330b).
+    store: Option<FileStore>,
+    /// Uploads in progress, by upload id (task T330b).
+    uploads: HashMap<[u8; 16], Upload>,
+}
+
+/// An upload in progress (task T330b).
+#[derive(Debug, Clone)]
+struct Upload {
+    user: String,
+    room: String,
+    name: String,
+    size: u64,
+    sha256: [u8; 32],
+    received: u64,
+    last_ms: u64,
+}
+
+/// The largest file one upload may store (docs/FILES.md).
+pub const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+/// The most uploads in progress on the server, and per person.
+pub const MAX_UPLOADS: usize = 64;
+pub const MAX_UPLOADS_PER_PERSON: usize = 4;
+/// An upload with no chunk for this long is discarded.
+pub const UPLOAD_IDLE_MS: u64 = 10 * 60 * 1000;
+
+/// Why an upload request was refused (task T330b). Nothing is recorded; a refused finish discards the upload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadError {
+    /// This server keeps no files.
+    NoStorage,
+    /// The person is not a member of the room (now).
+    NotMember,
+    /// The name is not a file name (`valid_file_name`).
+    BadName,
+    /// The size is 0 or over `MAX_FILE_SIZE`.
+    BadSize,
+    /// Too many uploads in progress, on the server or for this person.
+    TooMany,
+    /// No upload in progress has this id for this person (or it expired).
+    NoSuchUpload,
+    /// A chunk outside the declared size.
+    BadChunk,
+    /// The bytes received are not the declared size and hash.
+    WrongContent,
+    /// Reading or writing the bytes failed.
+    Storage,
+    /// The journal refused the record, or the server is poisoned.
+    Durable(DurableError),
 }
 
 /// A finished upload (task T330a): its room, uploader, bytes (by SHA-256), size, name and, for an image, its size.
@@ -109,7 +161,110 @@ impl DurableServer {
                 index_event(&server, &mut search, &mut previews, &slug, &actor, cursor);
             }
         }
-        Ok(Self { server, journal, poisoned: false, search, previews, files })
+        Ok(Self { server, journal, poisoned: false, search, previews, files, store: None, uploads: HashMap::new() })
+    }
+
+    /// Keep uploaded bytes in `store` (task T330b). Bytes no record refers to are removed now (`FileStore::sweep`).
+    pub fn with_files(mut self, store: FileStore) -> std::io::Result<Self> {
+        store.sweep(&self.referenced_hashes())?;
+        self.store = Some(store);
+        Ok(self)
+    }
+
+    /// Start an upload of `size` bytes hashing to `sha256`, named `name`, by `user` to `slug` (task T330b). Every
+    /// refusal happens before any byte is received. Uploads idle for `UPLOAD_IDLE_MS` are discarded first.
+    pub fn begin_upload(&mut self, user: &str, slug: &str, name: &str, size: u64, sha256: [u8; 32], now_ms: u64) -> Result<[u8; 16], UploadError> {
+        self.check_alive().map_err(UploadError::Durable)?;
+        self.expire_uploads(now_ms);
+        let Some(store) = &self.store else { return Err(UploadError::NoStorage) };
+        if !self.server.room(slug).is_ok_and(|room| room.role(user).is_some()) {
+            return Err(UploadError::NotMember);
+        }
+        if !valid_file_name(name) {
+            return Err(UploadError::BadName);
+        }
+        if size == 0 || size > MAX_FILE_SIZE {
+            return Err(UploadError::BadSize);
+        }
+        let mine = self.uploads.values().filter(|upload| upload.user == user).count();
+        if self.uploads.len() >= MAX_UPLOADS || mine >= MAX_UPLOADS_PER_PERSON {
+            return Err(UploadError::TooMany);
+        }
+        let mut id = [0u8; 16];
+        OsRng.fill_bytes(&mut id);
+        store.start(&id).map_err(|_| UploadError::Storage)?;
+        let upload = Upload { user: user.to_owned(), room: slug.to_owned(), name: name.to_owned(), size, sha256, received: 0, last_ms: now_ms };
+        self.uploads.insert(id, upload);
+        Ok(id)
+    }
+
+    /// Write one chunk of `user`'s upload `upload` at `offset` (task T330b), and return how many bytes the upload has
+    /// received so far (chunks sent twice count twice). A chunk past the declared size is `BadChunk`.
+    pub fn upload_chunk(&mut self, user: &str, upload: &[u8; 16], offset: u64, bytes: &[u8], now_ms: u64) -> Result<u64, UploadError> {
+        self.check_alive().map_err(UploadError::Durable)?;
+        self.expire_uploads(now_ms);
+        let Some(store) = &self.store else { return Err(UploadError::NoStorage) };
+        let Some(entry) = self.uploads.get_mut(upload).filter(|entry| entry.user == user) else { return Err(UploadError::NoSuchUpload) };
+        let end = offset.checked_add(bytes.len() as u64).ok_or(UploadError::BadChunk)?;
+        if bytes.is_empty() || end > entry.size {
+            return Err(UploadError::BadChunk);
+        }
+        store.write(upload, offset, bytes).map_err(|_| UploadError::Storage)?;
+        entry.received = entry.received.saturating_add(bytes.len() as u64);
+        entry.last_ms = now_ms;
+        Ok(entry.received)
+    }
+
+    /// Finish `user`'s upload `upload` (task T330b): the bytes must be the declared size and hash; membership is
+    /// checked **again** (the person may have left meanwhile); only then is the file recorded. Returns the new file's
+    /// id. The upload is gone afterwards, whatever happens.
+    pub fn finish_upload(&mut self, user: &str, upload: &[u8; 16], now_ms: u64) -> Result<[u8; 16], UploadError> {
+        self.check_alive().map_err(UploadError::Durable)?;
+        self.expire_uploads(now_ms);
+        if self.store.is_none() {
+            return Err(UploadError::NoStorage);
+        }
+        if !self.uploads.get(upload).is_some_and(|entry| entry.user == user) {
+            return Err(UploadError::NoSuchUpload);
+        }
+        let Some(entry) = self.uploads.remove(upload) else { return Err(UploadError::NoSuchUpload) };
+        let Some(store) = &self.store else { return Err(UploadError::NoStorage) };
+        if !self.server.room(&entry.room).is_ok_and(|room| room.role(user).is_some()) {
+            store.discard(upload);
+            return Err(UploadError::NotMember);
+        }
+        match store.finish(upload, entry.size, &entry.sha256) {
+            Ok(()) => {}
+            Err(FinishError::WrongSize { .. } | FinishError::WrongHash) => return Err(UploadError::WrongContent),
+            Err(FinishError::Io(_)) => return Err(UploadError::Storage),
+        }
+        let image = store.image_size(&entry.sha256);
+        let mut file = [0u8; 16];
+        OsRng.fill_bytes(&mut file);
+        self.record_file(&entry.room, user, file, entry.sha256, entry.size, &entry.name, image).map_err(|error| match error {
+            FileError::Durable(error) => UploadError::Durable(error),
+            FileError::NotMember => UploadError::NotMember,
+            FileError::BadName => UploadError::BadName,
+            FileError::Empty => UploadError::BadSize,
+            FileError::DuplicateId => UploadError::Storage,
+        })?;
+        Ok(file)
+    }
+
+    /// How many uploads are in progress (task T330b).
+    pub fn uploads_in_progress(&self) -> usize {
+        self.uploads.len()
+    }
+
+    fn expire_uploads(&mut self, now_ms: u64) {
+        let stale: Vec<[u8; 16]> =
+            self.uploads.iter().filter(|(_, upload)| now_ms.saturating_sub(upload.last_ms) >= UPLOAD_IDLE_MS).map(|(id, _)| *id).collect();
+        for id in stale {
+            self.uploads.remove(&id);
+            if let Some(store) = &self.store {
+                store.discard(&id);
+            }
+        }
     }
 
     /// Record a finished upload (task T330a). Call it only after `file_store::FileStore::finish` returned `Ok` for these
