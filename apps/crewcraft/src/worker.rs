@@ -54,6 +54,12 @@ pub const MAX_FOLLOWED: usize = 64;
 /// test's or a phone's own.
 pub type Browser = Arc<dyn Fn(&str) -> io::Result<()> + Send + Sync>;
 
+/// A room's open call and its call history lines by cursor (task T360a2).
+type RoomCalls = (Option<crewcraft_client_core::room_view::OpenCall>, Vec<(u64, String)>);
+
+/// How often a call heartbeat is sent (REQUIREMENTS 2.5).
+pub const CALL_HEARTBEAT: Duration = Duration::from_secs(20);
+
 /// How often the worker polls, and how it backs off while the server cannot be reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerConfig {
@@ -101,6 +107,12 @@ pub enum Event {
     Threads { room: String, parents: Vec<(u64, u64)> },
     /// `room` is an archive room, with its imported messages' original times by cursor (task T350d2).
     Archive { room: String, times: Vec<(u64, u64)> },
+    /// `room`'s open call (or none) and its call history lines by cursor, whenever they change (task T360a2).
+    Calls { room: String, open: Option<crewcraft_client_core::room_view::OpenCall>, lines: Vec<(u64, String)> },
+    /// This app is now in call `call` of `room` (task T360a2).
+    InCall { room: String, call: u64 },
+    /// This app left its call in `room`; `reason` says why when it did not choose to (task T360a2).
+    LeftCall { room: String, reason: Option<String> },
     /// Who reacted to each message in `room` with what, whenever it changes (task T341b).
     Reactions { room: String, reactions: crewcraft_ui_model::RoomReactions },
     /// A post that was not acknowledged; `text` is returned so the window can restore the draft. After
@@ -400,6 +412,9 @@ impl Worker {
             threads_sent: BTreeMap::new(),
             reactions_sent: BTreeMap::new(),
             archive_sent: BTreeMap::new(),
+            in_call: None,
+            next_heartbeat: Instant::now(),
+            calls_sent: BTreeMap::new(),
             next_poll: Instant::now(),
             retry,
             keeper,
@@ -484,6 +499,11 @@ struct Run {
     files_sent: BTreeMap<String, Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)>>,
     /// The last threads sent, per room (task T340b).
     threads_sent: BTreeMap<String, Vec<(u64, u64)>>,
+    /// The call this app is in, `(room, call)`, and when its next heartbeat is due (task T360a2).
+    in_call: Option<(String, u64)>,
+    next_heartbeat: Instant,
+    /// The last calls state sent, per room (task T360a2).
+    calls_sent: BTreeMap<String, RoomCalls>,
     /// The last archive times sent, per archive room (task T350d2).
     archive_sent: BTreeMap<String, Vec<(u64, u64)>>,
     /// The last reactions sent, per room (task T341b).
@@ -557,6 +577,9 @@ impl Run {
                 Some(Input::Command(Command::Search { query })) => self.search(query),
                 Some(Input::Command(Command::Attach { room, path })) => self.attach(room, path),
                 Some(Input::Command(Command::Reply { room, parent, text })) => self.reply(room, parent, text),
+                Some(Input::Command(Command::CallStart { room, video })) => self.call_start(room, video),
+                Some(Input::Command(Command::CallJoin { room, call })) => self.call_join(room, call),
+                Some(Input::Command(Command::CallLeave { room, call })) => self.call_leave(room, call),
                 Some(Input::Command(Command::React { room, target, reaction, on })) => {
                     self.change(room, |session, room| session.react(room, target, reaction, on));
                 }
@@ -818,6 +841,83 @@ impl Run {
         }
     }
 
+    /// Start or join a call (task T360a2).
+    fn call_start(&mut self, room: String, video: bool) {
+        let result = self.session.as_mut().map(|session| session.call_start(&room, video));
+        self.entered_call(room, result);
+    }
+
+    fn call_join(&mut self, room: String, call: u64) {
+        let result =
+            self.session.as_mut().map(|session| session.call(&room, call, |room, call| crewcraft_proto::request::Request::CallJoin { room, call }));
+        self.entered_call(room, result);
+    }
+
+    fn entered_call(&mut self, room: String, result: Option<Result<u64, LabError>>) {
+        match result {
+            None => self.emit(Event::Failed(Problem::NotSignedIn)),
+            Some(Ok(call)) => {
+                // One call at a time: leave the one this app was in.
+                if let Some((old_room, old_call)) = self.in_call.take().filter(|(r, c)| (r.as_str(), *c) != (room.as_str(), call))
+                    && let Some(session) = self.session.as_mut()
+                {
+                    let _ = session.call(&old_room, old_call, |room, call| crewcraft_proto::request::Request::CallLeave { room, call });
+                    self.emit(Event::LeftCall { room: old_room, reason: None });
+                }
+                self.in_call = Some((room.clone(), call));
+                self.next_heartbeat = Instant::now() + CALL_HEARTBEAT;
+                self.emit(Event::InCall { room: room.clone(), call });
+                self.sync_room(&room, false);
+            }
+            Some(Err(error)) => {
+                self.request_failed(error);
+            }
+        }
+    }
+
+    fn call_leave(&mut self, room: String, call: u64) {
+        if self.in_call.as_ref() == Some(&(room.clone(), call)) {
+            self.in_call = None;
+        }
+        // A refusal means the call already ended or this person had left it: either way they are out.
+        let result =
+            self.session.as_mut().map(|session| session.call(&room, call, |room, call| crewcraft_proto::request::Request::CallLeave { room, call }));
+        if let Some(Err(error)) = result {
+            let problem = problem(error);
+            if problem.ends_session() {
+                self.fail_connection(problem, true);
+            }
+        }
+        self.emit(Event::LeftCall { room: room.clone(), reason: None });
+        self.sync_room(&room, false);
+    }
+
+    /// Send the call heartbeat when it is due (REQUIREMENTS 2.5, every 20 seconds). A refusal means the call ended or
+    /// this person may no longer be in it: leave and say why. A network error keeps the call and tries again.
+    fn heartbeat(&mut self) {
+        let Some((room, call)) = self.in_call.clone() else { return };
+        if Instant::now() < self.next_heartbeat {
+            return;
+        }
+        self.next_heartbeat = Instant::now() + CALL_HEARTBEAT;
+        let Some(session) = self.session.as_mut() else { return };
+        match session.call(&room, call, |room, call| crewcraft_proto::request::Request::CallHeartbeat { room, call }) {
+            Ok(_) => {}
+            Err(error) => match problem(error) {
+                Problem::Refused(code) => {
+                    self.in_call = None;
+                    let reason = if code == 1 { "You are no longer in this room, so you left the call." } else { "The call ended." };
+                    self.emit(Event::LeftCall { room, reason: Some(reason.to_owned()) });
+                }
+                other => {
+                    if other.ends_session() {
+                        self.fail_connection(other, true);
+                    }
+                }
+            },
+        }
+    }
+
     /// A reply in a thread (task T340b): as `post`.
     fn reply(&mut self, room: String, parent: u64, text: String) {
         if let Err(problem) = self.follow(&room) {
@@ -923,6 +1023,7 @@ impl Run {
     /// idle connection.
     fn poll(&mut self, force: bool) {
         self.next_poll = Instant::now() + self.config.poll_interval;
+        self.heartbeat();
         if self.followed.is_empty() {
             if let Some(session) = self.session.as_mut()
                 && let Err(error) = session.ping()
@@ -968,6 +1069,18 @@ impl Run {
             if !files.is_empty() && self.files_sent.get(room) != Some(&files) {
                 self.files_sent.insert(room.to_owned(), files.clone());
                 self.emit(Event::Attachments { room: room.to_owned(), files });
+            }
+        }
+        // The room's open call and its history lines, when they change (task T360a2).
+        if let Some(session) = self.session.as_mut() {
+            let calls = session.calls(room);
+            let changed = match self.calls_sent.get(room) {
+                Some(last) => *last != calls,
+                None => calls.0.is_some() || !calls.1.is_empty(),
+            };
+            if changed {
+                self.calls_sent.insert(room.to_owned(), calls.clone());
+                self.emit(Event::Calls { room: room.to_owned(), open: calls.0, lines: calls.1 });
             }
         }
         // An archive room, and its original times when they change (task T350d2).

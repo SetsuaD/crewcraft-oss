@@ -1,0 +1,24 @@
+{
+  "id": "T360a2-calls-app",
+  "title": "Calls in the app: Call and Join in the header, ringing, heartbeats, history lines",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/ui-model/src/lib.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t360a2_calls_window.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t360a2_calls.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t360a2_calls",
+  "depends_on": [
+    "T360a1-call-records"
+  ],
+  "spec": "The app agrees to FEATURE_CALLS. ChatSession::call_request sends call requests (Unsupported without the feature); SignedInSession::call_start, call (join, heartbeat, leave) and calls(room) (the open call and history lines). Commands CallStart { room, video }, CallJoin { room, call }, CallLeave { room, call }. The worker keeps the one call it is in (joining another leaves the first), sends a heartbeat every CALL_HEARTBEAT (20 s) from its poll, and on a refused heartbeat leaves and says why ('You are no longer in this room...' for E_NO_SUCH_ROOM, else 'The call ended.'); a network error keeps the call. It emits Event::Calls (Update::Calls) when a room's open call or lines change, and InCall/LeftCall (Update::InCall). The window header offers Call and Video call when the room has no call, 'Call in progress (N)' with Join call when it has one this app is not in, and 'In call (N)' with Leave call when it is; archive rooms have none. A call someone else started that this app did not know rings as a notice '<who> started a call in <room>.'. History lines show in the feed at their place among the messages.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}

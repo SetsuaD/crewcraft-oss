@@ -33,6 +33,12 @@ pub enum Command {
     /// Reply to the message at `parent` in `room`, in its thread (task T340b). `text` is trimmed and within
     /// `MAX_DRAFT_CHARS`.
     Reply { room: String, parent: u64, text: String },
+    /// Start a call in `room` (with video or not), or join its open one (task T360a2).
+    CallStart { room: String, video: bool },
+    /// Join the open call `call` of `room` (task T360a2).
+    CallJoin { room: String, call: u64 },
+    /// Leave call `call` of `room` (task T360a2).
+    CallLeave { room: String, call: u64 },
     /// Add (`on`) or take back the reaction with code `reaction` (see `crewcraft_proto::push::REACTIONS`) on the message
     /// at `target` in `room` (task T341b).
     React { room: String, target: u64, reaction: u8, on: bool },

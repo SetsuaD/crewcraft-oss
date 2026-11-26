@@ -11,7 +11,9 @@ use crewcraft_client_core::session::{ClientSession, Phase, SessionError};
 use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
-use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, Request, Response, SearchHit};
+use crewcraft_proto::request::{
+    FEATURE_CALLS, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, Request, Response, SearchHit,
+};
 use crewcraft_proto::signin::{self, Opening, SignIn};
 use zeroize::Zeroizing;
 
@@ -291,6 +293,20 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
     /// Whether the server agreed to threads (`request::FEATURE_THREADS`, task T340b).
     pub fn threads(&self) -> bool {
         self.features() & FEATURE_THREADS != 0
+    }
+
+    /// Whether the server agreed to calls (`request::FEATURE_CALLS`, task T360a2).
+    pub fn calls(&self) -> bool {
+        self.features() & FEATURE_CALLS != 0
+    }
+
+    /// A call request (`CallStart`, `CallJoin`, `CallHeartbeat`, `CallLeave`; task T360a2); returns the call id.
+    /// `Unsupported` without the feature.
+    pub fn call_request(&mut self, request: Request, deadline: Instant) -> Result<u64, ChatError> {
+        if !self.calls() {
+            return Err(ChatError::Unsupported);
+        }
+        self.request(request, 0, 0, deadline)
     }
 
     /// Whether the server agreed to reactions (`request::FEATURE_REACTIONS`, task T341b).

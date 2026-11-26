@@ -18,7 +18,8 @@ use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
 use crewcraft_proto::request::{
-    FEATURE_ARCHIVE, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, SearchHit,
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, Request,
+    SearchHit,
 };
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
 use sha2::{Digest, Sha256};
@@ -133,7 +134,7 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -149,7 +150,7 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -180,7 +181,7 @@ pub(crate) fn finish_external(
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -320,6 +321,28 @@ impl SignedInSession {
             .iter()
             .map(|(cursor, by_code)| (*cursor, by_code.iter().map(|(code, who)| (*code, who.iter().cloned().collect())).collect()))
             .collect()
+    }
+
+    /// Start a call in `room`, or join its open one (task T360a2); returns the call id.
+    pub fn call_start(&mut self, room: &str, video: bool) -> Result<u64, LabError> {
+        if !valid_room(room) {
+            return Err(LabError::Usage);
+        }
+        self.chat.call_request(Request::CallStart { room: room.to_owned(), video }, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// Join, heartbeat or leave call `call` of `room` (task T360a2): `request` builds the request.
+    pub fn call(&mut self, room: &str, call: u64, request: fn(String, u64) -> Request) -> Result<u64, LabError> {
+        if !valid_room(room) || call == 0 {
+            return Err(LabError::Usage);
+        }
+        self.chat.call_request(request(room.to_owned(), call), Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// The room's open call and its call history lines by cursor, as the server pushed them (task T360a2).
+    pub fn calls(&mut self, room: &str) -> (Option<crewcraft_client_core::room_view::OpenCall>, Vec<(u64, String)>) {
+        let Some(view) = self.chat.view(room) else { return (None, Vec::new()) };
+        (view.call().cloned(), view.call_lines().iter().map(|(cursor, line)| (*cursor, line.text.clone())).collect())
     }
 
     /// For an archive room, its imported messages' original times by cursor (task T350d2); `None` for any other room.
