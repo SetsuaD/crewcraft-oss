@@ -85,6 +85,34 @@ impl Server {
         Ok(slug)
     }
 
+    /// Create an archive room named `name` (task T350a): owned by `ARCHIVE_OWNER`, which no account can be, and
+    /// read-only from the start (`RoomService::set_read_only`). Named and slugged as `create_room`.
+    pub fn create_archive_room(&mut self, name: &str) -> Result<String, ServerError> {
+        let slug = self.create_room(crate::import::ARCHIVE_OWNER, name)?;
+        if let Some(service) = self.rooms.get_mut(&slug) {
+            service.set_read_only();
+        }
+        Ok(slug)
+    }
+
+    /// `RoomService::import_post` in the room (task T350a). `NoSuchRoom` first; no rate limit.
+    pub fn import_post(&mut self, slug: &str, author: &str, text: &str, deleted: bool) -> Result<u64, ServerError> {
+        let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;
+        service.import_post(author, text, deleted).map_err(ServerError::Service)
+    }
+
+    /// `RoomService::import_edit` in the room (task T350a).
+    pub fn import_edit(&mut self, slug: &str, target: u64, text: &str) -> Result<u64, ServerError> {
+        let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;
+        service.import_edit(target, text).map_err(ServerError::Service)
+    }
+
+    /// `RoomService::import_delete` in the room, by `ARCHIVE_OWNER` (task T350a).
+    pub fn import_delete(&mut self, slug: &str, target: u64) -> Result<u64, ServerError> {
+        let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;
+        service.import_delete(crate::import::ARCHIVE_OWNER, target).map_err(ServerError::Service)
+    }
+
     /// The room with this slug, for reads (`sync`, `unread`, `head`); `NoSuchRoom` if none.
     pub fn room(&self, slug: &str) -> Result<&RoomService, ServerError> {
         self.rooms.get(slug).ok_or(ServerError::NoSuchRoom)

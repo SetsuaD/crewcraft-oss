@@ -11,6 +11,11 @@
 //! - tag 6 `Delete`: `str slug | str actor | u64 target`
 //! - tag 7 `MarkRead`: `str slug | str user | u64 cursor`
 //! - tag 19 `React` (task T341a): `str slug | str actor | u64 target | u8 reaction | u8 on (0 or 1) | u64 now_ms`
+//! - tag 20 `ImportRoom` (task T350a): `str key | str name`
+//! - tag 21 `ImportMessage`: `str slug | str key | str author | u64 sent_ms | str text | u8 deleted (0 or 1) | u64 parent
+//!   (0 for none)`
+//! - tag 22 `ImportEdit`: `str slug | str key | str text | u64 edited_ms`
+//! - tag 23 `ImportDelete`: `str slug | str key`
 
 use crewcraft_proto::message::CodecError;
 
@@ -58,6 +63,34 @@ pub enum Op {
         slug: String,
         user: String,
         cursor: u64,
+    },
+    /// An archive room made by an import, with its external key `source:key` (task T350a).
+    ImportRoom {
+        key: String,
+        name: String,
+    },
+    /// An imported message, with its external key `source:room:key`, original author and time (task T350a). `parent`
+    /// is the cursor of the message it replies to, or 0.
+    ImportMessage {
+        slug: String,
+        key: String,
+        author: String,
+        sent_ms: u64,
+        text: String,
+        deleted: bool,
+        parent: u64,
+    },
+    /// An imported message's text, as the source edited it (task T350a).
+    ImportEdit {
+        slug: String,
+        key: String,
+        text: String,
+        edited_ms: u64,
+    },
+    /// An imported message the source has since deleted (task T350a).
+    ImportDelete {
+        slug: String,
+        key: String,
     },
     /// A reaction added or taken back (task T341a).
     React {
@@ -182,6 +215,33 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             for file in files {
                 out.extend_from_slice(file);
             }
+        }
+        Op::ImportRoom { key, name } => {
+            out.push(IMPORT_ROOM);
+            encode_str(&mut out, key)?;
+            encode_str(&mut out, name)?;
+        }
+        Op::ImportMessage { slug, key, author, sent_ms, text, deleted, parent } => {
+            out.push(IMPORT_MESSAGE);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, key)?;
+            encode_str(&mut out, author)?;
+            out.extend_from_slice(&sent_ms.to_be_bytes());
+            encode_str(&mut out, text)?;
+            out.push(u8::from(*deleted));
+            out.extend_from_slice(&parent.to_be_bytes());
+        }
+        Op::ImportEdit { slug, key, text, edited_ms } => {
+            out.push(IMPORT_EDIT);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, key)?;
+            encode_str(&mut out, text)?;
+            out.extend_from_slice(&edited_ms.to_be_bytes());
+        }
+        Op::ImportDelete { slug, key } => {
+            out.push(IMPORT_DELETE);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, key)?;
         }
         Op::React { slug, actor, target, reaction, on, now_ms } => {
             out.push(REACT);
@@ -359,6 +419,49 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::React { slug, actor, target, reaction, on, now_ms })
         }
+        IMPORT_ROOM => {
+            let key = decode_str(bytes, &mut pos)?;
+            let name = decode_str(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::ImportRoom { key, name })
+        }
+        IMPORT_MESSAGE => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let key = decode_str(bytes, &mut pos)?;
+            let author = decode_str(bytes, &mut pos)?;
+            let sent_ms = decode_u64(bytes, &mut pos)?;
+            let text = decode_str(bytes, &mut pos)?;
+            let deleted = match decode_array::<1>(bytes, &mut pos)? {
+                [0] => false,
+                [1] => true,
+                [other] => return Err(CodecError::BadKind(other)),
+            };
+            let parent = decode_u64(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::ImportMessage { slug, key, author, sent_ms, text, deleted, parent })
+        }
+        IMPORT_EDIT => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let key = decode_str(bytes, &mut pos)?;
+            let text = decode_str(bytes, &mut pos)?;
+            let edited_ms = decode_u64(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::ImportEdit { slug, key, text, edited_ms })
+        }
+        IMPORT_DELETE => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let key = decode_str(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::ImportDelete { slug, key })
+        }
         _ => Err(CodecError::BadKind(tag)),
     }
 }
@@ -371,6 +474,11 @@ const POST_FILES: u8 = 17;
 const REPLY: u8 = 18;
 /// The tag of `Op::React` (task T341a).
 const REACT: u8 = 19;
+/// The tags of the import records (task T350a).
+const IMPORT_ROOM: u8 = 20;
+const IMPORT_MESSAGE: u8 = 21;
+const IMPORT_EDIT: u8 = 22;
+const IMPORT_DELETE: u8 = 23;
 
 fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;

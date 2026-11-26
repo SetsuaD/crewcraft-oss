@@ -20,6 +20,7 @@ pub mod durable;
 pub mod enrollment;
 pub mod file_store;
 pub mod html_text;
+pub mod import;
 pub mod invites;
 pub mod journal;
 pub mod mentions;
