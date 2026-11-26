@@ -94,7 +94,15 @@ pub fn run(socket: &UdpSocket, mut server: MediaServer, intake: &mut dyn Intake,
             }
             // Nothing arrived in time, or an earlier datagram bounced (an ICMP error some systems report on the next
             // read): neither is the socket failing.
-            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionRefused | io::ErrorKind::Interrupted) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::ConnectionReset
+                        | io::ErrorKind::ConnectionRefused
+                        | io::ErrorKind::Interrupted
+                ) => {}
             Err(e) => return Err(e),
         }
     }

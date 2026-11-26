@@ -1183,6 +1183,8 @@ version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-media-auth",
  "crewcraft-media-crypto",
+ "crewcraft-strict-toml",
+ "ctrlc",
  "str0m",
 ]
 

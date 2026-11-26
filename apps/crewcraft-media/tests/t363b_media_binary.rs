@@ -63,7 +63,8 @@ fn now_ms() -> u64 {
     u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()).unwrap()
 }
 
-const SETTINGS: &str = "[media]\nserver-name = \"media.example.org\"\nlisten = \"127.0.0.1:0\"\nchat-server-key = \"chat-server.key\"\nmax-call-size = 8\n";
+const SETTINGS: &str =
+    "[media]\nserver-name = \"media.example.org\"\nlisten = \"127.0.0.1:0\"\nchat-server-key = \"chat-server.key\"\nmax-call-size = 8\n";
 
 /// A str0m client on its own loopback UDP socket.
 struct Client {
@@ -211,9 +212,14 @@ fn settings_and_key_are_read_strictly() {
     let with = |extra: &str| config::parse(&format!("{SETTINGS}{extra}\n"));
     assert!(matches!(with("colour = \"blue\""), Err(TomlError::UnknownKey { .. })));
     assert!(matches!(with("public-address = \"0.0.0.0:3478\""), Err(TomlError::BadValue { .. })), "no candidate");
-    let public = config::parse(&SETTINGS.replace("127.0.0.1:0", "0.0.0.0:3478").replace("[media]\n", "[media]\npublic-address = \"203.0.113.10:3478\"\n")).unwrap();
+    let public =
+        config::parse(&SETTINGS.replace("127.0.0.1:0", "0.0.0.0:3478").replace("[media]\n", "[media]\npublic-address = \"203.0.113.10:3478\"\n"))
+            .unwrap();
     assert_eq!(public.public_address, Some("203.0.113.10:3478".parse().unwrap()));
-    assert!(matches!(config::parse(&SETTINGS.replace("127.0.0.1:0", "0.0.0.0:3478")), Err(TomlError::BadValue { .. })), "unspecified, no public-address");
+    assert!(
+        matches!(config::parse(&SETTINGS.replace("127.0.0.1:0", "0.0.0.0:3478")), Err(TomlError::BadValue { .. })),
+        "unspecified, no public-address"
+    );
     assert!(matches!(config::parse(&SETTINGS.replace("= 8", "= 0")), Err(TomlError::BadValue { .. })));
     assert!(matches!(config::parse(&SETTINGS.replace("= 8", "= 65")), Err(TomlError::BadValue { .. })));
     assert!(matches!(config::parse(&SETTINGS.replace("chat-server.key", "../chat-server.key")), Err(TomlError::BadValue { .. })));
