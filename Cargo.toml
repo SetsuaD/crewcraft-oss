@@ -29,6 +29,7 @@ crewcraft-pki = { path = "crates/pki" }
 crewcraft-admission = { path = "crates/admission" }
 crewcraft-ui-model = { path = "crates/ui-model" }
 crewcraft-desktop-ui = { path = "crates/desktop-ui" }
+crewcraft-audio = { path = "crates/audio" }
 
 # crypto: audited RustCrypto crates only, never hand-rolled primitives (docs/SECURITY-DESIGN.md)
 hmac = "0.12"

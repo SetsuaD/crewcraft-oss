@@ -186,6 +186,18 @@ that must stay pure Rust, and a phone encode test.
 The program, the commands to rerun all of this and the cross-check against the original `opus_compare.c` are in
 [probes/opus-conformance.md](probes/opus-conformance.md).
 
+**Built (T360e2).** `crates/audio` (`crewcraft-audio`) is the call audio on `opus-pure`, with no device I/O (capture
+and playback are a separate decision): `VoiceEncoder` and `VoiceDecoder` for 48 kHz mono in 20 ms frames, the VoIP
+application, configurable bit rate and complexity, in-band FEC on (for an expected 10 % loss) and DTX off by default,
+taking and returning `f32` or `i16` PCM; a `JitterBuffer` keyed by RTP sequence numbers (16 bits, wrapping) and
+timestamps that starts after a set number of packets, reorders within a bounded window, drops late packets, conceals
+underruns and reports every loss; and a `Receiver` that plays one frame per tick, rebuilding a lost packet from the next
+packet's FEC copy when it has one and concealing it otherwise. Its test checks relations, not sample values: a tone
+keeps its frequency within 1 % and its level within 3 dB; reordered packets come out in order; a lost packet is
+concealed, or recovered from FEC and then closer to the real frame than concealment; a late packet is dropped; and
+random bytes, single-bit changes and truncations never make the decoder or the receiver panic. `tools/rust-only.sh`
+keeps `crewcraft-audio` and `opus-pure` free of C.
+
 ## The app (T360g)
 
 Call buttons in the room header; a ring (toast, tone, desktop notification) and a "call in progress, join" banner;

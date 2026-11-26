@@ -1,0 +1,25 @@
+{
+  "id": "T360e2-audio-crate",
+  "title": "Call audio on opus-pure: the voice codec, a jitter buffer and loss recovery",
+  "crate": "crewcraft-audio",
+  "files": [
+    "crates/audio/Cargo.toml",
+    "crates/audio/src/lib.rs",
+    "crates/audio/src/codec.rs",
+    "crates/audio/src/jitter.rs",
+    "crates/audio/src/receiver.rs",
+    "Cargo.toml",
+    "Cargo.lock",
+    "tools/rust-only.sh",
+    "docs/CALLS.md"
+  ],
+  "test_path": "crates/audio/tests/t360e2_audio.rs",
+  "test_cmd": "cargo test -p crewcraft-audio --test t360e2_audio",
+  "depends_on": [],
+  "spec": "docs/CALLS.md 'Opus: the crate, chosen by the conformance vectors'. A library crate on opus-pure (pinned), no audio device I/O. codec: VoiceEncoder::new(EncoderSettings) for 48 kHz mono, 20 ms frames (FRAME_SAMPLES 960), the VoIP application and the voice signal; EncoderSettings { bitrate 6000..=510000, complexity 0..=10, fec, expected_loss_percent 0..=100, dtx } defaults to 32 kbit/s, complexity 9, FEC on for 10 % loss, DTX off, and is checked (BadSetting); encode_f32 / encode_i16 take exactly one frame (FrameLength otherwise); set_settings refuses a bad value and changes nothing. VoiceDecoder: decode_f32 / decode_i16 of one packet (up to 120 ms), conceal_* for a lost packet (as long as the last one), recover_*(next) from the next packet's in-band FEC, reporting whether it carried a copy (has_fec: the LBRR flag of a SILK or hybrid packet's first frame, RFC 6716 4.2.4). Malformed packets are errors, never panics. jitter: JitterBuffer::new(depth >= 1, window in depth+1..=3000) keyed by 16-bit wrapping sequence numbers and RTP timestamps; push gives Queued, Duplicate, Late (its turn passed) or Resynced (more than window ahead: start again); pop starts once depth packets are held and gives the next turn in order: Packet, Lost (later packets are here; carries the next packet for FEC) or Underrun (nothing here; wait for it, stop after 5 in a row); counters for received, played, lost, late, duplicates, underruns, skipped. receiver: Receiver pushes packets and gives one Frame per tick (Decoded, Recovered or Concealed, with seq, timestamp and PCM); a packet that does not decode is concealed and counted. Test (relations, not values): a 440 Hz tone keeps its frequency within 1 % and level within 3 dB (f32 and i16); reordered packets come out in order; a lost packet is concealed without FEC and recovered with it, the recovered frame closer to the real one than concealment; a late packet is dropped; sequence numbers wrap and duplicates are ignored; random bytes, bit flips and truncations never panic the decoder or the receiver; settings are checked.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md",
+    "docs/probes/opus-conformance.md"
+  ]
+}

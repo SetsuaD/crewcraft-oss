@@ -1123,6 +1123,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "crewcraft-audio"
+version = "0.1.0-beta.1"
+dependencies = [
+ "opus-pure",
+]
+
+[[package]]
 name = "crewcraft-authz"
 version = "0.1.0-beta.1"
 
@@ -3477,6 +3484,12 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
+name = "opus-pure"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2da6dcc20af557d030b6f206e75c764bcda8c28a5bd03c73935c7e8fcf5f4f4a"
 
 [[package]]
 name = "orbclient"
