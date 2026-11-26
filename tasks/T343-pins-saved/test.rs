@@ -61,6 +61,10 @@ fn wall_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
 }
 
+fn clock_now(clock: &AtomicU64) -> u64 {
+    wall_ms().max(clock.load(Ordering::SeqCst))
+}
+
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -85,7 +89,7 @@ struct TestEnvironment {
 
 impl Environment for TestEnvironment {
     fn now_ms(&self) -> u64 {
-        self.clock.load(Ordering::SeqCst)
+        clock_now(&self.clock)
     }
 
     fn totp_secret(&mut self) -> Option<[u8; 20]> {
@@ -101,6 +105,10 @@ struct Running {
 }
 
 impl Running {
+    fn advance(&self, milliseconds: u64) {
+        self.clock.store(clock_now(&self.clock).saturating_add(milliseconds), Ordering::SeqCst);
+    }
+
     fn stop(mut self) {
         self.stop.store(true, Ordering::Release);
         self.thread.take().unwrap().join().unwrap().unwrap();
@@ -130,7 +138,7 @@ fn start(state: LabInstallation, now_ms: u64, secrets: Vec<[u8; 20]>) -> Running
     };
     let clock = Arc::new(AtomicU64::new(wall_ms()));
     let server_clock = clock.clone();
-    let server = LabRuntime::bind(state, options, move || server_clock.load(Ordering::SeqCst)).unwrap();
+    let server = LabRuntime::bind(state, options, move || clock_now(&server_clock)).unwrap();
     let address = server.local_addr().unwrap();
     clock.store(now_ms, Ordering::SeqCst);
     let environment = TestEnvironment { clock: clock.clone(), secrets: VecDeque::from(secrets) };
@@ -151,13 +159,13 @@ impl Person {
         Totp::with_defaults(self.secret.to_vec()).unwrap().generate(now_ms / 1000)
     }
 
-    fn enroll(&self, endpoint: &ServerEndpoint, now_ms: u64) -> Arc<dyn ResolvesClientCert> {
+    fn enroll(&self, endpoint: &ServerEndpoint, clock: &AtomicU64) -> Arc<dyn ResolvesClientCert> {
         let key = KeyPair::generate().unwrap();
         let csr = CertificateParams::new(Vec::<String>::new()).unwrap().serialize_request(&key).unwrap();
         let spki = key.subject_public_key_info();
         let request = EnrollmentRequest { device_name: "Synthetic Device", csr: csr.der().as_ref(), password: PASSWORD, expected_spki: &spki };
         let chain =
-            endpoint.open_bootstrap(&self.invitation, WAIT).unwrap().enroll(request, |_, _| FirstTotpCode::parse(self.code_at(now_ms))).unwrap();
+            endpoint.open_bootstrap(&self.invitation, WAIT).unwrap().enroll(request, |_, _| FirstTotpCode::parse(self.code_at(clock_now(clock)))).unwrap();
         let mut roots = RootCertStore::empty();
         roots.add(CertificateDer::from(endpoint.root_der().to_vec())).unwrap();
         let identity = (vec![chain.leaf, chain.issuer], PrivatePkcs8KeyDer::from(key.serialize_der()).into());
@@ -178,7 +186,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> (Self, Running) {
         let directory = Scratch::new();
-        let setup_time = wall_ms().saturating_sub(300_000);
+        let setup_time = wall_ms();
         let mut state = LabInstallation::initialize(&directory.0.join("server"), setup_time).unwrap();
         let fingerprint = state.issuer.root_fingerprint();
         let root_der = state.issuer.root_certificate().to_vec();
@@ -199,17 +207,20 @@ impl Fixture {
         let running = start(state, setup_time, people.iter().map(|person| person.secret).collect());
         let mut fixture = Self { directory, fingerprint, root_der, room, private_room, people, devices: Vec::new() };
         let endpoint = fixture.endpoint(&running);
-        // Redeem and confirmation share the normal per-source limit. Refill it between devices, then use a fresh
-        // TOTP step for sign-in, without sleeping or bypassing any enrollment check.
+        // Each enrollment spends two calls from the same source bucket. Allow its normal one-token-per-second
+        // refill between devices while all bootstrap and issued certificates use the real clock.
         fixture.devices = fixture
             .people
             .iter()
-            .map(|person| {
-                let device = person.enroll(&endpoint, running.clock.load(Ordering::SeqCst));
-                running.clock.fetch_add(STEP_MS, Ordering::SeqCst);
-                device
+            .enumerate()
+            .map(|(index, person)| {
+                if index != 0 {
+                    thread::sleep(Duration::from_secs(1));
+                }
+                person.enroll(&endpoint, &running.clock)
             })
             .collect();
+        running.advance(STEP_MS);
         (fixture, running)
     }
 
@@ -219,7 +230,7 @@ impl Fixture {
 
     fn sign_in(&self, running: &Running, person: usize) -> SignedInSession {
         let person_info = &self.people[person];
-        let code = person_info.code_at(running.clock.load(Ordering::SeqCst));
+        let code = person_info.code_at(clock_now(&running.clock));
         let credentials = Credentials::new(person_info.email, PASSWORD, &code).unwrap();
         self.endpoint(running).sign_in(self.devices[person].clone(), &credentials).unwrap()
     }
@@ -353,7 +364,7 @@ fn pins_replace_stale_unpins_preserve_the_latest_and_deleting_clears_it() {
     bob.sync(room).unwrap();
     assert!(bob.pinned(room).is_none(), "deleting the currently pinned message clears its snapshot");
     let bob_ticket = bob.resume_ticket().unwrap();
-    let now = running.clock.load(Ordering::SeqCst);
+    let now = clock_now(&running.clock);
     drop((alice, bob, guest));
     running.stop();
     let reopened = fixture.reopen();
@@ -396,7 +407,7 @@ fn saved_messages_are_personal_follow_edits_and_deletes_and_require_current_memb
     guest.save_message(room, target, false).unwrap();
     assert!(guest.saved_messages().unwrap().is_empty());
     let bob_ticket = bob.resume_ticket().unwrap();
-    let now = running.clock.load(Ordering::SeqCst);
+    let now = clock_now(&running.clock);
     drop((alice, bob, guest));
     running.stop();
     let mut state = fixture.reopen();
@@ -460,7 +471,7 @@ fn pins_and_all_saved_pages_survive_restart_after_the_original_events_age_out() 
     alice.edit(room, target, "current retained plan").unwrap();
     let mut expected = vec![target];
     for index in 0..MAX_SAVED_PAGE + 1 {
-        running.clock.fetch_add(1_000, Ordering::SeqCst);
+        running.advance(1_000);
         let cursor = alice.post(room, &format!("saved detail {index}")).unwrap();
         bob.save_message(room, cursor, true).unwrap();
         expected.push(cursor);
@@ -470,7 +481,7 @@ fn pins_and_all_saved_pages_survive_restart_after_the_original_events_age_out() 
     let alice_ticket = alice.resume_ticket().unwrap();
     let bob_ticket = bob.resume_ticket().unwrap();
     let old_head = alice.sync(room).unwrap().0;
-    let now = running.clock.load(Ordering::SeqCst);
+    let now = clock_now(&running.clock);
     drop((alice, bob));
     running.stop();
 
