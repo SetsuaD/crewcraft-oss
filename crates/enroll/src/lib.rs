@@ -165,7 +165,7 @@ impl EnrollmentCode {
         let hk = Hkdf::<Sha256>::new(Some(b"crewcraft-enroll-v1"), &self.0);
         let mut okm = [0u8; 32];
         // A failure must never fall through to an all-zero (predictable) key, so this panics rather than ignoring the result.
-        #[allow(clippy::expect_used, reason = "HKDF-SHA256 accepts any output up to 8160 bytes; 32 cannot fail")]
+        #[expect(clippy::expect_used, reason = "HKDF-SHA256 accepts any output up to 8160 bytes; 32 cannot fail")]
         hk.expand(b"bootstrap-ed25519", &mut okm).expect("32-byte HKDF-SHA256 output");
         okm
     }

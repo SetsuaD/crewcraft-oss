@@ -6,10 +6,14 @@
 //! Owns: those two conversions, and reading the launch intent's data. Called by: `keystore`, `shell`. Calls: the
 //! JVM through the `jni` crate.
 
+#[cfg(not(feature = "selftest"))]
 use std::ffi::c_void;
 
+use jni::JavaVM;
+#[cfg(not(feature = "selftest"))]
 use jni::objects::{JObject, JString};
-use jni::{Env, JavaVM, jni_sig, jni_str};
+#[cfg(not(feature = "selftest"))]
+use jni::{Env, jni_sig, jni_str};
 
 /// The process's JVM, or `None` if android-activity recorded none.
 #[expect(unsafe_code, reason = "the JVM pointer comes from ndk-context, which android-activity sets before android_main runs")]
@@ -23,8 +27,9 @@ pub fn java_vm() -> Option<JavaVM> {
     Some(unsafe { JavaVM::from_raw(vm.cast()) })
 }
 
-#[cfg_attr(feature = "selftest", allow(dead_code))]
-/// `activity` (from `AndroidApp::activity_as_ptr`) as a handle in `env`, or `None` if it is null.
+/// `activity` (from `AndroidApp::activity_as_ptr`) as a handle in `env`, or `None` if it is null. The self-test build
+/// does not read the launch link, so it leaves this out.
+#[cfg(not(feature = "selftest"))]
 #[expect(unsafe_code, reason = "the activity reference comes from android-activity's AndroidApp::activity_as_ptr")]
 fn activity<'local>(env: &Env<'local>, activity: *mut c_void) -> Option<JObject<'local>> {
     if activity.is_null() {
@@ -35,9 +40,9 @@ fn activity<'local>(env: &Env<'local>, activity: *mut c_void) -> Option<JObject<
     Some(unsafe { JObject::from_raw(env, activity.cast()) })
 }
 
-#[cfg_attr(feature = "selftest", allow(dead_code))]
 /// The data of the intent that started the activity (`getIntent().getDataString()`): the link when the app was
 /// opened from a `crewcraft://` link, otherwise `None`.
+#[cfg(not(feature = "selftest"))]
 pub fn launch_link(vm: &JavaVM, activity_ptr: *mut c_void) -> Option<String> {
     let read = vm.attach_current_thread(|env| -> jni::errors::Result<Option<String>> {
         let Some(activity) = activity(env, activity_ptr) else {

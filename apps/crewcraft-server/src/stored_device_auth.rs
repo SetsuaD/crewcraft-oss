@@ -24,7 +24,7 @@ use rand_core::{OsRng, RngCore};
 use x509_parser::parse_x509_certificate;
 
 use crate::device_session::{AuthError, CommittedSignIn, DeviceAuth};
-use crate::external_signin::{ExternalSignIn, Start};
+use crate::external_signin::{ExternalSignIn, Redirect, Start};
 
 /// An opaque, server-side handle to the committed session. The client token is never retained here.
 pub struct StoredSession([u8; 32]);
@@ -164,7 +164,7 @@ impl DeviceAuth for StoredDeviceAuth {
         }
         let mut random = [0; 32];
         OsRng.try_fill_bytes(&mut random).map_err(|_| AuthError::Unavailable)?;
-        match external.finish(&mut store, &self.user, self.device_id, code, verifier, redirect_uri, random, now_ms) {
+        match external.finish(&mut store, &self.user, self.device_id, Redirect { code, verifier, redirect_uri }, random, now_ms) {
             Ok(token) => {
                 throttle.succeed(&self.user);
                 let session = StoredSession(token_hash(&token));

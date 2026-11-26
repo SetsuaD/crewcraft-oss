@@ -13,7 +13,9 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use crewcraft_authz::{Answer, Capabilities};
 use crewcraft_oidc::{Identity, Key, parse_jwks};
-use crewcraft_server::external_signin::{Authorizer, ExternalSignIn, PENDING_MS, Provider, Refusal, authorize_request, is_loopback, parse_answer};
+use crewcraft_server::external_signin::{
+    Authorizer, ExternalSignIn, PENDING_MS, Provider, Redirect, Refusal, authorize_request, is_loopback, parse_answer,
+};
 use crewcraft_server_core::account_store::{AccountStore, Activation, FirstDevice};
 use crewcraft_server_core::invites::Invite;
 use crewcraft_server_core::seal::ServiceKey;
@@ -154,7 +156,7 @@ fn run(ext: &ExternalSignIn, provider: &FakeProvider, s: &mut AccountStore, user
     let start = ext.begin(device, [device as u8; 32], T0).unwrap();
     assert_eq!((start.issuer.as_str(), start.client_id.as_str()), (ISSUER, CLIENT));
     *provider.nonce.lock().unwrap() = start.nonce.clone();
-    ext.finish(s, user, finish_device, "good-code", VERIFIER, REDIRECT, fresh(), T0 + 1000)
+    ext.finish(s, user, finish_device, Redirect { code: "good-code", verifier: VERIFIER, redirect_uri: REDIRECT }, fresh(), T0 + 1000)
 }
 
 #[test]
@@ -165,13 +167,22 @@ fn a_good_sign_in_gives_a_session_and_the_nonce_works_once() {
     let token = run(&ext, &provider, &mut s, A, 1, 1).unwrap();
     assert_eq!(token.len(), 43);
     // The nonce was used: the same finish again is refused.
-    assert_eq!(ext.finish(&mut s, A, 1, "good-code", VERIFIER, REDIRECT, [9; 32], T0 + 2000), Err(Refusal::NoPendingSignIn));
+    assert_eq!(
+        ext.finish(&mut s, A, 1, Redirect { code: "good-code", verifier: VERIFIER, redirect_uri: REDIRECT }, [9; 32], T0 + 2000),
+        Err(Refusal::NoPendingSignIn)
+    );
     // A begin on another device does not serve this one, and an old begin expires.
     ext.begin(2, [2; 32], T0).unwrap();
-    assert_eq!(ext.finish(&mut s, A, 1, "good-code", VERIFIER, REDIRECT, [9; 32], T0 + 2000), Err(Refusal::NoPendingSignIn));
+    assert_eq!(
+        ext.finish(&mut s, A, 1, Redirect { code: "good-code", verifier: VERIFIER, redirect_uri: REDIRECT }, [9; 32], T0 + 2000),
+        Err(Refusal::NoPendingSignIn)
+    );
     let start = ext.begin(1, [1; 32], T0).unwrap();
     *provider.nonce.lock().unwrap() = start.nonce;
-    assert_eq!(ext.finish(&mut s, A, 1, "good-code", VERIFIER, REDIRECT, [9; 32], T0 + PENDING_MS), Err(Refusal::NoPendingSignIn));
+    assert_eq!(
+        ext.finish(&mut s, A, 1, Redirect { code: "good-code", verifier: VERIFIER, redirect_uri: REDIRECT }, [9; 32], T0 + PENDING_MS),
+        Err(Refusal::NoPendingSignIn)
+    );
     fs::remove_file(&p).unwrap();
 }
 
@@ -183,7 +194,10 @@ fn every_check_refuses_on_its_own() {
     // A redirect that is not loopback.
     let start = ext.begin(1, [1; 32], T0).unwrap();
     *provider.nonce.lock().unwrap() = start.nonce;
-    assert_eq!(ext.finish(&mut s, A, 1, "good-code", VERIFIER, "https://evil.example.org/cb", [9; 32], T0), Err(Refusal::NotLoopback));
+    assert_eq!(
+        ext.finish(&mut s, A, 1, Redirect { code: "good-code", verifier: VERIFIER, redirect_uri: "https://evil.example.org/cb" }, [9; 32], T0),
+        Err(Refusal::NotLoopback)
+    );
     // The provider refuses the code.
     *provider.exchange_fails.lock().unwrap() = true;
     assert!(matches!(run(&ext, &provider, &mut s, A, 1, 1), Err(Refusal::Provider(_))));

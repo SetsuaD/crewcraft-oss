@@ -52,6 +52,15 @@ pub enum ChatError {
     UnexpectedResponse,
 }
 
+/// What the client offers once it is signed in (its hello and notification settings), and the time allowed: each frame,
+/// and the whole opening.
+pub struct Negotiation {
+    pub hello: Hello,
+    pub settings: Settings,
+    pub frame_timeout: Duration,
+    pub deadline: Instant,
+}
+
 pub struct ChatSession<S, D> {
     stream: S,
     set_deadline: D,
@@ -75,28 +84,17 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         deadline: Instant,
     ) -> Result<Self, ChatError> {
         let opening = Opening::SignIn(SignIn { email: credentials.email, password: credentials.password, code: credentials.code });
-        Self::open(stream, set_deadline, &opening, credentials.email, hello, settings, frame_timeout, deadline)
+        Self::open(stream, set_deadline, &opening, credentials.email, Negotiation { hello, settings, frame_timeout, deadline })
     }
 
     /// As `connect`, but reopening the session `token` belongs to instead of signing in (task T240). A token the server
     /// no longer accepts is `SignInRefused`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn resume(
-        stream: S,
-        set_deadline: D,
-        email: &str,
-        token: &str,
-        hello: Hello,
-        settings: Settings,
-        frame_timeout: Duration,
-        deadline: Instant,
-    ) -> Result<Self, ChatError> {
-        Self::open(stream, set_deadline, &Opening::Resume { token }, email, hello, settings, frame_timeout, deadline)
+    pub fn resume(stream: S, set_deadline: D, email: &str, token: &str, negotiation: Negotiation) -> Result<Self, ChatError> {
+        Self::open(stream, set_deadline, &Opening::Resume { token }, email, negotiation)
     }
 
     /// As `connect`, but finishing a sign-in through the server's external identity provider (task T611g): the code
     /// from the loopback redirect, the PKCE verifier and that redirect URI. A refusal is `SignInRefused`.
-    #[allow(clippy::too_many_arguments)]
     pub fn finish_external(
         stream: S,
         set_deadline: D,
@@ -104,13 +102,10 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         code: &str,
         verifier: &str,
         redirect_uri: &str,
-        hello: Hello,
-        settings: Settings,
-        frame_timeout: Duration,
-        deadline: Instant,
+        negotiation: Negotiation,
     ) -> Result<Self, ChatError> {
         let opening = Opening::FinishExternal { code, verifier, redirect_uri };
-        Self::open(stream, set_deadline, &opening, email, hello, settings, frame_timeout, deadline)
+        Self::open(stream, set_deadline, &opening, email, negotiation)
     }
 
     /// The session token, for a later `resume`. A secret: keep it as the device record is kept, never in a log.
@@ -118,17 +113,8 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         &self.token
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn open(
-        stream: S,
-        set_deadline: D,
-        opening: &Opening<'_>,
-        email: &str,
-        hello: Hello,
-        settings: Settings,
-        frame_timeout: Duration,
-        deadline: Instant,
-    ) -> Result<Self, ChatError> {
+    fn open(stream: S, set_deadline: D, opening: &Opening<'_>, email: &str, negotiation: Negotiation) -> Result<Self, ChatError> {
+        let Negotiation { hello, settings, frame_timeout, deadline } = negotiation;
         let versions = hello.min_version..=hello.max_version;
         let supported_features = hello.features;
         let client = Client::new(email, settings);

@@ -44,7 +44,7 @@ pub enum Error {
     BadBase32,
 }
 
-#[allow(clippy::expect_used)]
+#[expect(clippy::expect_used, reason = "HMAC takes a key of any length (RFC 2104); new_from_slice returns a Result only for its trait")]
 fn hmac_for_algorithm(secret: &[u8], algorithm: Algorithm, counter: u64) -> Vec<u8> {
     let counter_bytes = counter.to_be_bytes();
 

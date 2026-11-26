@@ -21,14 +21,11 @@ pub const MIN_CHARS: usize = 12;
 /// Longest accepted password, in bytes of UTF-8 (bounds the work an attacker can make the server do).
 pub const MAX_BYTES: usize = 1024;
 
-#[allow(clippy::expect_used)]
-fn make_params() -> Params {
-    // These constants are valid by construction (all > 0, output length is a power of 2 in range).
-    Params::new(MEMORY_KIB, ITERATIONS, LANES, Some(32)).expect("valid argon2 parameters")
-}
-
-fn hasher() -> Argon2<'static> {
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, make_params())
+/// The Argon2id hasher with the parameters above. They are valid, so this does not fail; if they were ever changed to
+/// something argon2 refuses, hashing and checking would fail with `Error::Hashing` rather than panic.
+fn hasher() -> Result<Argon2<'static>, Error> {
+    let params = Params::new(MEMORY_KIB, ITERATIONS, LANES, Some(32)).map_err(|_| Error::Hashing)?;
+    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
 /// Policy for a NEW password: at least [`MIN_CHARS`] characters and at most [`MAX_BYTES`] bytes. Nothing else
@@ -49,7 +46,7 @@ pub fn hash_with_salt(password: &str, salt: &[u8]) -> Result<String, Error> {
     check_policy(password)?;
     let salt_b64 = SaltString::encode_b64(salt).map_err(|_| Error::Hashing)?;
     let salt = Salt::from_b64(salt_b64.as_str()).map_err(|_| Error::Hashing)?;
-    let hash = hasher().hash_password(password.as_bytes(), salt).map_err(|_| Error::Hashing)?;
+    let hash = hasher()?.hash_password(password.as_bytes(), salt).map_err(|_| Error::Hashing)?;
     Ok(hash.to_string())
 }
 
@@ -66,7 +63,7 @@ pub fn verify(password: &str, phc: &str) -> Result<bool, Error> {
     if stored.algorithm.as_str() != "argon2id" {
         return Err(Error::BadHash);
     }
-    let argon2 = hasher();
+    let argon2 = hasher()?;
     match argon2.verify_password(password.as_bytes(), &stored) {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),

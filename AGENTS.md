@@ -80,7 +80,10 @@ and mobile, and the same client in the browser. It is a community project, not p
 - Requirements and clean room: build from [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) and
   [docs/SPEC.md](docs/SPEC.md). [docs/CLEAN-ROOM.md](docs/CLEAN-ROOM.md) adds CrewCraft's own rules to the clean-room
   standard; read it first.
-- `unsafe`: forbidden by the workspace lints (`unsafe_code = "forbid"`); no module uses it. The crash lints
+- `unsafe`: forbidden by the workspace lints (`unsafe_code = "forbid"`) everywhere except `apps/crewcraft-android`,
+  which lowers it to `deny` and allows it on three items only, each with `#[expect(unsafe_code, reason = ...)]` and a
+  `// SAFETY:` comment: `android_main` in `src/shell.rs`, and `java_vm` and `activity` in `src/jvm.rs`
+  ([docs/MOBILE.md](docs/MOBILE.md)). The crash lints
   (`unwrap_used`, `expect_used`, `panic`, `todo`, `unimplemented`, `unreachable`) are set in `[workspace.lints]` and
   fail the gate through `-D warnings`; crates use `[lints] workspace = true`.
 - Rust only: `tools/rust-only.sh` fails on a source file in another language and on a dependency that compiles C, C++
