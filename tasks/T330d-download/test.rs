@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use crewcraft_proto::frame::encode;
 use crewcraft_proto::message::CodecError;
-use crewcraft_proto::request::{BYTES_TAG, MAX_CHUNK, Request, Response, decode_bytes, decode_request, encode_bytes, encode_request, encode_response};
+use crewcraft_proto::request::{
+    BYTES_TAG, MAX_CHUNK, Request, Response, decode_bytes, decode_request, encode_bytes, encode_request, encode_response,
+};
 use crewcraft_server_core::connection::Connection;
 use crewcraft_server_core::dispatch::{E_NO_STORAGE, E_NO_SUCH_FILE};
 use crewcraft_server_core::durable::{DownloadError, DurableServer};
@@ -109,6 +111,9 @@ fn the_connection_answers_with_the_bytes_or_not_found() {
 
     let mut memory = Server::new();
     memory.create_room("bob", "Memory").unwrap();
-    assert_eq!(Connection::new("bob").receive(&mut memory, &framed(8, &Request::Download { file, offset: 0, length: 5 }), T0).unwrap(), refused(8, E_NO_STORAGE));
+    assert_eq!(
+        Connection::new("bob").receive(&mut memory, &framed(8, &Request::Download { file, offset: 0, length: 5 }), T0).unwrap(),
+        refused(8, E_NO_STORAGE)
+    );
     fs::remove_dir_all(&dir).unwrap();
 }

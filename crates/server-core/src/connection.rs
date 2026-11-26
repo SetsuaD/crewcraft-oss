@@ -6,9 +6,7 @@
 use crewcraft_proto::frame::{Decoder, FrameError, encode};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{MAX_MENTIONS, Push, encode_push};
-use crewcraft_proto::request::{
-    Request, Response, SearchHit, decode_request, encode_bytes, encode_hits, encode_id, encode_response, encode_rooms,
-};
+use crewcraft_proto::request::{Request, Response, SearchHit, decode_request, encode_bytes, encode_hits, encode_id, encode_response, encode_rooms};
 
 use crate::cursor_log::Since;
 use crate::dispatch::{Backend, handle, handle_backend, listed_rooms};
