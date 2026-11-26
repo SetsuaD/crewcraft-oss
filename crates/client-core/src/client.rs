@@ -6,8 +6,8 @@ use crewcraft_proto::frame::{Decoder, FrameError};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{Push, decode_push};
 use crewcraft_proto::request::{
-    BYTES_TAG, FILES_TAG, HITS_TAG, ID_TAG, ListedFile, ROOMS_TAG, Request, SearchHit, decode_bytes, decode_files, decode_hits, decode_id,
-    decode_rooms,
+    BYTES_TAG, FILES_TAG, HITS_TAG, ID_TAG, ListedFile, ROOMS_TAG, Request, SAVED_TAG, SavedPage, SearchHit, decode_bytes, decode_files, decode_hits,
+    decode_id, decode_rooms, decode_saved,
 };
 
 use crate::inbox::Inbox;
@@ -29,6 +29,8 @@ pub enum ClientEvent {
     Hits { id: u32, hits: Vec<SearchHit> },
     /// The files frame answering `ListFiles` request `id` (task T331a).
     Files { id: u32, files: Vec<ListedFile> },
+    /// A page of the person's saved messages in their current state (T343).
+    Saved { id: u32, page: SavedPage },
     /// The upload or file id that follows the `Ok` answering an upload request `id` (task T330e).
     Id { id: u32, value: [u8; 16] },
     /// The bytes that follow the `Ok` answering `Download` request `id` (task T330e).
@@ -107,6 +109,7 @@ impl Client {
                 || first == crewcraft_proto::push::CALL_STATE
                 || first == crewcraft_proto::push::CALL_KEYS
                 || first == crewcraft_proto::push::CALL_SEALED
+                || first == crewcraft_proto::push::PINNED
             {
                 let push = decode_push(&payload).map_err(ClientError::Malformed)?;
                 let room = match &push {
@@ -118,6 +121,7 @@ impl Client {
                     Push::Archived { room, .. } | Push::Sent { room, .. } => room.clone(),
                     Push::CallLine { room, .. } | Push::CallState { room, .. } => room.clone(),
                     Push::CallKeys { room, .. } | Push::CallSealed { room, .. } => room.clone(),
+                    Push::Pinned { room, .. } => room.clone(),
                 };
                 match self.inbox.on_push(push, now_ms, local_minute) {
                     Some((apply, notify)) => events.push(ClientEvent::Pushed { room, apply, notify }),
@@ -132,6 +136,9 @@ impl Client {
             } else if first == HITS_TAG {
                 let (id, hits) = decode_hits(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Hits { id, hits });
+            } else if first == SAVED_TAG {
+                let (id, page) = decode_saved(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Saved { id, page });
             } else if first == ID_TAG {
                 let (id, value) = decode_id(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Id { id, value });

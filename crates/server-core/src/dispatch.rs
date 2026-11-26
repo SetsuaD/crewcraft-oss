@@ -151,6 +151,8 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         | Request::CallLeave { .. }
         | Request::ListFiles
         | Request::StorageUse
+        | Request::SaveMessage { .. }
+        | Request::ListSaved { .. }
         | Request::CallKey { .. }
         | Request::CallSeal { .. }
         | Request::PostFiles { .. }
@@ -165,6 +167,7 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         Request::React { room, target, reaction, on } => {
             backend.change(|s| s.react(room, user, *target, *reaction, *on, now_ms), |s| s.react(room, user, *target, *reaction, *on, now_ms))
         }
+        Request::Pin { room, target, on } => backend.change(|s| s.pin(room, user, *target, *on, now_ms), |s| s.pin(room, user, *target, *on, now_ms)),
         Request::Sync { room, .. } => {
             return Ok(match backend.server().room(room) {
                 Ok(service) if service.role(user).is_some() => Response::Ok { cursor: service.head() },

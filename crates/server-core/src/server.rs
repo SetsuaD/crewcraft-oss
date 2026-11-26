@@ -184,6 +184,24 @@ impl Server {
         service.edit(actor, target, text).map_err(ServerError::Service)
     }
 
+    /// Edit a live message whose author was read from the durable full-history projection.
+    pub(crate) fn edit_validated(
+        &mut self,
+        slug: &str,
+        actor: &str,
+        target: u64,
+        author: Option<&str>,
+        text: &str,
+        now_ms: u64,
+    ) -> Result<u64, ServerError> {
+        self.require_member(slug, actor)?;
+        if !self.limiter.check(&actor.to_owned(), now_ms) {
+            return Err(ServerError::RateLimited);
+        }
+        let author = author.ok_or(ServerError::Service(ServiceError::NoSuchMessage))?;
+        self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?.edit_validated(actor, target, author, text).map_err(ServerError::Service)
+    }
+
     /// `RoomService::delete` in the room. `NoSuchRoom` first. No rate limit.
     /// `RoomService::react` in the room (task T341a), rate limited as `edit` is. `NoSuchRoom` first.
     pub fn react(&mut self, slug: &str, actor: &str, target: u64, reaction: u8, on: bool, now_ms: u64) -> Result<u64, ServerError> {
@@ -198,6 +216,30 @@ impl Server {
     pub fn delete(&mut self, slug: &str, actor: &str, target: u64) -> Result<u64, ServerError> {
         let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;
         service.delete(actor, target).map_err(ServerError::Service)
+    }
+
+    /// Delete a live message whose author was read from the durable full-history projection.
+    pub(crate) fn delete_validated(&mut self, slug: &str, actor: &str, target: u64, author: &str) -> Result<u64, ServerError> {
+        self.require_member(slug, actor)?;
+        self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?.delete_validated(actor, target, author).map_err(ServerError::Service)
+    }
+
+    /// Change the room's pin, with the same membership and rate limit as an edit (task T343).
+    pub fn pin(&mut self, slug: &str, actor: &str, target: u64, on: bool, now_ms: u64) -> Result<u64, ServerError> {
+        self.require_member(slug, actor)?;
+        if !self.limiter.check(&actor.to_owned(), now_ms) {
+            return Err(ServerError::RateLimited);
+        }
+        self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?.pin(actor, target, on).map_err(ServerError::Service)
+    }
+
+    /// The durable server has validated a live target using its full-history projection.
+    pub(crate) fn pin_validated(&mut self, slug: &str, actor: &str, target: u64, on: bool, now_ms: u64) -> Result<u64, ServerError> {
+        self.require_member(slug, actor)?;
+        if !self.limiter.check(&actor.to_owned(), now_ms) {
+            return Err(ServerError::RateLimited);
+        }
+        self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?.pin_validated(actor, target, on).map_err(ServerError::Service)
     }
 
     /// `RoomService::mark_read` in the room. `NoSuchRoom` first.

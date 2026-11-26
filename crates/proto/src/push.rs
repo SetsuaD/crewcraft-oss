@@ -29,6 +29,10 @@
 //! - tag 72 `Reacted` (task T341a): `u64 target | str author | u8 reaction (1 to REACTIONS.len()) | u8 on (0 or 1)`.
 //!   An event of its own: it advances the cursor like `Other`. A client that did not agree to
 //!   `request::FEATURE_REACTIONS` is sent `Other` in its place.
+//! - tag 79 `Pinned` (task T343): `u64 target | str author | str html | u8 edited (0 or 1)`. The room's current pin
+//!   follows every successful Sync when `request::FEATURE_PINS_SAVED` was agreed, including a sync whose event tail
+//!   has a gap. Its cursor is the room-head revision and advances no timeline. A zero target with empty fields and
+//!   edited=0 means unpinned. Clients refuse older revisions, so stale snapshots cannot undo a later deletion.
 //!
 //! `room`, `author` and each mention are 1 to `message::MAX_NAME` bytes; `html` is 0 to `MAX_HTML` bytes; at most
 //! `MAX_MENTIONS` mentions.
@@ -52,6 +56,8 @@ pub const CALL_STATE: u8 = 76;
 /// The tags of `Push::CallKeys` and `Push::CallSealed` (task T360d2).
 pub const CALL_KEYS: u8 = 77;
 pub const CALL_SEALED: u8 = 78;
+/// The authoritative room pin snapshot after a sync (task T343).
+pub const PINNED: u8 = 79;
 /// The most participants a `CallState` lists.
 pub const MAX_PARTICIPANTS: usize = 255;
 /// The tag of `Push::Reacted` (task T341a).
@@ -82,6 +88,15 @@ pub struct AttachedFile {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Push {
+    /// Current pin at room-head revision `cursor`. Zero target and empty fields mean no pin. Advances no timeline.
+    Pinned {
+        room: String,
+        cursor: u64,
+        target: u64,
+        author: String,
+        html: String,
+        edited: bool,
+    },
     Posted {
         room: String,
         cursor: u64,
@@ -234,6 +249,18 @@ fn read_u8(bytes: &[u8], pos: &mut usize) -> Result<u8, CodecError> {
 pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
     let mut out = Vec::new();
     match push {
+        Push::Pinned { room, cursor, target, author, html, edited } => {
+            if (*target == 0 && (!author.is_empty() || !html.is_empty() || *edited)) || (*target != 0 && author.is_empty()) {
+                return Err(CodecError::FieldLength);
+            }
+            out.push(PINNED);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&target.to_be_bytes());
+            write_str(&mut out, author, 0, crate::request::MAX_AUTHOR)?;
+            write_str(&mut out, html, 0, MAX_HTML)?;
+            out.push(u8::from(*edited));
+        }
         Push::Posted { room, cursor, author, html, mentions } => {
             if mentions.len() > MAX_MENTIONS {
                 return Err(CodecError::FieldLength);
@@ -398,6 +425,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         && tag != CALL_STATE
         && tag != CALL_KEYS
         && tag != CALL_SEALED
+        && tag != PINNED
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -406,6 +434,20 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
     let cursor = read_u64(bytes, &mut pos)?;
 
     let push = match tag {
+        PINNED => {
+            let target = read_u64(bytes, &mut pos)?;
+            let author = read_string(bytes, &mut pos, 0, crate::request::MAX_AUTHOR)?;
+            let html = read_string(bytes, &mut pos, 0, MAX_HTML)?;
+            let edited = match read_u8(bytes, &mut pos)? {
+                0 => false,
+                1 => true,
+                other => return Err(CodecError::BadKind(other)),
+            };
+            if (target == 0 && (!author.is_empty() || !html.is_empty() || edited)) || (target != 0 && author.is_empty()) {
+                return Err(CodecError::FieldLength);
+            }
+            Push::Pinned { room, cursor, target, author, html, edited }
+        }
         64 => {
             let author = read_string(bytes, &mut pos, 1, MAX_NAME)?;
             let html = read_string(bytes, &mut pos, 0, MAX_HTML)?;
@@ -551,4 +593,38 @@ fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, CodecError> {
     let value = u32::from_be_bytes([bytes[*pos], bytes[*pos + 1], bytes[*pos + 2], bytes[*pos + 3]]);
     *pos = end;
     Ok(value)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod pinned_tests {
+    use super::*;
+
+    #[test]
+    fn pinned_snapshots_are_exact_and_refuse_malformed_empty_metadata() {
+        for (target, author, html, edited) in [(0, "", "", false), (3, "author", "", true), (3, "author", "<p>current</p>", true)] {
+            let push = Push::Pinned { room: "room".into(), cursor: 8, target, author: author.into(), html: html.into(), edited };
+            let bytes = encode_push(&push).unwrap();
+            assert_eq!(bytes[0], PINNED);
+            assert_eq!(decode_push(&bytes).unwrap(), push);
+            for end in 0..bytes.len() {
+                assert!(decode_push(&bytes[..end]).is_err());
+            }
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert_eq!(decode_push(&trailing), Err(CodecError::TrailingBytes));
+            let mut bad_bool = bytes;
+            let last = bad_bool.len() - 1;
+            bad_bool[last] = 2;
+            assert_eq!(decode_push(&bad_bool), Err(CodecError::BadKind(2)));
+        }
+        assert!(
+            encode_push(&Push::Pinned { room: "room".into(), cursor: 8, target: 0, author: "author".into(), html: String::new(), edited: false })
+                .is_err()
+        );
+        assert!(
+            encode_push(&Push::Pinned { room: "room".into(), cursor: 8, target: 3, author: String::new(), html: "body".into(), edited: false })
+                .is_err()
+        );
+    }
 }

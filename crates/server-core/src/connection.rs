@@ -50,7 +50,7 @@ pub fn to_push(room: &str, cursor: u64, event: &Event) -> Push {
             Push::Edited { room: room.to_string(), cursor, target: *target, html: event.html.clone(), mentions: first_mentions(event) }
         }
         EventKind::Deleted { target } => Push::Deleted { room: room.to_string(), cursor, target: *target },
-        EventKind::Joined { .. } | EventKind::Left { .. } => Push::Other { room: room.to_string(), cursor },
+        EventKind::Joined { .. } | EventKind::Left { .. } | EventKind::Pinned { .. } => Push::Other { room: room.to_string(), cursor },
         EventKind::CallLine { call, ended } => Push::CallLine {
             room: room.to_string(),
             cursor,
@@ -114,6 +114,7 @@ impl Connection {
             |_, _, _| None,
             |_, _, _| None,
             |_, _, _| Vec::new(),
+            memory_pin_state,
         )
     }
 
@@ -139,6 +140,7 @@ impl Connection {
             DurableServer::parent_of,
             DurableServer::imported_sent_ms,
             call_state,
+            DurableServer::pin_state,
         )
     }
 
@@ -155,13 +157,20 @@ impl Connection {
         parent_of: impl Fn(&S, &str, u64) -> Option<u64>,
         sent_of: impl Fn(&S, &str, u64) -> Option<u64>,
         call_state: impl Fn(&S, &str, &str) -> Vec<Push>,
+        pin_state: impl Fn(&S, &str, &str) -> Option<Push>,
     ) -> Result<Vec<u8>, E> {
         self.decoder.push(bytes);
         let mut out = Vec::new();
 
         while let Some(payload) = self.decoder.next_frame().map_err(ConnError::Frame)? {
             let (id, request) = decode_request(&payload).map_err(ConnError::Request)?;
-            let (response, follow) = dispatch(server, &self.user, &request, now_ms)?;
+            let pins_saved = self.features & crewcraft_proto::request::FEATURE_PINS_SAVED != 0;
+            let needs_pins_saved = matches!(request, Request::Pin { .. } | Request::SaveMessage { .. } | Request::ListSaved { .. });
+            let (response, follow) = if needs_pins_saved && !pins_saved {
+                (refusal_of(crate::dispatch::E_NOT_ALLOWED), None)
+            } else {
+                dispatch(server, &self.user, &request, now_ms)?
+            };
             let resp_bytes = encode_response(id, &response).map_err(ConnError::Request)?;
             let framed_resp = encode(&resp_bytes).map_err(ConnError::Frame)?;
             out.extend_from_slice(&framed_resp);
@@ -175,6 +184,10 @@ impl Connection {
                 }
                 Some(Follow::Bytes(data)) => {
                     out.extend_from_slice(&encode(&encode_bytes(id, &data).map_err(ConnError::Request)?).map_err(ConnError::Frame)?);
+                }
+                Some(Follow::Saved(page)) => {
+                    let frame = crewcraft_proto::request::encode_saved(id, &page).map_err(ConnError::Request)?;
+                    out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
                 }
                 None => {}
             }
@@ -245,6 +258,16 @@ impl Connection {
                 let rooms = encode_rooms(id, &listed_rooms(read(server), &self.user)).map_err(ConnError::Request)?;
                 out.extend_from_slice(&encode(&rooms).map_err(ConnError::Frame)?);
             }
+            // The complete pin projection follows every successful sync, even when the event tail has a gap.
+            // Its cursor is a room-head revision, so a client never treats the snapshot as another timeline event.
+            if let Request::Sync { room, .. } = &request
+                && pins_saved
+                && matches!(response, Response::Ok { .. })
+                && let Some(pinned) = pin_state(server, room, &self.user)
+            {
+                let frame = encode_push(&pinned).map_err(ConnError::Request)?;
+                out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
+            }
             // After a successful Search, the hits frame (task T320b), as the response counted them.
             if let Request::Search { query } = &request
                 && matches!(response, Response::Ok { .. })
@@ -256,6 +279,13 @@ impl Connection {
 
         Ok(out)
     }
+}
+
+fn memory_pin_state(server: &Server, slug: &str, user: &str) -> Option<Push> {
+    let room = server.room(slug).ok()?;
+    room.role(user)?;
+    let (target, author, html, edited) = room.pinned_content().unwrap_or_default();
+    Some(Push::Pinned { room: slug.to_owned(), cursor: room.head(), target, author, html, edited })
 }
 
 /// Answer a call request over a durable server (task T360a1): `None` for any other request. `Ok { cursor }` carries
@@ -340,6 +370,17 @@ fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64
             let files = server.listed_files(user);
             return Some(Ok((Response::Ok { cursor: files.len() as u64 }, Some(Follow::Files(files)))));
         }
+        Request::SaveMessage { room, target, on } => {
+            return Some(match server.save_message(room, user, *target, *on) {
+                Ok(()) => Ok((Response::Ok { cursor: 0 }, None)),
+                Err(DurableError::Server(error)) => Ok((refusal_of(crate::dispatch::error_code(error)), None)),
+                Err(error) => Err(DurableConnError::Storage(error)),
+            });
+        }
+        Request::ListSaved { after_room, after_cursor } => {
+            let page = server.saved(user, after_room, *after_cursor);
+            return Some(Ok((Response::Ok { cursor: page.messages.len() as u64 }, Some(Follow::Saved(page)))));
+        }
         Request::Download { file, offset, length } => {
             return Some(Ok(match server.download(user, file, *offset, *length as usize) {
                 Ok(data) => (Response::Ok { cursor: data.len() as u64 }, Some(Follow::Bytes(data))),
@@ -364,6 +405,7 @@ enum Follow {
     Bytes(Vec<u8>),
     /// The files frame answering `ListFiles` (task T331a).
     Files(Vec<crewcraft_proto::request::ListedFile>),
+    Saved(crewcraft_proto::request::SavedPage),
 }
 
 /// A request's answer, and what follows it.

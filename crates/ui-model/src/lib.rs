@@ -46,6 +46,12 @@ pub enum Command {
     /// Add (`on`) or take back the reaction with code `reaction` (see `crewcraft_proto::push::REACTIONS`) on the message
     /// at `target` in `room` (task T341b).
     React { room: String, target: u64, reaction: u8, on: bool },
+    /// Pin a message, or conditionally unpin this same message (T343).
+    Pin { room: String, target: u64, on: bool },
+    /// Add or remove a personal saved message (T343).
+    SaveMessage { room: String, target: u64, on: bool },
+    /// Fetch the person's saved messages in their current state (T343).
+    ListSaved,
     /// Upload the file at `path` to `room`, to attach to the next post there (task T330e).
     Attach { room: String, path: std::path::PathBuf },
     /// Post `text` (may be empty) with `files`, uploads made with `Attach` (task T330e).

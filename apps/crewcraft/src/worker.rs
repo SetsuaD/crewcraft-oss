@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crewcraft_client_core::room_view::Shown;
+use crewcraft_client_core::room_view::{PinnedMessage, Shown};
 use crewcraft_ui_model::Command;
 use rand_core::{OsRng, RngCore};
 use rustls::client::ResolvesClientCert;
@@ -124,6 +124,10 @@ pub enum Event {
     LeftCall { room: String, reason: Option<String> },
     /// Who reacted to each message in `room` with what, whenever it changes (task T341b).
     Reactions { room: String, reactions: crewcraft_ui_model::RoomReactions },
+    /// The authoritative room pin, including a body outside the current history page (T343).
+    Pin { room: String, pinned: Option<PinnedMessage> },
+    /// The person's readable saved messages in their current state (T343).
+    SavedMessages { messages: Vec<crewcraft_proto::request::SavedMessage> },
     /// A post that was not acknowledged; `text` is returned so the window can restore the draft. After
     /// `Problem::Lost` the post may still have arrived: the room's next snapshot shows it if so.
     PostFailed { room: String, text: String, problem: Problem },
@@ -214,6 +218,10 @@ pub enum Problem {
     SearchNotOffered,
     /// The server does not keep files (task T330e).
     FilesNotOffered,
+    /// The server did not negotiate pins and saved messages (T343).
+    PinsSavedNotOffered,
+    /// The server supplied current pin metadata while its retained history could not replay this room (T343).
+    HistoryGap,
     /// A file on this computer could not be read or written (task T330e).
     LocalFile(io::ErrorKind),
 }
@@ -243,6 +251,8 @@ impl std::fmt::Display for Problem {
             Self::Cancelled => "Sign-in cancelled.",
             Self::SearchNotOffered => "This server does not offer message search.",
             Self::FilesNotOffered => "This server does not keep files.",
+            Self::PinsSavedNotOffered => "This server does not offer pins and saved messages.",
+            Self::HistoryGap => "Some earlier messages are outside the server's retained history.",
             Self::LocalFile(_) => "CrewCraft could not read or write that file on this computer.",
         })
     }
@@ -266,6 +276,8 @@ impl Problem {
                 | Self::Cancelled
                 | Self::SearchNotOffered
                 | Self::FilesNotOffered
+                | Self::PinsSavedNotOffered
+                | Self::HistoryGap
                 | Self::LocalFile(_)
         )
     }
@@ -420,6 +432,9 @@ impl Worker {
             files_sent: BTreeMap::new(),
             threads_sent: BTreeMap::new(),
             reactions_sent: BTreeMap::new(),
+            pins_sent: BTreeMap::new(),
+            saved_sent: None,
+            saved_requested: false,
             archive_sent: BTreeMap::new(),
             in_call: None,
             next_heartbeat: Instant::now(),
@@ -522,6 +537,11 @@ struct Run {
     archive_sent: BTreeMap<String, Vec<(u64, u64)>>,
     /// The last reactions sent, per room (task T341b).
     reactions_sent: BTreeMap<String, crewcraft_ui_model::RoomReactions>,
+    /// Pin metadata is sent even when the room's message snapshot stays unchanged (T343).
+    pins_sent: BTreeMap<String, Option<PinnedMessage>>,
+    saved_sent: Option<Vec<crewcraft_proto::request::SavedMessage>>,
+    /// Refresh personal bookmarks after the window first opens or changes the saved list (T343).
+    saved_requested: bool,
     next_poll: Instant,
     retry: Option<Retry>,
     keeper: Box<dyn TicketKeeper>,
@@ -590,6 +610,12 @@ impl Run {
                 Some(Input::Command(Command::Delete { room, target })) => self.change(room, |session, room| session.delete(room, target)),
                 Some(Input::Command(Command::Search { query })) => self.search(query),
                 Some(Input::Command(Command::ListFiles)) => self.list_files(),
+                Some(Input::Command(Command::ListSaved)) => {
+                    self.saved_requested = true;
+                    self.refresh_saved(true);
+                }
+                Some(Input::Command(Command::Pin { room, target, on })) => self.pin_message(room, target, on),
+                Some(Input::Command(Command::SaveMessage { room, target, on })) => self.save_message(room, target, on),
                 Some(Input::Command(Command::Preview { file, size })) => {
                     // A preview that cannot be fetched is shown as the file chip it already is.
                     let bytes = self
@@ -697,6 +723,9 @@ impl Run {
     /// Take over a session that was just signed in or resumed: keep its resume ticket, list the person's rooms, report
     /// `SignedIn` and poll.
     fn start_session(&mut self, mut session: SignedInSession, email: &str) {
+        self.pins_sent.clear();
+        self.saved_sent = None;
+        self.saved_requested = false;
         if let Some(ticket) = session.resume_ticket() {
             self.keeper.save(&ticket);
             self.ticket = Some(ticket);
@@ -1073,6 +1102,57 @@ impl Run {
         }
     }
 
+    fn pin_message(&mut self, room: String, target: u64, on: bool) {
+        if self.session.as_ref().is_some_and(|session| !session.pins_saved()) {
+            return self.emit(Event::Failed(Problem::PinsSavedNotOffered));
+        }
+        self.change(room, |session, room| session.pin(room, target, on));
+    }
+
+    fn save_message(&mut self, room: String, target: u64, on: bool) {
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        if !session.pins_saved() {
+            return self.emit(Event::Failed(Problem::PinsSavedNotOffered));
+        }
+        match session.save_message(&room, target, on) {
+            Ok(_) => {
+                self.saved_requested = true;
+                self.refresh_saved(true);
+            }
+            Err(error) => {
+                self.request_failed(error);
+            }
+        }
+    }
+
+    /// Refresh references against the server's current messages and memberships (T343), including an empty result
+    /// after the last saved message was deleted or the person lost access to its room.
+    fn refresh_saved(&mut self, force: bool) {
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        if !session.pins_saved() {
+            self.saved_requested = false;
+            return self.emit(Event::Failed(Problem::PinsSavedNotOffered));
+        }
+        match session.saved_messages() {
+            Ok(messages) => {
+                if force || self.saved_sent.as_ref() != Some(&messages) {
+                    self.saved_sent = Some(messages.clone());
+                    self.emit(Event::SavedMessages { messages });
+                }
+            }
+            Err(error) => {
+                self.saved_requested = false;
+                self.saved_sent = None;
+                self.emit(Event::SavedMessages { messages: Vec::new() });
+                self.request_failed(error);
+            }
+        }
+    }
+
     /// An edit or a deletion of one of the person's own messages (task T316): report `Changed`, then sync the room.
     /// A refusal (someone else's message, say) is reported and leaves the session open.
     fn change(&mut self, room: String, apply: impl FnOnce(&mut SignedInSession, &str) -> Result<u64, LabError>) {
@@ -1098,6 +1178,9 @@ impl Run {
     fn poll(&mut self, force: bool) {
         self.next_poll = Instant::now() + self.config.poll_interval;
         self.heartbeat();
+        if self.saved_requested {
+            self.refresh_saved(force);
+        }
         if self.followed.is_empty() {
             if let Some(session) = self.session.as_mut()
                 && let Err(error) = session.ping()
@@ -1125,6 +1208,15 @@ impl Run {
         };
         let lines = match session.sync(room) {
             Ok((_, lines)) => lines,
+            Err(LabError::Chat(ChatError::HistoryGap { reached, head })) if reached < head => {
+                let pinned = session.pinned(room);
+                if force || self.pins_sent.get(room) != Some(&pinned) {
+                    self.pins_sent.insert(room.to_owned(), pinned.clone());
+                    self.emit(Event::Pin { room: room.to_owned(), pinned });
+                }
+                self.emit(Event::Failed(Problem::HistoryGap));
+                return;
+            }
             Err(error) => {
                 // A room the server refuses (for example one the person is not in) is not polled again.
                 if let Problem::Refused(_) = self.request_failed(error) {
@@ -1137,6 +1229,13 @@ impl Run {
             }
         };
         let is_open = self.open.as_deref() == Some(room);
+        if let Some(session) = self.session.as_mut() {
+            let pinned = session.pinned(room);
+            if force || self.pins_sent.get(room) != Some(&pinned) {
+                self.pins_sent.insert(room.to_owned(), pinned.clone());
+                self.emit(Event::Pin { room: room.to_owned(), pinned });
+            }
+        }
         // The files the room's messages carry, when they change (task T330e).
         if let Some(session) = self.session.as_mut() {
             let files: Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)> = session.attachments(room).into_iter().collect();

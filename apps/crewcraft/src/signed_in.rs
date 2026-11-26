@@ -18,8 +18,8 @@ use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
 use crewcraft_proto::request::{
-    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS,
-    MAX_CHUNK, Request, SearchHit,
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_SEARCH,
+    FEATURE_THREADS, MAX_CHUNK, Request, SavedMessage, SearchHit,
 };
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
 use sha2::{Digest, Sha256};
@@ -141,7 +141,8 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
             | FEATURE_REACTIONS
             | FEATURE_ARCHIVE
             | FEATURE_CALLS
-            | FEATURE_FILE_LIST,
+            | FEATURE_FILE_LIST
+            | FEATURE_PINS_SAVED,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -164,7 +165,8 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
             | FEATURE_REACTIONS
             | FEATURE_ARCHIVE
             | FEATURE_CALLS
-            | FEATURE_FILE_LIST,
+            | FEATURE_FILE_LIST
+            | FEATURE_PINS_SAVED,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -202,7 +204,8 @@ pub(crate) fn finish_external(
             | FEATURE_REACTIONS
             | FEATURE_ARCHIVE
             | FEATURE_CALLS
-            | FEATURE_FILE_LIST,
+            | FEATURE_FILE_LIST
+            | FEATURE_PINS_SAVED,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -367,6 +370,37 @@ impl SignedInSession {
             .iter()
             .map(|(cursor, by_code)| (*cursor, by_code.iter().map(|(code, who)| (*code, who.iter().cloned().collect())).collect()))
             .collect()
+    }
+
+    /// Whether room pins and personal saved messages were negotiated (T343).
+    pub fn pins_saved(&self) -> bool {
+        self.chat.pins_saved()
+    }
+
+    /// Pin or conditionally unpin the message at `target` (T343).
+    pub fn pin(&mut self, room: &str, target: u64, on: bool) -> Result<u64, LabError> {
+        if !valid_room(room) || target == 0 {
+            return Err(LabError::Usage);
+        }
+        self.chat.pin(room, target, on, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// Add or remove the person's bookmark (T343).
+    pub fn save_message(&mut self, room: &str, target: u64, on: bool) -> Result<u64, LabError> {
+        if !valid_room(room) || target == 0 {
+            return Err(LabError::Usage);
+        }
+        self.chat.save_message(room, target, on, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// Every readable saved message in its current state, walking all server pages (T343).
+    pub fn saved_messages(&mut self) -> Result<Vec<SavedMessage>, LabError> {
+        self.chat.saved_messages(0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// The room's current pin, including its body when it is outside the current history page (T343).
+    pub fn pinned(&mut self, room: &str) -> Option<crewcraft_client_core::room_view::PinnedMessage> {
+        self.chat.view(room).and_then(|view| view.pinned_message().cloned())
     }
 
     /// Start a call in `room`, or join its open one (task T360a2); returns the call id.

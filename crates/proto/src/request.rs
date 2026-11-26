@@ -33,6 +33,13 @@
 //!   u64 (`storage_of`)
 //! - tag 17 `React` (task T341a): `str room | u64 target | u8 reaction (1 to push::REACTIONS.len()) | u8 on (0 or 1)`,
 //!   answered `Ok { cursor }` of the reaction's event; announced by `FEATURE_REACTIONS`
+//! - tags 26 to 28 (task T343), announced by `FEATURE_PINS_SAVED`: 26 `Pin` and 27 `SaveMessage` each carry
+//!   `str room | u64 target | u8 on (0 or 1)`. Pin replaces the room's pin, or clears only the matching target, and
+//!   answers with its room event cursor. SaveMessage changes a personal reference and answers `Ok { cursor: 0 }`.
+//!   28 `ListSaved` carries `str after_room (0 to MAX_NAME) | u64 after_cursor`; empty room and zero start the list.
+//!   Its `Ok` counts one saved page, followed by `u8 tag (136) | u32 id | u8 more | u8 n | n × (str room | u64 cursor |
+//!   str author | str html | u8 edited)`. Rows contain current full HTML and are strictly ordered by room and cursor;
+//!   at most `MAX_SAVED_PAGE` rows fit a frame. Continue after the last row while `more` is true. Booleans are 0 or 1.
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
@@ -90,6 +97,12 @@ pub const FEATURE_ARCHIVE: u32 = 32;
 pub const FEATURE_CALLS: u32 = 64;
 /// The handshake feature bit for the file list: `ListFiles` and its files frame (task T331a).
 pub const FEATURE_FILE_LIST: u32 = 128;
+/// The handshake feature bit for pin snapshots and personal saved messages (task T343).
+pub const FEATURE_PINS_SAVED: u32 = 256;
+/// The first byte of a saved-message page.
+pub const SAVED_TAG: u8 = 136;
+/// Sixteen full rendered bodies, including their metadata, fit inside `frame::MAX_FRAME`.
+pub const MAX_SAVED_PAGE: usize = 16;
 /// The first byte of a files frame (task T331a).
 pub const FILES_TAG: u8 = 135;
 /// The most files one files frame lists.
@@ -124,6 +137,9 @@ const CALL_KEY: u8 = 22;
 const CALL_SEAL: u8 = 23;
 const LIST_FILES: u8 = 24;
 const STORAGE_USE: u8 = 25;
+const PIN: u8 = 26;
+const SAVE_MESSAGE: u8 = 27;
+const LIST_SAVED: u8 = 28;
 /// The largest sealed sender key a `CallSeal` carries.
 pub const MAX_SEALED: usize = 256;
 /// The most files one `PostFiles` attaches (task T330c).
@@ -234,6 +250,23 @@ pub enum Request {
     ListFiles,
     /// How much storage the signed-in person's files take, and their quota (task T332a).
     StorageUse,
+    /// Replace the room's pin, or clear it only when it still names `target` (task T343).
+    Pin {
+        room: String,
+        target: u64,
+        on: bool,
+    },
+    /// Add or remove a personal bookmark. It changes no room timeline (task T343).
+    SaveMessage {
+        room: String,
+        target: u64,
+        on: bool,
+    },
+    /// The next saved-message page after this room/cursor pair; empty room and zero start a list (task T343).
+    ListSaved {
+        after_room: String,
+        after_cursor: u64,
+    },
     /// Up to `length` bytes of file `file` from `offset` (task T330d).
     Download {
         file: [u8; 16],
@@ -251,6 +284,23 @@ pub struct SearchHit {
     pub author: String,
     /// The start of the message's current plain text.
     pub snippet: String,
+}
+
+/// A bookmark resolved against its message's current state, never a copied historical body (task T343).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedMessage {
+    pub room: String,
+    pub cursor: u64,
+    pub author: String,
+    pub html: String,
+    pub edited: bool,
+}
+
+/// One page, in ascending `(room, cursor)` order. Continue after its final message when `more` is true.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedPage {
+    pub messages: Vec<SavedMessage>,
+    pub more: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -424,6 +474,22 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.push(*reaction);
             out.push(u8::from(*on));
         }
+        Request::Pin { room, target, on } | Request::SaveMessage { room, target, on } => {
+            out.push(if matches!(request, Request::Pin { .. }) { PIN } else { SAVE_MESSAGE });
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&target.to_be_bytes());
+            out.push(u8::from(*on));
+        }
+        Request::ListSaved { after_room, after_cursor } => {
+            if after_room.is_empty() != (*after_cursor == 0) {
+                return Err(CodecError::FieldLength);
+            }
+            out.push(LIST_SAVED);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, after_room, 0, MAX_NAME)?;
+            out.extend_from_slice(&after_cursor.to_be_bytes());
+        }
         Request::CallKey { room, call, public } => {
             out.push(CALL_KEY);
             out.extend_from_slice(&id.to_be_bytes());
@@ -492,7 +558,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
     let tag = bytes[0];
     if !(1..=6).contains(&tag)
         && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag)
-        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT)
+        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT | PIN | SAVE_MESSAGE | LIST_SAVED)
         && !(CALL_START..=STORAGE_USE).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));
@@ -582,6 +648,24 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
                 [other] => return Err(CodecError::BadKind(other)),
             };
             Request::React { room, target, reaction, on }
+        }
+        PIN | SAVE_MESSAGE => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let target = read_u64(bytes, &mut pos)?;
+            let on = match read_array::<1>(bytes, &mut pos)? {
+                [0] => false,
+                [1] => true,
+                [other] => return Err(CodecError::BadKind(other)),
+            };
+            if tag == PIN { Request::Pin { room, target, on } } else { Request::SaveMessage { room, target, on } }
+        }
+        LIST_SAVED => {
+            let after_room = read_string(bytes, &mut pos, 0, MAX_NAME)?;
+            let after_cursor = read_u64(bytes, &mut pos)?;
+            if after_room.is_empty() != (after_cursor == 0) {
+                return Err(CodecError::FieldLength);
+            }
+            Request::ListSaved { after_room, after_cursor }
         }
         CALL_START => {
             let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
@@ -950,4 +1034,159 @@ pub fn decode_bytes(bytes: &[u8]) -> Result<(u32, Vec<u8>), CodecError> {
         return Err(CodecError::TrailingBytes);
     }
     Ok((id, data))
+}
+
+/// Encode one bounded page of current saved messages (task T343). Rows are strictly ordered so pagination advances.
+pub fn encode_saved(id: u32, page: &SavedPage) -> Result<Vec<u8>, CodecError> {
+    check_saved_page(page)?;
+    let mut out = vec![SAVED_TAG];
+    out.extend_from_slice(&id.to_be_bytes());
+    out.push(u8::from(page.more));
+    out.push(page.messages.len() as u8);
+    for message in &page.messages {
+        write_str(&mut out, &message.room, 1, MAX_NAME)?;
+        out.extend_from_slice(&message.cursor.to_be_bytes());
+        write_str(&mut out, &message.author, 1, MAX_AUTHOR)?;
+        write_str(&mut out, &message.html, 0, crate::push::MAX_HTML)?;
+        out.push(u8::from(message.edited));
+    }
+    if out.len() > crate::frame::MAX_FRAME {
+        return Err(CodecError::FieldLength);
+    }
+    Ok(out)
+}
+
+/// Decode exactly one saved-message page, refusing malformed booleans, ordering, counts and trailing bytes.
+pub fn decode_saved(bytes: &[u8]) -> Result<(u32, SavedPage), CodecError> {
+    let Some(&tag) = bytes.first() else { return Err(CodecError::Truncated) };
+    if tag != SAVED_TAG {
+        return Err(CodecError::BadKind(tag));
+    }
+    let mut pos = 1;
+    let id = read_u32(bytes, &mut pos)?;
+    let more = read_bool(bytes, &mut pos)?;
+    let [count] = read_array::<1>(bytes, &mut pos)?;
+    let count = usize::from(count);
+    if count > MAX_SAVED_PAGE || bytes.len() > crate::frame::MAX_FRAME {
+        return Err(CodecError::FieldLength);
+    }
+    let mut messages = Vec::with_capacity(count);
+    for _ in 0..count {
+        let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+        let cursor = read_u64(bytes, &mut pos)?;
+        let author = read_string(bytes, &mut pos, 1, MAX_AUTHOR)?;
+        let html = read_string(bytes, &mut pos, 0, crate::push::MAX_HTML)?;
+        let edited = read_bool(bytes, &mut pos)?;
+        messages.push(SavedMessage { room, cursor, author, html, edited });
+    }
+    if pos != bytes.len() {
+        return Err(CodecError::TrailingBytes);
+    }
+    let page = SavedPage { messages, more };
+    check_saved_page(&page)?;
+    Ok((id, page))
+}
+
+fn read_bool(bytes: &[u8], pos: &mut usize) -> Result<bool, CodecError> {
+    match read_array::<1>(bytes, pos)? {
+        [0] => Ok(false),
+        [1] => Ok(true),
+        [other] => Err(CodecError::BadKind(other)),
+    }
+}
+
+fn check_saved_page(page: &SavedPage) -> Result<(), CodecError> {
+    if page.messages.len() > MAX_SAVED_PAGE
+        || (page.more && page.messages.is_empty())
+        || page.messages.iter().any(|message| message.cursor == 0)
+        || page.messages.windows(2).any(|pair| (pair[0].room.as_str(), pair[0].cursor) >= (pair[1].room.as_str(), pair[1].cursor))
+    {
+        return Err(CodecError::FieldLength);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod pins_saved_tests {
+    use super::*;
+
+    fn message(cursor: u64, html: &str) -> SavedMessage {
+        SavedMessage { room: "room".into(), cursor, author: "author".into(), html: html.into(), edited: false }
+    }
+
+    #[test]
+    fn pin_and_save_requests_refuse_malformed_booleans_and_continuations() {
+        for (tag, request) in [
+            (PIN, Request::Pin { room: "room".into(), target: 4, on: true }),
+            (SAVE_MESSAGE, Request::SaveMessage { room: "room".into(), target: 4, on: false }),
+        ] {
+            let mut bytes = encode_request(7, &request).unwrap();
+            assert_eq!(bytes[0], tag);
+            assert_eq!(decode_request(&bytes).unwrap(), (7, request));
+            let last = bytes.len() - 1;
+            bytes[last] = 2;
+            assert_eq!(decode_request(&bytes), Err(CodecError::BadKind(2)));
+        }
+        for (after_room, after_cursor) in [(String::new(), 0), ("room".into(), 4)] {
+            let request = Request::ListSaved { after_room, after_cursor };
+            assert_eq!(decode_request(&encode_request(8, &request).unwrap()).unwrap(), (8, request));
+        }
+        for tag in [0, 7, 13, 29, 63, 128, SAVED_TAG, 255] {
+            assert_eq!(decode_request(&[tag]), Err(CodecError::BadKind(tag)));
+        }
+        assert!(encode_request(8, &Request::ListSaved { after_room: String::new(), after_cursor: 4 }).is_err());
+        assert!(encode_request(8, &Request::ListSaved { after_room: "room".into(), after_cursor: 0 }).is_err());
+        let mut bytes = encode_request(8, &Request::ListSaved { after_room: String::new(), after_cursor: 0 }).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] = 4;
+        assert_eq!(decode_request(&bytes), Err(CodecError::FieldLength));
+    }
+
+    #[test]
+    fn a_maximum_saved_page_fits_one_frame_with_full_bodies() {
+        let messages = (1..=MAX_SAVED_PAGE)
+            .map(|cursor| SavedMessage {
+                room: "r".repeat(MAX_NAME),
+                cursor: cursor as u64,
+                author: "a".repeat(MAX_AUTHOR),
+                html: "x".repeat(crate::push::MAX_HTML),
+                edited: true,
+            })
+            .collect();
+        let page = SavedPage { messages, more: true };
+        let bytes = encode_saved(19, &page).unwrap();
+        assert!(bytes.len() <= crate::frame::MAX_FRAME);
+        assert!(crate::frame::encode(&bytes).is_ok());
+        assert_eq!(decode_saved(&bytes).unwrap(), (19, page));
+    }
+
+    #[test]
+    fn saved_pages_accept_empty_bodies_and_refuse_bad_rows_counts_and_trailing_bytes() {
+        let page = SavedPage { messages: vec![message(1, "")], more: false };
+        let bytes = encode_saved(2, &page).unwrap();
+        assert_eq!(decode_saved(&bytes).unwrap(), (2, page));
+        for end in 0..bytes.len() {
+            assert!(decode_saved(&bytes[..end]).is_err());
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert_eq!(decode_saved(&trailing), Err(CodecError::TrailingBytes));
+        let mut bad_more = bytes.clone();
+        bad_more[5] = 2;
+        assert_eq!(decode_saved(&bad_more), Err(CodecError::BadKind(2)));
+        let mut bad_count = bytes.clone();
+        bad_count[6] = (MAX_SAVED_PAGE + 1) as u8;
+        assert_eq!(decode_saved(&bad_count), Err(CodecError::FieldLength));
+        let mut bad_edited = bytes.clone();
+        let last = bad_edited.len() - 1;
+        bad_edited[last] = 2;
+        assert_eq!(decode_saved(&bad_edited), Err(CodecError::BadKind(2)));
+        let mut duplicate = bytes.clone();
+        duplicate[6] = 2;
+        duplicate.extend_from_slice(&bytes[7..]);
+        assert_eq!(decode_saved(&duplicate), Err(CodecError::FieldLength));
+        assert!(encode_saved(2, &SavedPage { messages: Vec::new(), more: true }).is_err());
+        assert!(encode_saved(2, &SavedPage { messages: vec![message(0, "x")], more: false }).is_err());
+    }
 }

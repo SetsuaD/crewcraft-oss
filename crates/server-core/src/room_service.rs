@@ -35,6 +35,10 @@ pub enum EventKind {
         reaction: u8,
         on: bool,
     },
+    /// The room's pin after a change; zero means unpinned. Its snapshot is sent separately (task T343).
+    Pinned {
+        target: u64,
+    },
     /// A call's history line (task T360a1): its start, or its end (`ended`). The text is in the event's `html`.
     CallLine {
         call: u64,
@@ -86,6 +90,9 @@ pub struct RoomService {
     deleted: HashSet<u64>,
     /// Who reacted to each message, by its cursor (task T341a).
     reactions: HashMap<u64, Reactions>,
+    pinned: Option<u64>,
+    /// The memory-only server keeps its pin's body after the bounded event log advances.
+    pin_body: Option<(String, String, bool)>,
     /// An archive room (docs/IMPORT.md, task T350a): it never accepts writes again.
     read_only: bool,
 }
@@ -99,6 +106,8 @@ impl RoomService {
             markers: ReadMarkers::new(),
             deleted: HashSet::new(),
             reactions: HashMap::new(),
+            pinned: None,
+            pin_body: None,
             read_only: false,
         }
     }
@@ -211,7 +220,15 @@ impl RoomService {
             return Err(ServiceError::Room(RoomError::NotMember));
         }
         let event = self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
-        if event.actor != actor || self.read_only {
+        self.edit_validated(actor, target, &event.actor, text)
+    }
+
+    /// The durable caller supplies the author from its live full-history projection.
+    pub(crate) fn edit_validated(&mut self, actor: &str, target: u64, author: &str, text: &str) -> Result<u64, ServiceError> {
+        if self.room.role(actor).is_none() {
+            return Err(ServiceError::Room(RoomError::NotMember));
+        }
+        if author != actor || self.read_only {
             return Err(ServiceError::NotAllowed);
         }
         let trimmed = Self::check_text(text)?;
@@ -219,6 +236,9 @@ impl RoomService {
         let mention_list = mentions(&trimmed);
         let mentions: Vec<String> = mention_list.into_iter().filter(|m| self.room.role(m).is_some()).filter(|m| m != actor).collect();
         let new_event = Event { cursor: self.log.head() + 1, actor: actor.to_string(), kind: EventKind::Edited { target }, html, mentions };
+        if self.pinned == Some(target) {
+            self.pin_body = Some((actor.to_owned(), new_event.html.clone(), true));
+        }
         Ok(self.log.append(new_event))
     }
 
@@ -227,12 +247,20 @@ impl RoomService {
     /// Clears the target and every held revision in place, then appends `Deleted { target }`.
     /// The target can then be neither edited nor deleted again.
     pub fn delete(&mut self, actor: &str, target: u64) -> Result<u64, ServiceError> {
+        if self.room.role(actor).is_none() {
+            return Err(ServiceError::Room(RoomError::NotMember));
+        }
+        let event = self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
+        self.delete_validated(actor, target, &event.actor)
+    }
+
+    /// The durable caller supplies the author from its live full-history projection.
+    pub(crate) fn delete_validated(&mut self, actor: &str, target: u64, author: &str) -> Result<u64, ServiceError> {
         let role = match self.room.role(actor) {
             Some(r) => r,
             None => return Err(ServiceError::Room(RoomError::NotMember)),
         };
-        let event = self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
-        if (event.actor != actor && role < Role::Admin) || self.read_only {
+        if (author != actor && role < Role::Admin) || self.read_only {
             return Err(ServiceError::NotAllowed);
         }
         Ok(self.redact(actor, target))
@@ -253,6 +281,10 @@ impl RoomService {
         }
         self.deleted.insert(target);
         self.reactions.remove(&target);
+        if self.pinned == Some(target) {
+            self.pinned = None;
+            self.pin_body = None;
+        }
         let new_event = Event {
             cursor: self.log.head() + 1,
             actor: actor.to_string(),
@@ -317,6 +349,82 @@ impl RoomService {
     /// Who reacted to the message at `target` (task T341a); empty when no one has.
     pub fn reactions(&self, target: u64) -> Reactions {
         self.reactions.get(&target).cloned().unwrap_or_default()
+    }
+
+    /// Replace the room's pin, or clear it only when it still points at `target` (task T343).
+    pub fn pin(&mut self, actor: &str, target: u64, on: bool) -> Result<u64, ServiceError> {
+        self.check_pin_access(actor)?;
+        if on {
+            self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
+            self.pin_body = self.message_content(target);
+        }
+        Ok(self.set_pin(actor, target, on))
+    }
+
+    /// For a durable caller that checked the live target against its full-history current-message projection.
+    pub(crate) fn pin_validated(&mut self, actor: &str, target: u64, on: bool) -> Result<u64, ServiceError> {
+        self.check_pin_access(actor)?;
+        if on {
+            self.pin_body = self.message_content(target);
+        }
+        Ok(self.set_pin(actor, target, on))
+    }
+
+    pub(crate) fn check_pin_access(&self, actor: &str) -> Result<(), ServiceError> {
+        if self.room.role(actor).is_none() {
+            return Err(ServiceError::Room(RoomError::NotMember));
+        }
+        if !self.room.can_post(actor) || self.read_only {
+            return Err(ServiceError::NotAllowed);
+        }
+        Ok(())
+    }
+
+    fn set_pin(&mut self, actor: &str, target: u64, on: bool) -> u64 {
+        if on {
+            self.pinned = Some(target);
+        } else if self.pinned == Some(target) {
+            self.pinned = None;
+            self.pin_body = None;
+        }
+        let event = Event {
+            cursor: self.log.head() + 1,
+            actor: actor.to_owned(),
+            kind: EventKind::Pinned { target: self.pinned.unwrap_or(0) },
+            html: String::new(),
+            mentions: Vec::new(),
+        };
+        self.log.append(event)
+    }
+
+    /// The current pinned message, independently of the bounded room event log.
+    pub fn pinned(&self) -> Option<u64> {
+        self.pinned
+    }
+
+    /// The pinned body for a memory-only connection; durable connections use their full-history projection.
+    pub(crate) fn pinned_content(&self) -> Option<(u64, String, String, bool)> {
+        let target = self.pinned?;
+        let (author, html, edited) = self.pin_body.as_ref()?;
+        Some((target, author.clone(), html.clone(), *edited))
+    }
+
+    fn message_content(&self, target: u64) -> Option<(String, String, bool)> {
+        let post = self.find_posted(target)?;
+        let mut html = post.html;
+        let mut edited = false;
+        for (_, event) in self.all_events() {
+            if matches!(event.kind, EventKind::Edited { target: at } if at == target) {
+                html = event.html;
+                edited = true;
+            }
+        }
+        Some((post.actor, html, edited))
+    }
+
+    /// Whether this cursor was redacted, including an imported deletion (task T343).
+    pub(crate) fn is_deleted(&self, target: u64) -> bool {
+        self.deleted.contains(&target)
     }
 
     /// The events after `cursor` (as `EventLog::since`), for members only (`Room(NotMember)` otherwise).
@@ -398,5 +506,48 @@ impl RoomService {
                 Since::Gap { .. } => Vec::new(),
             },
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod pins_saved_tests {
+    use super::*;
+
+    #[test]
+    fn stale_unpin_and_deleted_targets_cannot_replace_a_newer_pin() {
+        let mut room = RoomService::new("owner", 8);
+        let first = room.post("owner", "first").unwrap();
+        let second = room.post("owner", "second").unwrap();
+        room.pin("owner", first, true).unwrap();
+        room.pin("owner", second, true).unwrap();
+        room.delete("owner", first).unwrap();
+        room.pin("owner", first, false).unwrap();
+        assert_eq!(room.pinned(), Some(second));
+        assert_eq!(room.pin("owner", first, true), Err(ServiceError::NoSuchMessage));
+        assert_eq!(room.pinned(), Some(second));
+        room.delete("owner", second).unwrap();
+        assert_eq!(room.pinned(), None);
+        assert_eq!(room.pinned_content(), None);
+    }
+
+    #[test]
+    fn an_old_pin_keeps_current_text_and_validated_operations_keep_authorization() {
+        let mut room = RoomService::new("owner", 2);
+        room.add_member("owner", "member", Role::Member).unwrap();
+        let old = room.post("owner", "old text").unwrap();
+        room.pin("owner", old, true).unwrap();
+        room.post("owner", "a later post").unwrap();
+        room.post("owner", "another later post").unwrap();
+        assert!(matches!(room.sync("owner", 0).unwrap(), Since::Gap { .. }));
+        assert_eq!(room.pinned(), Some(old));
+        assert_eq!(room.edit_validated("member", old, "owner", "forged"), Err(ServiceError::NotAllowed));
+        assert_eq!(room.delete_validated("member", old, "owner"), Err(ServiceError::NotAllowed));
+        room.edit_validated("owner", old, "owner", "current text").unwrap();
+        let (target, author, html, edited) = room.pinned_content().unwrap();
+        assert_eq!((target, author, edited), (old, "owner".to_owned(), true));
+        assert!(html.contains("current text"));
+        room.delete_validated("owner", old, "owner").unwrap();
+        assert_eq!(room.pinned(), None);
     }
 }
