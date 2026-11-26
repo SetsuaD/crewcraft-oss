@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 crewcraft-client-core.workspace = true
+# How an invitation link says the person signs in (T611k).
+crewcraft-enroll.workspace = true
 # The reaction names (T341b).
 crewcraft-proto.workspace = true
 # Themes and the appearance settings file (T314).

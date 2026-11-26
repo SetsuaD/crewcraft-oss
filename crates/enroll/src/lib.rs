@@ -13,7 +13,7 @@
 pub mod invitation;
 pub mod server_trust;
 
-pub use invitation::InvitationLink;
+pub use invitation::{InvitationLink, SignInWay};
 
 use zeroize::Zeroize;
 
