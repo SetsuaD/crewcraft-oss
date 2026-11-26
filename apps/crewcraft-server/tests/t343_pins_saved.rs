@@ -164,8 +164,11 @@ impl Person {
         let csr = CertificateParams::new(Vec::<String>::new()).unwrap().serialize_request(&key).unwrap();
         let spki = key.subject_public_key_info();
         let request = EnrollmentRequest { device_name: "Synthetic Device", csr: csr.der().as_ref(), password: PASSWORD, expected_spki: &spki };
-        let chain =
-            endpoint.open_bootstrap(&self.invitation, WAIT).unwrap().enroll(request, |_, _| FirstTotpCode::parse(self.code_at(clock_now(clock)))).unwrap();
+        let chain = endpoint
+            .open_bootstrap(&self.invitation, WAIT)
+            .unwrap()
+            .enroll(request, |_, _| FirstTotpCode::parse(self.code_at(clock_now(clock))))
+            .unwrap();
         let mut roots = RootCertStore::empty();
         roots.add(CertificateDer::from(endpoint.root_der().to_vec())).unwrap();
         let identity = (vec![chain.leaf, chain.issuer], PrivatePkcs8KeyDer::from(key.serialize_der()).into());
