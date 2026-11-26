@@ -1,0 +1,20 @@
+{
+  "id": "T610-oidc-checks",
+  "title": "Sign-in through an external OpenID Connect provider: the checks (no network)",
+  "crate": "crewcraft-oidc",
+  "files": [
+    "crates/oidc/Cargo.toml",
+    "crates/oidc/src/lib.rs",
+    "crates/oidc/tests/fixtures/",
+    "Cargo.lock"
+  ],
+  "test_path": "crates/oidc/tests/t610_oidc_checks.rs",
+  "test_cmd": "cargo test -p crewcraft-oidc --test t610_oidc_checks",
+  "depends_on": [],
+  "spec": "parse_discovery reads issuer, authorization_endpoint, token_endpoint and jwks_uri, refuses an issuer other than the configured one exactly and any endpoint that is not https. pkce(32 random bytes) gives RFC 7636's base64url verifier and S256 challenge (appendix B vector), Debug hiding the verifier; authorization_url builds the code-flow URL with percent-encoded client_id, redirect_uri, scope 'openid email profile', state, nonce, code_challenge and S256, appending to an endpoint that already has a query. parse_jwks keeps RSA keys and EC P-256 keys (uncompressed point), skips encryption keys and other types or curves, refuses a set with none. verify_signature accepts only RS256 (RSA PKCS#1 v1.5, 2048 to 8192 bits) and ES256 (P-256 fixed signatures), refusing none, HMAC and every other algorithm; a kid picks that key only; the RFC 7515 A.2 and A.3 examples verify and a changed payload does not. verify_id_token then checks iss exactly, aud contains the client (azp must name it with several audiences or when present), exp and nbf and iat with 60 s leeway, the nonce in constant time, a non-empty sub of at most 255 bytes, and with require_mfa that amr contains mfa; it returns issuer, subject, email, email_verified, name and amr.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md",
+    "docs/AUTHORIZER.md"
+  ]
+}
