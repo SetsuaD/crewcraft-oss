@@ -756,7 +756,7 @@ impl Window {
                 let mut action = None;
                 let files = self.message_files.get(&room).cloned().unwrap_or_default();
                 let replies = self.reply_counts(&room);
-        let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
+                let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
                 let threads = self.threads.get(&room).cloned().unwrap_or_default();
                 let look = Bubbles {
                     me: &me,
@@ -1177,7 +1177,10 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
     // The reactions to choose from, for a selected message (T341b).
     if let Some(cursor) = message_cursor.filter(|cursor| Some(*cursor) == selected) {
         let yours = |code: u8| {
-            look.reactions.get(&cursor).and_then(|by_code| by_code.iter().find(|(c, _)| *c == code)).is_some_and(|(_, people)| people.iter().any(|p| p == me))
+            look.reactions
+                .get(&cursor)
+                .and_then(|by_code| by_code.iter().find(|(c, _)| *c == code))
+                .is_some_and(|(_, people)| people.iter().any(|p| p == me))
         };
         let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
         ui.with_layout(layout, |ui| {
