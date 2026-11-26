@@ -1,0 +1,19 @@
+{
+  "id": "T320a-search-index",
+  "title": "The durable server keeps message search current",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/durable.rs"
+  ],
+  "test_path": "crates/server-core/tests/t320a_durable_search.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t320a_durable_search",
+  "depends_on": [
+    "T142-room-search",
+    "T144-durable-server"
+  ],
+  "spec": "DurableServer keeps a RoomSearch up to date: every accepted post, edit and deletion, and every one replayed when the journal is opened, is indexed from the event the room just recorded. DurableServer::search(user, query, limit) returns at most MAX_SEARCH_HITS hits (room, cursor), newest first, only from rooms the user is a member of now; every word of the query must start a word of the message; an edit is found by its new text at the message's cursor; a deleted message is not found; an empty query finds nothing. Reopening the journal gives the same results.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md"
+  ]
+}
