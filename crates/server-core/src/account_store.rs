@@ -12,6 +12,9 @@
 //! that does not apply refuses the whole open (fail closed; no partially initialised store is ever returned).
 //! Writer health: an append whose outcome on disk is unknown poisons the store until it is reopened; a poisoned store
 //! refuses every write, every device admission and every session check.
+//! Task T611b adds, for sign-in through an external OpenID Connect provider (SECURITY-DESIGN.md section 9), each
+//! person's binding to one provider `(issuer, subject)` (unique across people) and their authorization record from an
+//! external authorizer (`crewcraft_authz::Record`), which the store keeps for the authorizer rules as their `Ledger`.
 //! Does not own: verifying a TOTP code or a password (the caller does that and passes the accepted counter), or how the
 //! certificate reaches the client.
 //! Called by: the server's enrollment, sign-in and connection paths.
@@ -90,6 +93,8 @@ pub enum StoreError {
     NotActiveLeaf,
     /// A session with this token hash already exists, or none does (for a revocation).
     Session,
+    /// This provider identity is already bound to another person (T611b).
+    ExternalInUse,
 }
 
 impl fmt::Display for StoreError {
@@ -173,6 +178,11 @@ pub struct AccountStore<L: AppendLog = AccountJournal> {
     /// The issued leaf certificate by device id.
     certificates: BTreeMap<u64, Vec<u8>>,
     sessions: Sessions,
+    /// The person each external `(issuer, subject)` signs in as, and the reverse (T611b).
+    external: BTreeMap<(String, String), String>,
+    bound: BTreeMap<String, (String, String)>,
+    /// Each person's authorization record from an external authorizer (T611b).
+    authorization: BTreeMap<String, crewcraft_authz::Record>,
     poisoned: bool,
 }
 
@@ -222,6 +232,9 @@ impl<L: AppendLog> AccountStore<L> {
             keys: BTreeMap::new(),
             certificates: BTreeMap::new(),
             sessions: Sessions::new(),
+            external: BTreeMap::new(),
+            bound: BTreeMap::new(),
+            authorization: BTreeMap::new(),
             poisoned: false,
         }
     }
@@ -282,6 +295,22 @@ impl<L: AppendLog> AccountStore<L> {
     /// Whether `op` applies to the current state. Used both before journaling a change and while replaying one.
     fn check(&self, op: &AccountOp) -> Result<(), StoreError> {
         match op {
+            AccountOp::ExternalBound { email, issuer, subject } => {
+                canonical(email)?;
+                field(issuer)?;
+                field(subject)?;
+                if !self.people.contains_key(email) {
+                    return Err(StoreError::NoSuchPerson);
+                }
+                match self.external.get(&(issuer.clone(), subject.clone())) {
+                    Some(owner) if owner != email => Err(StoreError::ExternalInUse),
+                    _ => Ok(()),
+                }
+            }
+            AccountOp::AuthorizationRecorded { email, .. } => {
+                canonical(email)?;
+                if self.people.contains_key(email) { Ok(()) } else { Err(StoreError::NoSuchPerson) }
+            }
             AccountOp::Created { .. } => Err(StoreError::Codec(CodecError::BadKind(1))),
             AccountOp::InviteIssued { email, bootstrap_pub, expires_ms, now_ms } => {
                 canonical(email)?;
@@ -370,6 +399,18 @@ impl<L: AppendLog> AccountStore<L> {
     /// Apply a checked op. An error here after `check` passed is a bug (the caller poisons the store).
     fn apply(&mut self, op: &AccountOp) -> Result<(), StoreError> {
         match op {
+            AccountOp::ExternalBound { email, issuer, subject } => {
+                if let Some(old) = self.bound.remove(email) {
+                    self.external.remove(&old);
+                }
+                self.external.insert((issuer.clone(), subject.clone()), email.clone());
+                self.bound.insert(email.clone(), (issuer.clone(), subject.clone()));
+                Ok(())
+            }
+            AccountOp::AuthorizationRecorded { email, record } => {
+                self.authorization.insert(email.clone(), record.clone());
+                Ok(())
+            }
             AccountOp::Created { .. } => Err(StoreError::Codec(CodecError::BadKind(1))),
             AccountOp::InviteIssued { email, bootstrap_pub, expires_ms, now_ms } => self
                 .invites
@@ -602,6 +643,28 @@ impl<L: AppendLog> AccountStore<L> {
         self.sessions.stored_keys()
     }
 
+    /// Bind `email`'s person to an external provider's `(issuer, subject)` (T611b): from then on, an ID token for that
+    /// subject signs in as this person. Re-binding replaces the earlier binding; a subject bound to another person is
+    /// `ExternalInUse`.
+    pub fn bind_external(&mut self, email: &str, issuer: &str, subject: &str) -> Result<(), StoreError> {
+        self.commit(AccountOp::ExternalBound { email: email.to_string(), issuer: issuer.to_string(), subject: subject.to_string() })
+    }
+
+    /// The person an external `(issuer, subject)` is bound to.
+    pub fn person_for_external(&self, issuer: &str, subject: &str) -> Option<&str> {
+        self.external.get(&(issuer.to_string(), subject.to_string())).map(String::as_str)
+    }
+
+    /// The external `(issuer, subject)` a person is bound to.
+    pub fn external_of(&self, email: &str) -> Option<(&str, &str)> {
+        self.bound.get(email).map(|(issuer, subject)| (issuer.as_str(), subject.as_str()))
+    }
+
+    /// The person's last stored authorization record (T611b).
+    pub fn authorization(&self, email: &str) -> Option<&crewcraft_authz::Record> {
+        self.authorization.get(email)
+    }
+
     pub fn person(&self, email: &str) -> Option<PersonInfo> {
         if self.poisoned {
             return None;
@@ -672,5 +735,23 @@ fn canonical(email: &str) -> Result<(), StoreError> {
     match normalize_email(email) {
         Ok(normal) if normal == email => Ok(()),
         _ => Err(StoreError::NotCanonical),
+    }
+}
+
+/// The account store keeps authorization records for the authorizer rules (`crewcraft_authz`, T611b). `commit` returns
+/// only once the record is on disk and applied (the store's validate, append, apply order); `read_back` reads the
+/// applied state, and refuses while the store is poisoned, so `commit_decision` grants nothing after an unknown write.
+impl<L: AppendLog> crewcraft_authz::Ledger for AccountStore<L> {
+    type Error = StoreError;
+
+    fn commit(&mut self, identity: &str, record: &crewcraft_authz::Record) -> Result<(), StoreError> {
+        AccountStore::commit(self, AccountOp::AuthorizationRecorded { email: identity.to_string(), record: record.clone() })
+    }
+
+    fn read_back(&self, identity: &str) -> Result<Option<crewcraft_authz::Record>, StoreError> {
+        if self.poisoned {
+            return Err(StoreError::Poisoned);
+        }
+        Ok(self.authorization.get(identity).cloned())
     }
 }

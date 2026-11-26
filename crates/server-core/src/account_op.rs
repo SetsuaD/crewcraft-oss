@@ -20,6 +20,11 @@
 //! - tag 10 `SignedIn`: `str email | u64 device id | u64 accepted TOTP counter | 32 SHA-256 of the session token |
 //!   u64 created_ms`: a sign-in's counter and its session in ONE record, so issuance and replay defence agree after a
 //!   crash.
+//! - tag 11 `ExternalBound`: `str email | str issuer | str subject`: the person signs in through that external OpenID
+//!   Connect provider as that subject (task T611b, SECURITY-DESIGN.md section 9). A later record re-binds.
+//! - tag 12 `AuthorizationRecorded`: `str email | u8 has grant | [u8 count | count x str capability | u64 revision |
+//!   u64 confirmed_at | u64 fresh_until] | u8 has denial | [u64 denied revision] | u64 highest revision |
+//!   u64 next check`: the person's whole `crewcraft_authz::Record`, replacing the last one (task T611b).
 //!
 //! A raw session token is never in a record: only its SHA-256.
 //!
@@ -29,6 +34,8 @@
 use std::fmt;
 
 use crewcraft_proto::message::CodecError;
+
+use crewcraft_authz::{Capabilities, Capability, Grant, Record};
 
 use crate::seal::{KEY_ID_BYTES, NONCE_BYTES, Sealed, TAG_BYTES};
 
@@ -108,6 +115,15 @@ pub enum AccountOp {
         token_sha256: [u8; 32],
         created_ms: u64,
     },
+    ExternalBound {
+        email: String,
+        issuer: String,
+        subject: String,
+    },
+    AuthorizationRecorded {
+        email: String,
+        record: Record,
+    },
 }
 
 impl fmt::Debug for AccountOp {
@@ -126,6 +142,15 @@ impl fmt::Debug for AccountOp {
             AccountOp::SessionRevoked { .. } => f.write_str("SessionRevoked { .. }"),
             AccountOp::SignedIn { email, device_id, counter, .. } => {
                 write!(f, "SignedIn {{ email: {email:?}, device_id: {device_id}, counter: {counter}, .. }}")
+            }
+            AccountOp::ExternalBound { email, issuer, .. } => write!(f, "ExternalBound {{ email: {email:?}, issuer: {issuer:?}, .. }}"),
+            AccountOp::AuthorizationRecorded { email, record } => {
+                write!(
+                    f,
+                    "AuthorizationRecorded {{ email: {email:?}, granted: {}, denied: {}, .. }}",
+                    record.grant.is_some(),
+                    record.denied_revision.is_some()
+                )
             }
         }
     }
@@ -212,6 +237,39 @@ pub fn encode_account_op(op: &AccountOp) -> Result<Vec<u8>, CodecError> {
             out.extend_from_slice(token_sha256);
             out.extend_from_slice(&created_ms.to_be_bytes());
         }
+        AccountOp::ExternalBound { email, issuer, subject } => {
+            out.push(11);
+            put_str(&mut out, email)?;
+            put_str(&mut out, issuer)?;
+            put_str(&mut out, subject)?;
+        }
+        AccountOp::AuthorizationRecorded { email, record } => {
+            out.push(12);
+            put_str(&mut out, email)?;
+            match &record.grant {
+                None => out.push(0),
+                Some(grant) => {
+                    out.push(1);
+                    let names = grant.capabilities.names();
+                    out.push(u8::try_from(names.len()).map_err(|_| CodecError::FieldLength)?);
+                    for name in names {
+                        put_str(&mut out, name)?;
+                    }
+                    out.extend_from_slice(&grant.revision.to_be_bytes());
+                    out.extend_from_slice(&grant.confirmed_at.to_be_bytes());
+                    out.extend_from_slice(&grant.fresh_until.to_be_bytes());
+                }
+            }
+            match record.denied_revision {
+                None => out.push(0),
+                Some(denied) => {
+                    out.push(1);
+                    out.extend_from_slice(&denied.to_be_bytes());
+                }
+            }
+            out.extend_from_slice(&record.highest_revision.to_be_bytes());
+            out.extend_from_slice(&record.next_check_at.to_be_bytes());
+        }
     }
     Ok(out)
 }
@@ -254,6 +312,35 @@ pub fn decode_account_op(bytes: &[u8]) -> Result<AccountOp, CodecError> {
         8 => AccountOp::SessionCreated { token_sha256: r.array()?, email: r.str()?, device_id: r.u64()?, created_ms: r.u64()? },
         9 => AccountOp::SessionRevoked { token_sha256: r.array()? },
         10 => AccountOp::SignedIn { email: r.str()?, device_id: r.u64()?, counter: r.u64()?, token_sha256: r.array()?, created_ms: r.u64()? },
+        11 => AccountOp::ExternalBound { email: r.str()?, issuer: r.str()?, subject: r.str()? },
+        12 => {
+            let email = r.str()?;
+            let grant = match r.u8()? {
+                0 => None,
+                1 => {
+                    let count = r.u8()?;
+                    let mut names = Vec::with_capacity(usize::from(count));
+                    for _ in 0..count {
+                        let name = r.str()?;
+                        // A stored record names only capabilities this code knows: anything else is corruption.
+                        if Capability::parse(&name).is_none() {
+                            return Err(CodecError::FieldLength);
+                        }
+                        names.push(name);
+                    }
+                    let capabilities = Capabilities::from_names(names.iter().map(String::as_str));
+                    Some(Grant { capabilities, revision: r.u64()?, confirmed_at: r.u64()?, fresh_until: r.u64()? })
+                }
+                other => return Err(CodecError::BadKind(other)),
+            };
+            let denied_revision = match r.u8()? {
+                0 => None,
+                1 => Some(r.u64()?),
+                other => return Err(CodecError::BadKind(other)),
+            };
+            let record = Record { grant, denied_revision, highest_revision: r.u64()?, next_check_at: r.u64()? };
+            AccountOp::AuthorizationRecorded { email, record }
+        }
         other => return Err(CodecError::BadKind(other)),
     };
     if r.pos != bytes.len() {

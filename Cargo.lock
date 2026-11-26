@@ -1126,6 +1126,7 @@ version = "0.1.0-beta.1"
 dependencies = [
  "chacha20poly1305",
  "crewcraft-accounts",
+ "crewcraft-authz",
  "crewcraft-client-core",
  "crewcraft-proto",
  "crewcraft-totp",
