@@ -568,13 +568,13 @@ fn check_attachments(
 }
 
 /// The body of a post with files: its text, or, when that is empty, the files' names (so every client, also one that
-/// does not show attachments, says what the message is).
+/// does not show attachments, says what the message is). Words, not an emoji: a client's font may have no glyph for one.
 fn attachment_body(files: &HashMap<[u8; 16], StoredFile>, text: &str, posted: &[[u8; 16]]) -> String {
     if !text.trim().is_empty() {
         return text.to_owned();
     }
     let names: Vec<&str> = posted.iter().filter_map(|id| files.get(id).map(|file| file.name.as_str())).collect();
-    format!("\u{1F4CE} {}", names.join(", "))
+    format!("Files: {}", names.join(", "))
 }
 
 /// The room and the person of a change that search indexes: a post, an edit or a deletion.

@@ -62,11 +62,11 @@ fn uploaded_files_wait_on_the_composer_and_send_without_text() {
     h.state_mut().apply(Update::Uploaded { room: ROOM.into(), file: chip(1, "a.txt", 12) });
     h.state_mut().apply(Update::Uploaded { room: ROOM.into(), file: chip(2, "b.png", 2048) });
     h.run();
-    h.get_by_label("\u{1F4CE} a.txt (12 B)");
-    h.get_by_label("\u{1F4CE} b.png (2.0 KB)");
+    h.get_by_label("a.txt (12 B)");
+    h.get_by_label("b.png (2.0 KB)");
     h.get_by_label("Remove a.txt").click();
     h.run();
-    assert!(h.query_by_label("\u{1F4CE} a.txt (12 B)").is_none());
+    assert!(h.query_by_label("a.txt (12 B)").is_none());
     assert_eq!(h.state().pending_files(ROOM), &[chip(2, "b.png", 2048)]);
 
     h.get_by_label("Send").click();
@@ -87,7 +87,7 @@ fn a_messages_files_show_under_it_with_save() {
     h.state_mut().apply(Update::Snapshot { room: ROOM.into(), shown: vec![line] });
     h.state_mut().apply(Update::Attachments { room: ROOM.into(), files: vec![(5, vec![chip(3, "report.pdf", 1_300_000)])] });
     h.run();
-    h.get_by_label("\u{1F4CE} report.pdf (1.2 MB)");
+    h.get_by_label("report.pdf (1.2 MB)");
     h.get_by_label("Save report.pdf").click();
     h.run();
     assert_eq!(

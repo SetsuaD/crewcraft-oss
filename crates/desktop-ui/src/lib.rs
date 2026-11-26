@@ -176,9 +176,10 @@ pub struct FileChip {
 }
 
 impl FileChip {
-    /// The chip's text: the name and a short size, such as `report.pdf (1.2 MB)`.
+    /// The chip's text: the name and a short size, such as `report.pdf (1.2 MB)`. No emoji: the bundled font has
+    /// none, and a missing glyph would draw as a box.
     pub fn label(&self) -> String {
-        format!("\u{1F4CE} {} ({})", self.name, short_size(self.size))
+        format!("{} ({})", self.name, short_size(self.size))
     }
 }
 
