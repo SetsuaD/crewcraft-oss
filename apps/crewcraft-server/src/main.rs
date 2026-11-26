@@ -347,9 +347,7 @@ fn rebind(data: &Path, email: &str, issuer: &str, subject: &str) -> io::Result<(
     }
     let before = installation.accounts.external_of(email).map(|(i, s)| format!("{i} {s}")).unwrap_or_else(|| "none".to_owned());
     installation.accounts.bind_external(email, issuer, subject).map_err(|error| match error {
-        crewcraft_server_core::account_store::StoreError::ExternalInUse => {
-            usage_owned("that identity is already bound to another person".to_owned())
-        }
+        crewcraft_server_core::account_store::StoreError::ExternalInUse => usage_owned("that identity is already bound to another person".to_owned()),
         other => lab_error(other),
     })?;
     let action = crewcraft_server_core::admin::action_text(&["identity.rebind", email, "to", issuer, subject, "was", &before]);
