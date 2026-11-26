@@ -130,6 +130,25 @@ impl ServerEndpoint {
         crate::signed_in::resume(transport, ticket, CLIENT_NAME)
     }
 
+    /// Connect as `device` and begin a sign-in through the server's external identity provider (task T611g). `None`
+    /// when the server offers none.
+    pub fn begin_external(&self, device: Arc<dyn ResolvesClientCert>) -> Result<Option<crate::chat_session::ExternalStart>, LabError> {
+        crate::signed_in::begin_external(self.connect(device)?.transport)
+    }
+
+    /// Connect as `device` and finish that sign-in with the provider's code (task T611g). `email` is the person this
+    /// device is enrolled for.
+    pub fn finish_external(
+        &self,
+        device: Arc<dyn ResolvesClientCert>,
+        email: &str,
+        code: &str,
+        verifier: &str,
+        redirect_uri: &str,
+    ) -> Result<SignedInSession, LabError> {
+        crate::signed_in::finish_external(self.connect(device)?.transport, email, code, verifier, redirect_uri, CLIENT_NAME)
+    }
+
     /// Connect as `device` and ask the server to end the session `ticket` names (task T240).
     pub fn end_session(&self, device: Arc<dyn ResolvesClientCert>, ticket: &ResumeTicket) -> Result<(), LabError> {
         crate::signed_in::end(self.connect(device)?.transport, ticket)

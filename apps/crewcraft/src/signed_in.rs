@@ -121,6 +121,32 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
     Ok(SignedInSession { chat, email: ticket.email().to_owned() })
 }
 
+/// Begin an external sign-in over a fresh device connection (task T611g). `None` when the server offers none.
+pub(crate) fn begin_external(mut stream: Transport) -> Result<Option<crate::chat_session::ExternalStart>, LabError> {
+    let deadline = Instant::now() + OPERATION_TIMEOUT;
+    crate::chat_session::begin_external(&mut stream, |stream: &mut Transport, deadline| stream.get_mut().set_deadline(deadline), deadline)
+        .map_err(LabError::Chat)
+}
+
+/// Finish an external sign-in over a fresh device connection and negotiate the chat protocol (task T611g). `email` is
+/// the person this device is enrolled for.
+pub(crate) fn finish_external(
+    stream: Transport,
+    email: &str,
+    code: &str,
+    verifier: &str,
+    redirect_uri: &str,
+    client: &str,
+) -> Result<SignedInSession, LabError> {
+    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS, client: client.into() };
+    let settings = Settings::new(email);
+    let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
+    let deadline = Instant::now() + OPERATION_TIMEOUT;
+    let chat = ChatSession::finish_external(stream, set_deadline, email, code, verifier, redirect_uri, hello, settings, FRAME_TIMEOUT, deadline)
+        .map_err(LabError::Chat)?;
+    Ok(SignedInSession { chat, email: email.to_owned() })
+}
+
 /// Ask the server to end the session `ticket` names (task T240), over a fresh device connection.
 pub(crate) fn end(mut stream: Transport, ticket: &ResumeTicket) -> Result<(), LabError> {
     let deadline = Instant::now() + OPERATION_TIMEOUT;
