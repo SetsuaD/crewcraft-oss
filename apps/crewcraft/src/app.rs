@@ -521,6 +521,17 @@ impl Controller {
 pub fn worker_update(event: Event) -> Vec<Update> {
     match event {
         Event::Connected | Event::Posted { .. } | Event::Changed { .. } => Vec::new(),
+        Event::Uploaded { room, file, name, size } => vec![Update::Uploaded { room, file: crewcraft_desktop_ui::FileChip { file, name, size } }],
+        Event::Attachments { room, files } => vec![Update::Attachments {
+            room,
+            files: files
+                .into_iter()
+                .map(|(cursor, files)| {
+                    (cursor, files.into_iter().map(|file| crewcraft_desktop_ui::FileChip { file: file.file, name: file.name, size: file.size }).collect())
+                })
+                .collect(),
+        }],
+        Event::Saved { path } => vec![Update::Failed(format!("Saved to {}", path.display()))],
         Event::SearchResults { query, hits } => vec![Update::SearchResults {
             query,
             results: hits

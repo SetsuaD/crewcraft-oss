@@ -125,6 +125,16 @@ pub enum Update {
         query: String,
         results: Vec<SearchResult>,
     },
+    /// A file uploaded to `room`, to attach to the next post there (task T330e).
+    Uploaded {
+        room: String,
+        file: FileChip,
+    },
+    /// The files each message of `room` carries, by cursor (task T330e).
+    Attachments {
+        room: String,
+        files: Vec<(u64, Vec<FileChip>)>,
+    },
     /// The app was opened from an invitation link (task T405): fill in the enrollment form's link field. Ignored
     /// unless the enrollment screen is showing. `Debug` does not show the link, which holds a one-time secret.
     InvitationLink(Zeroizing<String>),
@@ -147,11 +157,37 @@ impl fmt::Debug for Update {
             Self::Unread { room, unread } => f.debug_struct("Unread").field("room", room).field("unread", unread).finish(),
             Self::LastEmail(email) => f.debug_tuple("LastEmail").field(email).finish(),
             Self::SearchResults { query, results } => f.debug_struct("SearchResults").field("query", query).field("results", &results.len()).finish(),
+            Self::Uploaded { room, file } => f.debug_struct("Uploaded").field("room", room).field("name", &file.name).finish(),
+            Self::Attachments { room, files } => f.debug_struct("Attachments").field("room", room).field("messages", &files.len()).finish(),
             Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
             Self::WaitingForBrowser => f.write_str("WaitingForBrowser"),
             Self::Failed(text) => f.debug_tuple("Failed").field(text).finish(),
             Self::SignedOut => f.write_str("SignedOut"),
         }
+    }
+}
+
+/// A file, as a message or the composer shows it (task T330e).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileChip {
+    pub file: [u8; 16],
+    pub name: String,
+    pub size: u64,
+}
+
+impl FileChip {
+    /// The chip's text: the name and a short size, such as `report.pdf (1.2 MB)`.
+    pub fn label(&self) -> String {
+        format!("\u{1F4CE} {} ({})", self.name, short_size(self.size))
+    }
+}
+
+/// A size in bytes, KB or MB, one decimal for the larger units.
+pub fn short_size(bytes: u64) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} B"),
+        1024..1_048_576 => format!("{:.1} KB", bytes as f64 / 1024.0),
+        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
     }
 }
 
@@ -216,12 +252,18 @@ pub struct Window {
     message_query: String,
     /// The last search's query and what it found; while set, the main pane shows the results (T320c).
     results: Option<(String, Vec<SearchResult>)>,
+    /// Files uploaded to attach to the next post, per room (T330e).
+    pending_files: HashMap<String, Vec<FileChip>>,
+    /// The files each message carries, per room and cursor (T330e).
+    message_files: HashMap<String, std::collections::BTreeMap<u64, Vec<FileChip>>>,
 }
 
 /// What the person did to a message in the feed (T316).
 enum MessageAction {
     /// Clicked one of their own messages: select it, or clear the selection.
     Select(u64),
+    /// Save a message's file (T330e).
+    Save(FileChip),
     Edit(u64, String),
     AskDelete,
     Delete(u64),
@@ -337,6 +379,10 @@ impl Window {
                 self.rooms.set_unread(&room, unread);
             }
             Update::SearchResults { query, results } => self.results = Some((query, results)),
+            Update::Uploaded { room, file } => self.pending_files.entry(room).or_default().push(file),
+            Update::Attachments { room, files } => {
+                self.message_files.insert(room, files.into_iter().collect());
+            }
             Update::LastEmail(email) => {
                 if self.email.is_empty() {
                     self.email = email;
@@ -350,6 +396,8 @@ impl Window {
                 self.editing = None;
                 self.results = None;
                 self.message_query.clear();
+                self.pending_files.clear();
+                self.message_files.clear();
                 self.feeds.clear();
                 self.rooms = RoomList::new();
                 self.composer = Composer::new();
@@ -575,14 +623,26 @@ impl Window {
         let bubbles = self.bubbles;
         let (selected, confirming) = (self.selected_message, self.confirm_delete);
         let mut action = None;
+        let files = self.message_files.get(&room).cloned().unwrap_or_default();
         egui::CentralPanel::default_margins().show(ui, |ui| {
             ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
                 for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
-                    action = bubble_ui(ui, row, &me, bubbles, selected, confirming).or(action.take());
+                    action = bubble_ui(ui, row, &me, bubbles, selected, confirming, &files).or(action.take());
                 }
             });
         });
         self.message_action(&room, action);
+        self.take_dropped_files(ui, &room);
+    }
+
+    /// Files dropped onto the window are uploaded to the open room, to attach to the next post (T330e).
+    fn take_dropped_files(&mut self, ui: &Ui, room: &str) {
+        let dropped = ui.ctx().input(|input| input.raw.dropped_files.clone());
+        for file in dropped {
+            if let Some(path) = file.path {
+                self.actions.push(Action::Room(Command::Attach { room: room.to_owned(), path }));
+            }
+        }
     }
 
     /// The phone layout: one pane at a time, a bottom tab bar, and larger touch targets (T402).
@@ -620,10 +680,11 @@ impl Window {
                 let bubbles = self.bubbles;
                 let (selected, confirming) = (self.selected_message, self.confirm_delete);
                 let mut action = None;
+                let files = self.message_files.get(&room).cloned().unwrap_or_default();
                 egui::CentralPanel::default_margins().show(ui, |ui| {
                     ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
                         for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
-                            action = bubble_ui(ui, row, &me, bubbles, selected, confirming).or(action.take());
+                            action = bubble_ui(ui, row, &me, bubbles, selected, confirming, &files).or(action.take());
                         }
                     });
                 });
@@ -701,6 +762,11 @@ impl Window {
         }
     }
 
+    /// The files waiting to be attached to the next post in `room` (T330e).
+    pub fn pending_files(&self, room: &str) -> &[FileChip] {
+        self.pending_files.get(room).map_or(&[], Vec::as_slice)
+    }
+
     /// The last message search's query and how many messages it found, while the results are showing (T320c).
     pub fn search_results(&self) -> Option<(&str, usize)> {
         self.results.as_ref().map(|(query, results)| (query.as_str(), results.len()))
@@ -726,6 +792,9 @@ impl Window {
                 self.confirm_delete = false;
             }
             Some(MessageAction::Keep) => self.confirm_delete = false,
+            Some(MessageAction::Save(chip)) => {
+                self.actions.push(Action::Room(Command::Save { file: chip.file, size: chip.size, name: chip.name, to: None }));
+            }
         }
     }
 
@@ -741,6 +810,22 @@ impl Window {
             });
         }
         let editing = self.editing.as_ref().filter(|(edited_room, _)| edited_room == room).map(|(_, cursor)| *cursor);
+        // Files to attach to this post (T330e): each with a way to take it off again.
+        let pending = self.pending_files(room).to_vec();
+        if !pending.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for chip in &pending {
+                    ui.label(chip.label());
+                    if ui.small_button(format!("Remove {}", chip.name)).clicked()
+                        && let Some(files) = self.pending_files.get_mut(room)
+                    {
+                        files.retain(|file| file.file != chip.file);
+                    }
+                }
+            });
+        } else if editing.is_none() {
+            ui.weak("Drop a file onto the window to attach it.");
+        }
         ui.horizontal(|ui| {
             let label = ui.label("Message");
             // Enter sends, as in other chat apps; Shift+Enter starts a new line. The key is taken before the text box
@@ -761,6 +846,21 @@ impl Window {
             self.composer.set(room, &self.draft);
             let send = if editing.is_some() { "Save" } else { "Send" };
             if ui.button(send).clicked() || enter {
+                // A post with files may have no text (T330e).
+                let files: Vec<[u8; 16]> = self.pending_files(room).iter().map(|chip| chip.file).collect();
+                if editing.is_none() && !files.is_empty() {
+                    let text = self.draft.trim().to_owned();
+                    if text.chars().count() > crewcraft_ui_model::MAX_DRAFT_CHARS {
+                        self.notice = Some(format!("Messages can be up to {} characters.", crewcraft_ui_model::MAX_DRAFT_CHARS));
+                        return;
+                    }
+                    self.draft.clear();
+                    self.composer.set(room, "");
+                    self.pending_files.remove(room);
+                    self.notice = None;
+                    self.actions.push(Action::Room(Command::PostFiles { room: room.to_owned(), text, files }));
+                    return;
+                }
                 let submitted = match editing {
                     Some(cursor) => self.composer.submit_edit(room, cursor),
                     None => self.composer.submit(room),
@@ -829,8 +929,13 @@ fn bubble_ui(
     colors: Option<appearance::BubbleColors>,
     selected: Option<u64>,
     confirming: bool,
+    files: &std::collections::BTreeMap<u64, Vec<FileChip>>,
 ) -> Option<MessageAction> {
     let mine = side(row, me) == Side::Mine;
+    let chips = match row {
+        FeedRow::Message { cursor, .. } => files.get(cursor).cloned().unwrap_or_default(),
+        FeedRow::Pending { .. } => Vec::new(),
+    };
     let own_message = match row {
         FeedRow::Message { cursor, html, .. } if mine => Some((*cursor, text::html_to_text(html))),
         _ => None,
@@ -880,6 +985,16 @@ fn bubble_ui(
             }
         });
     });
+    // The message's files, each with Save (T330e).
+    for chip in chips {
+        let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
+        ui.with_layout(layout, |ui| {
+            if ui.small_button(format!("Save {}", chip.name)).clicked() {
+                action = Some(MessageAction::Save(chip.clone()));
+            }
+            ui.label(chip.label());
+        });
+    }
     if let Some((cursor, text)) = own_message.filter(|(cursor, _)| Some(*cursor) == selected) {
         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
             if confirming {

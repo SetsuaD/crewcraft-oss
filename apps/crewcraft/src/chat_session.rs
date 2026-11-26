@@ -11,7 +11,7 @@ use crewcraft_client_core::session::{ClientSession, Phase, SessionError};
 use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
-use crewcraft_proto::request::{FEATURE_LIST_ROOMS, FEATURE_SEARCH, Request, Response, SearchHit};
+use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_SEARCH, Request, Response, SearchHit};
 use crewcraft_proto::signin::{self, Opening, SignIn};
 use zeroize::Zeroizing;
 
@@ -222,6 +222,80 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
                         return Err(ChatError::UnexpectedResponse);
                     }
                     return Ok(hits);
+                }
+            }
+        }
+    }
+
+    /// Whether the server agreed to files (`request::FEATURE_FILES`, task T330e).
+    pub fn files(&self) -> bool {
+        self.features() & FEATURE_FILES != 0
+    }
+
+    /// Start an upload (task T330e) and return its id: `UploadBegin`, then the id frame.
+    pub fn upload_begin(&mut self, room: &str, name: &str, size: u64, sha256: [u8; 32], now_ms: u64, deadline: Instant) -> Result<[u8; 16], ChatError> {
+        self.files_only()?;
+        let request = Request::UploadBegin { room: room.to_owned(), name: name.to_owned(), size, sha256 };
+        self.exchange_with_id(request, now_ms, deadline)
+    }
+
+    /// Send one chunk of an upload; returns how many bytes the server has received so far.
+    pub fn upload_chunk(&mut self, upload: [u8; 16], offset: u64, bytes: Vec<u8>, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
+        self.files_only()?;
+        self.request(Request::UploadChunk { upload, offset, bytes }, now_ms, 0, deadline)
+    }
+
+    /// Finish an upload and return the new file's id: `UploadFinish`, then the id frame.
+    pub fn upload_finish(&mut self, upload: [u8; 16], now_ms: u64, deadline: Instant) -> Result<[u8; 16], ChatError> {
+        self.files_only()?;
+        self.exchange_with_id(Request::UploadFinish { upload }, now_ms, deadline)
+    }
+
+    /// Post `text` with `files` (task T330e); returns the message's cursor.
+    pub fn post_files(&mut self, room: &str, text: &str, files: Vec<[u8; 16]>, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
+        self.files_only()?;
+        self.request(Request::PostFiles { room: room.to_owned(), text: text.to_owned(), files }, now_ms, 0, deadline)
+    }
+
+    /// Up to `length` bytes of file `file` from `offset` (task T330e): `Download`, then the bytes frame, whose length
+    /// must be the one the answer announced.
+    pub fn download(&mut self, file: [u8; 16], offset: u64, length: u32, now_ms: u64, deadline: Instant) -> Result<Vec<u8>, ChatError> {
+        self.files_only()?;
+        let (id, count) = match self.exchange(Request::Download { file, offset, length }, now_ms, 0, deadline)? {
+            (id, Response::Ok { cursor }) => (id, cursor),
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        loop {
+            for event in self.receive(now_ms, 0, deadline)? {
+                if let ClientEvent::Bytes { id: answered, data } = event
+                    && answered == id
+                {
+                    if u64::try_from(data.len()).ok() != Some(count) {
+                        self.closed = true;
+                        return Err(ChatError::UnexpectedResponse);
+                    }
+                    return Ok(data);
+                }
+            }
+        }
+    }
+
+    fn files_only(&self) -> Result<(), ChatError> {
+        if self.files() { Ok(()) } else { Err(ChatError::Unsupported) }
+    }
+
+    /// Send `request`, whose `Ok` is followed by an id frame, and return that id.
+    fn exchange_with_id(&mut self, request: Request, now_ms: u64, deadline: Instant) -> Result<[u8; 16], ChatError> {
+        let id = match self.exchange(request, now_ms, 0, deadline)? {
+            (id, Response::Ok { .. }) => id,
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        loop {
+            for event in self.receive(now_ms, 0, deadline)? {
+                if let ClientEvent::Id { id: answered, value } = event
+                    && answered == id
+                {
+                    return Ok(value);
                 }
             }
         }
