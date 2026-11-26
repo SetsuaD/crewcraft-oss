@@ -166,6 +166,9 @@ pub struct SearchResult {
     pub snippet: String,
 }
 
+/// Below this width (in points) the title bar leaves out the server's name, so its search boxes and Sign out fit.
+pub const TITLE_BAR_SERVER_WIDTH: f32 = 1050.0;
+
 /// The longest message search the window sends, in bytes (`proto::request::MAX_QUERY`).
 pub const MAX_SEARCH_BYTES: usize = 200;
 
@@ -490,11 +493,13 @@ impl Window {
             return;
         }
         egui::Panel::top("crewcraft-title-bar").show(ui, |ui| {
+            // In a narrow window the server's name gives way, so the search boxes and Sign out always fit (T320c).
+            let show_server = ui.available_width() >= TITLE_BAR_SERVER_WIDTH;
             ui.horizontal(|ui| {
                 ui.strong(self.title().to_owned());
                 ui.add_space(16.0);
                 let label = ui.label("Search rooms");
-                ui.add(TextEdit::singleline(&mut self.room_filter).hint_text("Type to filter").desired_width(220.0)).labelled_by(label.id);
+                ui.add(TextEdit::singleline(&mut self.room_filter).hint_text("Type to filter").desired_width(160.0)).labelled_by(label.id);
                 ui.add_space(16.0);
                 // Message search (T320c): Enter or the button sends it; the main pane then shows what it found.
                 let label = ui.label("Search messages");
@@ -515,7 +520,7 @@ impl Window {
                         self.actions.push(Action::SignOut);
                     }
                     ui.label(&self.email);
-                    if !self.server.is_empty() {
+                    if show_server && !self.server.is_empty() {
                         ui.weak(&self.server);
                     }
                 });

@@ -9,9 +9,11 @@ use egui_kittest::kittest::Queryable;
 
 fn chat() -> Harness<'static, Window> {
     let mut h = Harness::builder()
-        .with_size([1200.0, 700.0])
+        .with_size([1000.0, 600.0])
         .with_context_setup(|ctx| ctx.set_fonts(fonts()))
         .build_ui_state(|ui, window: &mut Window| window.ui(ui), Window::new());
+    // A half-screen window with the server set: the title bar must still fit the search box and its button.
+    h.state_mut().apply(Update::Enrolled { server: "chat.example.org:7443".to_owned() });
     h.state_mut().apply(Update::SignedIn { email: "ana@example.org".to_owned(), rooms: vec!["general".to_owned(), "design".to_owned()] });
     h.run();
     h.state_mut().take_actions();

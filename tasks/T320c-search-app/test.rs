@@ -29,6 +29,7 @@ use crewcraft_enroll::EnrollmentCode;
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_oidc::{Key, parse_jwks};
 use crewcraft_proto::handshake::ServerSide;
+use crewcraft_proto::request::{FEATURE_LIST_ROOMS, FEATURE_SEARCH};
 use crewcraft_server::external_signin::{ExternalSignIn, Provider};
 use crewcraft_server::lab_bootstrap::bootstrap_handler_with;
 use crewcraft_server::lab_installation::LabInstallation;
@@ -183,7 +184,7 @@ fn start(state: LabInstallation, clock: &Arc<AtomicU64>, secrets: Vec<[u8; 20]>,
         address: "127.0.0.1:0".parse().unwrap(),
         capacity: NonZeroUsize::new(8).unwrap(),
         timeouts: Timeouts { handshake: WAIT, sign_in: WAIT, signed_in_frame: WAIT, bootstrap: WAIT },
-        protocol: ServerSide { min_version: 1, max_version: 1, features: 0, name: "external sign-in test server".into() },
+        protocol: ServerSide { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH, name: "search test server".into() },
     };
     let server_clock = clock.clone();
     let name = ServerName::parse(SERVER_NAME).unwrap();
