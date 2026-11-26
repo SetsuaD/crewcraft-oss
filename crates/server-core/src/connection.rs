@@ -100,6 +100,7 @@ impl Connection {
             |s| s,
             |_, _, _| Vec::new(),
             |_, _, _| Vec::new(),
+            |_, _, _| None,
         )
     }
 
@@ -120,6 +121,7 @@ impl Connection {
             DurableServer::server,
             DurableServer::found,
             DurableServer::attachments,
+            DurableServer::parent_of,
         )
     }
 
@@ -133,6 +135,7 @@ impl Connection {
         read: impl Fn(&S) -> &Server,
         found: impl Fn(&S, &str, &str) -> Vec<SearchHit>,
         attachments: impl Fn(&S, &str, u64) -> Vec<crewcraft_proto::push::AttachedFile>,
+        parent_of: impl Fn(&S, &str, u64) -> Option<u64>,
     ) -> Result<Vec<u8>, E> {
         self.decoder.push(bytes);
         let mut out = Vec::new();
@@ -165,6 +168,14 @@ impl Connection {
                     let push_bytes = encode_push(&push).map_err(ConnError::Request)?;
                     let framed_push = encode(&push_bytes).map_err(ConnError::Frame)?;
                     out.extend_from_slice(&framed_push);
+                    // A reply's thread follows its push, for a client that agreed to threads (task T340a).
+                    if posted
+                        && self.features & crewcraft_proto::request::FEATURE_THREADS != 0
+                        && let Some(parent) = parent_of(server, room, ev_cursor)
+                    {
+                        let threaded = encode_push(&Push::Threaded { room: room.clone(), cursor: ev_cursor, parent }).map_err(ConnError::Request)?;
+                        out.extend_from_slice(&encode(&threaded).map_err(ConnError::Frame)?);
+                    }
                     // A message's files follow its push, for a client that agreed to them (task T330c).
                     if posted && self.features & crewcraft_proto::request::FEATURE_FILES != 0 {
                         let files = attachments(server, room, ev_cursor);
@@ -211,6 +222,14 @@ fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64
                 Err(crate::durable::AttachError::BadAttachment) => Ok((refusal_of(crate::dispatch::E_BAD_ATTACHMENT), None)),
                 Err(crate::durable::AttachError::Durable(DurableError::Server(error))) => Ok((refusal_of(crate::dispatch::error_code(error)), None)),
                 Err(crate::durable::AttachError::Durable(error)) => Err(DurableConnError::Storage(error)),
+            });
+        }
+        Request::Reply { room, parent, text } => {
+            return Some(match server.reply(room, user, *parent, text, now_ms) {
+                Ok(cursor) => Ok((Response::Ok { cursor }, None)),
+                Err(crate::durable::ReplyError::NoParent) => Ok((refusal_of(crate::dispatch::E_NO_SUCH_MESSAGE), None)),
+                Err(crate::durable::ReplyError::Durable(DurableError::Server(error))) => Ok((refusal_of(crate::dispatch::error_code(error)), None)),
+                Err(crate::durable::ReplyError::Durable(error)) => Err(DurableConnError::Storage(error)),
             });
         }
         Request::Download { file, offset, length } => {

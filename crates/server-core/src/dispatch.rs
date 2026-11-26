@@ -138,7 +138,8 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         | Request::UploadChunk { .. }
         | Request::UploadFinish { .. }
         | Request::Download { .. }
-        | Request::PostFiles { .. } => {
+        | Request::PostFiles { .. }
+        | Request::Reply { .. } => {
             return Ok(refusal(E_NO_STORAGE));
         }
         Request::Post { room, text } => backend.change(|s| s.post(room, user, text, now_ms), |s| s.post(room, user, text, now_ms)),

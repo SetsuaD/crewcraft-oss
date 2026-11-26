@@ -58,6 +58,8 @@ pub struct DurableServer {
     attached: HashMap<[u8; 16], (String, u64)>,
     /// Files whose message was deleted: they are not found (task T330c).
     detached: HashSet<[u8; 16]>,
+    /// Each reply's parent, by room and the reply's cursor (task T340a).
+    parents: HashMap<(String, u64), u64>,
 }
 
 /// An upload in progress (task T330b).
@@ -79,6 +81,15 @@ pub const MAX_UPLOADS: usize = 64;
 pub const MAX_UPLOADS_PER_PERSON: usize = 4;
 /// An upload with no chunk for this long is discarded.
 pub const UPLOAD_IDLE_MS: u64 = 10 * 60 * 1000;
+
+/// Why a reply was refused (task T340a). Nothing is posted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplyError {
+    /// The parent is not a live, top-level message in that room.
+    NoParent,
+    /// The room refused the post (not a member, read-only, rate limit, text), or the journal failed.
+    Durable(DurableError),
+}
 
 /// Why a post with files was refused (task T330c). Nothing is posted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +192,7 @@ impl DurableServer {
         let mut attachments: HashMap<(String, u64), Vec<[u8; 16]>> = HashMap::new();
         let mut attached: HashMap<[u8; 16], (String, u64)> = HashMap::new();
         let mut detached: HashSet<[u8; 16]> = HashSet::new();
+        let mut parents: HashMap<(String, u64), u64> = HashMap::new();
         for (index, record) in records.iter().enumerate() {
             let op = decode_op(record).map_err(|_| DurableError::Corrupt { index })?;
             if let Op::FileStored { slug, uploader, file, sha256, size, name, image } = op {
@@ -199,6 +211,12 @@ impl DurableServer {
                 attachments.insert((slug, cursor), posted);
                 continue;
             }
+            if let Op::Reply { slug, author, parent, text, now_ms } = op {
+                let cursor = server.post(&slug, &author, &text, now_ms).map_err(|_| DurableError::Corrupt { index })?;
+                index_event(&server, &mut search, &mut previews, &slug, &author, cursor);
+                parents.insert((slug, cursor), parent);
+                continue;
+            }
             if let Op::Delete { slug, target, .. } = &op
                 && let Some(files) = attachments.remove(&(slug.clone(), *target))
             {
@@ -213,7 +231,20 @@ impl DurableServer {
                 index_event(&server, &mut search, &mut previews, &slug, &actor, cursor);
             }
         }
-        Ok(Self { server, journal, poisoned: false, search, previews, files, store: None, uploads: HashMap::new(), attachments, attached, detached })
+        Ok(Self {
+            server,
+            journal,
+            poisoned: false,
+            search,
+            previews,
+            files,
+            store: None,
+            uploads: HashMap::new(),
+            attachments,
+            attached,
+            detached,
+            parents,
+        })
     }
 
     /// Keep uploaded bytes in `store` (task T330b). Bytes no record refers to are removed now (`FileStore::sweep`).
@@ -331,6 +362,40 @@ impl DurableServer {
         }
         self.attachments.insert((slug.to_owned(), cursor), files.to_vec());
         Ok(cursor)
+    }
+
+    /// Reply to the message at `parent` in `slug`, in its thread (task T340a). The parent must be a live, top-level
+    /// message held in the room's log (`NoParent` otherwise: missing, deleted, or itself a reply); the reply is then
+    /// posted as `post` would, and recorded with its parent in ONE record.
+    pub fn reply(&mut self, slug: &str, author: &str, parent: u64, text: &str, now_ms: u64) -> Result<u64, ReplyError> {
+        self.check_alive().map_err(ReplyError::Durable)?;
+        if !self.is_live_post(slug, author, parent) || self.parents.contains_key(&(slug.to_owned(), parent)) {
+            return Err(ReplyError::NoParent);
+        }
+        let cursor = self.server.post(slug, author, text, now_ms).map_err(|error| ReplyError::Durable(DurableError::Server(error)))?;
+        let op = Op::Reply { slug: slug.to_owned(), author: author.to_owned(), parent, text: text.to_owned(), now_ms };
+        self.record(&op).map_err(ReplyError::Durable)?;
+        index_event(&self.server, &mut self.search, &mut self.previews, slug, author, cursor);
+        self.parents.insert((slug.to_owned(), cursor), parent);
+        Ok(cursor)
+    }
+
+    /// The parent of the reply at `cursor` in `slug`, if it is one (task T340a).
+    pub fn parent_of(&self, slug: &str, cursor: u64) -> Option<u64> {
+        self.parents.get(&(slug.to_owned(), cursor)).copied()
+    }
+
+    /// How many replies the message at `parent` in `slug` has had (task T340a).
+    pub fn reply_count(&self, slug: &str, parent: u64) -> usize {
+        self.parents.iter().filter(|((room, _), of)| room == slug && **of == parent).count()
+    }
+
+    /// Whether `cursor` in `slug` is a message that is still there, as `user` (a member) reads the room's log.
+    fn is_live_post(&self, slug: &str, user: &str, cursor: u64) -> bool {
+        let Ok(room) = self.server.room(slug) else { return false };
+        let Ok(Since::Events(events)) = room.sync(user, cursor.saturating_sub(1)) else { return false };
+        events.iter().any(|(at, event)| *at == cursor && matches!(event.kind, EventKind::Posted) && !event.html.is_empty())
+            && !events.iter().any(|(_, event)| matches!(event.kind, EventKind::Deleted { target } if target == cursor))
     }
 
     /// The files the message at `cursor` in `slug` carries (task T330c), in the order they were posted.
@@ -517,7 +582,7 @@ fn replay(server: &mut Server, op: Op) -> Result<u64, ServerError> {
         Op::Delete { slug, actor, target } => server.delete(&slug, &actor, target),
         Op::MarkRead { slug, user, cursor } => server.mark_read(&slug, &user, cursor).map(|_| 0),
         // Handled before `replay` is called: a file record changes no room, and a post with files needs the records.
-        Op::FileStored { .. } | Op::PostFiles { .. } => Ok(0),
+        Op::FileStored { .. } | Op::PostFiles { .. } | Op::Reply { .. } => Ok(0),
     }
 }
 

@@ -25,6 +25,8 @@ pub struct RoomView {
     needs_resync: bool,
     /// The files each message carries, by its cursor (task T330c).
     attachments: BTreeMap<u64, Vec<crewcraft_proto::push::AttachedFile>>,
+    /// Each reply's parent, by the reply's cursor (task T340a).
+    parents: BTreeMap<u64, u64>,
 }
 
 impl Default for RoomView {
@@ -43,6 +45,7 @@ impl RoomView {
             acked: BTreeMap::new(),
             needs_resync: false,
             attachments: BTreeMap::new(),
+            parents: BTreeMap::new(),
         }
     }
 
@@ -97,6 +100,16 @@ impl RoomView {
     /// Keep the files the message at `cursor` carries (task T330c).
     pub fn attach(&mut self, cursor: u64, files: Vec<crewcraft_proto::push::AttachedFile>) {
         self.attachments.insert(cursor, files);
+    }
+
+    /// Keep that the message at `cursor` is a reply to the message at `parent` (task T340a).
+    pub fn thread(&mut self, cursor: u64, parent: u64) {
+        self.parents.insert(cursor, parent);
+    }
+
+    /// Each reply's parent, by the reply's cursor (task T340a).
+    pub fn parents(&self) -> &BTreeMap<u64, u64> {
+        &self.parents
     }
 
     /// The files of each message that has any, by cursor (task T330c).

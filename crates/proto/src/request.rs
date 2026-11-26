@@ -14,6 +14,8 @@
 //! - tag 10 `UploadBegin`: `str room | str name (1 to MAX_FILE_NAME) | u64 size | 32 SHA-256` (task T330b)
 //! - tag 11 `UploadChunk`: `16 upload id | u64 offset | u32 length | bytes (1 to MAX_CHUNK)`
 //! - tag 12 `UploadFinish`: `16 upload id`
+//! - tag 16 `Reply` (task T340a): `str room | u64 parent | str text (0 to MAX_BODY)`, answered as `Post`; announced by
+//!   `FEATURE_THREADS`
 //! - tag 15 `PostFiles` (task T330c): `str room | str text (0 to MAX_BODY) | u8 count (1 to 10) | count × 16 file id`
 //! - tag 14 `Download`: `16 file id | u64 offset | u32 length (1 to MAX_CHUNK)` (task T330d; tag 13 is unassigned)
 //!
@@ -63,6 +65,8 @@ pub const MAX_QUERY: usize = 200;
 pub const MAX_HITS: usize = 100;
 /// The handshake feature bit for uploads (task T330b).
 pub const FEATURE_FILES: u32 = 4;
+/// The handshake feature bit for threads: `Reply` and the `Threaded` push (task T340a).
+pub const FEATURE_THREADS: u32 = 8;
 /// The first byte of an id frame.
 pub const ID_TAG: u8 = 133;
 /// The first byte of a bytes frame (task T330d).
@@ -83,6 +87,7 @@ const UPLOAD_CHUNK: u8 = 11;
 const UPLOAD_FINISH: u8 = 12;
 const DOWNLOAD: u8 = 14;
 const POST_FILES: u8 = 15;
+const REPLY: u8 = 16;
 /// The most files one `PostFiles` attaches (task T330c).
 pub const MAX_POST_FILES: usize = 10;
 
@@ -138,6 +143,12 @@ pub enum Request {
         room: String,
         text: String,
         files: Vec<[u8; 16]>,
+    },
+    /// Reply to the top-level message at `parent` in `room`, in its thread (task T340a).
+    Reply {
+        room: String,
+        parent: u64,
+        text: String,
     },
     /// Up to `length` bytes of file `file` from `offset` (task T330d).
     Download {
@@ -311,6 +322,13 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
                 out.extend_from_slice(file);
             }
         }
+        Request::Reply { room, parent, text } => {
+            out.push(REPLY);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&parent.to_be_bytes());
+            write_str(&mut out, text, 0, MAX_BODY)?;
+        }
         Request::Download { file, offset, length } => {
             if *length == 0 || *length as usize > MAX_CHUNK {
                 return Err(CodecError::FieldLength);
@@ -333,7 +351,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(1..=6).contains(&tag) && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag) && tag != DOWNLOAD && tag != POST_FILES {
+    if !(1..=6).contains(&tag) && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag) && !matches!(tag, DOWNLOAD | POST_FILES | REPLY) {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -401,6 +419,12 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
                 files.push(read_array::<16>(bytes, &mut pos)?);
             }
             Request::PostFiles { room, text, files }
+        }
+        REPLY => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let parent = read_u64(bytes, &mut pos)?;
+            let text = read_string(bytes, &mut pos, 0, MAX_BODY)?;
+            Request::Reply { room, parent, text }
         }
         DOWNLOAD => {
             let file = read_array::<16>(bytes, &mut pos)?;
