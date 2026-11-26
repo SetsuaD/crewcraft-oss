@@ -13,7 +13,9 @@ use std::time::Instant;
 use crewcraft_media::{Config, MediaServer};
 use crewcraft_media_auth::{Issuer, Verifier};
 use crewcraft_proto::frame::{Decoder, encode};
-use crewcraft_proto::request::{FEATURE_CALLS, FEATURE_MEDIA, MEDIA_TAG, Request, Response, decode_media, decode_response, encode_media, encode_request};
+use crewcraft_proto::request::{
+    FEATURE_CALLS, FEATURE_MEDIA, MEDIA_TAG, Request, Response, decode_media, decode_response, encode_media, encode_request,
+};
 use crewcraft_server_core::calls::{CallError, HEARTBEAT_TIMEOUT_MS};
 use crewcraft_server_core::connection::Connection;
 use crewcraft_server_core::durable::DurableServer;
@@ -154,7 +156,8 @@ fn a_member_who_joins_gets_a_credential_the_media_server_accepts() {
     // Joining again (a reconnect) is a new credential; a client that did not agree to media gets none.
     let (_, again) = ask(&mut connection(BO, 2), &mut ds, Request::CallJoin { room: room.clone(), call }, T0 + 2_000);
     assert!(again.is_some_and(|(_, again)| again != bo));
-    let (answer, none) = ask(&mut Connection::with_features(BO, FEATURE_CALLS).with_device(Some(2)), &mut ds, Request::CallJoin { room, call }, T0 + 3_000);
+    let (answer, none) =
+        ask(&mut Connection::with_features(BO, FEATURE_CALLS).with_device(Some(2)), &mut ds, Request::CallJoin { room, call }, T0 + 3_000);
     assert_eq!(answer, Response::Ok { cursor: call });
     assert!(none.is_none());
 }
@@ -174,7 +177,8 @@ fn nobody_outside_the_call_gets_a_credential() {
     assert_eq!(ds.media_credential(&room, DAN, call, 4, T0), Err(CallError::NoSuchCall));
     assert_eq!(ds.media_credential(&room, ANA, call + 1, 1, T0), Err(CallError::NoSuchCall));
     // A connection whose device is unknown gets none either.
-    let (joined, media) = ask(&mut Connection::with_features(DAN, FEATURE_CALLS | FEATURE_MEDIA), &mut ds, Request::CallJoin { room: room.clone(), call }, T0);
+    let (joined, media) =
+        ask(&mut Connection::with_features(DAN, FEATURE_CALLS | FEATURE_MEDIA), &mut ds, Request::CallJoin { room: room.clone(), call }, T0);
     assert_eq!(joined, Response::Ok { cursor: call });
     assert!(media.is_none());
 

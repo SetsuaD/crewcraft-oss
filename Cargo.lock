@@ -1296,11 +1296,15 @@ dependencies = [
  "crewcraft-accounts",
  "crewcraft-authz",
  "crewcraft-client-core",
+ "crewcraft-media",
+ "crewcraft-media-auth",
+ "crewcraft-media-crypto",
  "crewcraft-proto",
  "crewcraft-sframe",
  "crewcraft-totp",
  "rand_core 0.6.4",
  "sha2 0.10.9",
+ "str0m",
  "zeroize",
 ]
 

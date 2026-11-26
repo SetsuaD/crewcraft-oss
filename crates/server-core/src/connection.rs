@@ -306,7 +306,13 @@ fn memory_pin_state(server: &Server, slug: &str, user: &str) -> Option<Push> {
 /// the call's id; a refusal is an `Error`; a storage failure is fatal. With `media_device` (the client agreed to
 /// `FEATURE_MEDIA` and its device is known), a started or joined call is followed by that device's media credential
 /// (task T360b2).
-fn calls(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64, media_device: Option<u64>) -> Option<Result<Answered, DurableConnError>> {
+fn calls(
+    server: &mut DurableServer,
+    user: &str,
+    request: &Request,
+    now_ms: u64,
+    media_device: Option<u64>,
+) -> Option<Result<Answered, DurableConnError>> {
     use crate::calls::CallError;
     let answer = match request {
         Request::CallStart { room, video } => server.call_start(room, user, *video, now_ms),
@@ -320,7 +326,9 @@ fn calls(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64,
     Some(match answer {
         Ok(call) => {
             let follow = match (media_device, request) {
-                (Some(device), Request::CallStart { room, .. } | Request::CallJoin { room, .. }) => media_follow(server, room, user, call, device, now_ms),
+                (Some(device), Request::CallStart { room, .. } | Request::CallJoin { room, .. }) => {
+                    media_follow(server, room, user, call, device, now_ms)
+                }
                 _ => None,
             };
             Ok((Response::Ok { cursor: call }, follow))
@@ -437,7 +445,10 @@ enum Follow {
     Files(Vec<crewcraft_proto::request::ListedFile>),
     Saved(crewcraft_proto::request::SavedPage),
     /// The media frame after a started or joined call (task T360b2).
-    Media { address: String, credential: Vec<u8> },
+    Media {
+        address: String,
+        credential: Vec<u8>,
+    },
 }
 
 /// A request's answer, and what follows it.
