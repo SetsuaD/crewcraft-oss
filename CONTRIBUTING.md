@@ -41,8 +41,9 @@ Run the whole gate before asking for review:
 bash ci/validate.sh
 ```
 
-It runs `cargo fmt --check`, `cargo clippy` with warnings denied, every test, the sanitize scan, the Rust-only check
-and `cargo deny check` (licenses, advisories and sources). Without `cargo-deny` installed, that last step is skipped
+It runs `cargo fmt --check`, `cargo clippy` with warnings denied, every test, the sanitize scan, the Rust-only check,
+the AGENTS.md check (the shared Craft rules at the top of AGENTS.md are unedited and are the pinned copy; with a
+craft-contrib clone in `CRAFT_CONTRIB_DIR` it also compares them with craft-contrib itself) and `cargo deny check` (licenses, advisories and sources). Without `cargo-deny` installed, that last step is skipped
 and the run says so; `CARGO_DENY_REQUIRED=1`, set in CI and release builds, makes a missing `cargo-deny` a failure. The scan refuses PEM
 private keys, email addresses outside the example domains, IPv4 addresses outside loopback and documentation ranges,
 and unsafe file names; a deployment can add its own host and domain patterns with `SANITIZE_EXTRA_PATTERNS`. It is a

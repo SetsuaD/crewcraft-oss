@@ -14,6 +14,7 @@ step "clippy";   cargo clippy --workspace --all-targets --locked -- -D warnings
 step "tests";    cargo test --workspace --locked
 step "sanitize"; bash tools/sanitize-scan.sh
 step "rust-only"; bash tools/rust-only.sh
+step "agents";   bash tools/agents-check.sh --self-test
 step "cargo-deny"
 skipped=""
 case "${CARGO_DENY_REQUIRED:-}" in
