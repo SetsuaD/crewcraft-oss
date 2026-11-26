@@ -12,6 +12,8 @@ publish = false
 [dependencies]
 # The cabinet embedded in the MSI (MSZIP compression).
 cab = "0.6"
+# The calendar under a zip entry's MS-DOS date.
+chrono.workspace = true
 # Release manifests (T501): the format, its parser and the Ed25519 check that servers and clients use.
 crewcraft-update.workspace = true
 # Signing release manifests (T501), the same Ed25519 implementation the update check uses.

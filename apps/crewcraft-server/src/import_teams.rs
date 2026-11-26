@@ -21,6 +21,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use chrono::{NaiveDate, NaiveTime};
 use serde_json::{Value, json};
 
 /// What the reader did, for the terminal and for anyone checking the export.
@@ -185,7 +186,7 @@ pub fn safe_dir(id: &str) -> String {
 }
 
 /// Milliseconds since 1970 of an ISO 8601 / RFC 3339 time as Graph writes it: `2024-03-05T14:07:09.123Z`, fraction
-/// optional, `Z` or `+hh:mm` / `-hh:mm`. `None` for anything else, or a time before 1970.
+/// optional, `Z` or `+hh:mm` / `-hh:mm`. `None` for anything else, a day its month does not have, or a time before 1970.
 pub fn iso_ms(text: &str) -> Option<u64> {
     let bytes = text.as_bytes();
     let digits = |from: usize, len: usize| -> Option<i64> {
@@ -200,7 +201,7 @@ pub fn iso_ms(text: &str) -> Option<u64> {
     }
     let (year, month, day) = (digits(0, 4)?, digits(5, 2)?, digits(8, 2)?);
     let (hour, minute, second) = (digits(11, 2)?, digits(14, 2)?, digits(17, 2)?);
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
+    if hour > 23 || minute > 59 || second > 60 {
         return None;
     }
     let mut pos = 19;
@@ -223,15 +224,11 @@ pub fn iso_ms(text: &str) -> Option<u64> {
         }
         _ => return None,
     };
-    // Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's days_from_civil).
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (month + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    let seconds = days * 86_400 + hour * 3600 + minute * 60 + second - offset_minutes * 60;
+    // The calendar is chrono's (Craft standard time.md): it refuses a day the month does not have. The time of day,
+    // a leap second included, and the offset are plain arithmetic.
+    let date = NaiveDate::from_ymd_opt(i32::try_from(year).ok()?, u32::try_from(month).ok()?, u32::try_from(day).ok()?)?;
+    let midnight = date.and_time(NaiveTime::MIN).and_utc().timestamp();
+    let seconds = midnight + hour * 3600 + minute * 60 + second - offset_minutes * 60;
     u64::try_from(seconds * 1000 + millis).ok()
 }
 
@@ -307,4 +304,21 @@ fn decode_entities(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::iso_ms;
+
+    #[test]
+    fn only_days_the_calendar_has_are_read() {
+        // Leap years: every fourth year, but not a century unless it divides by 400.
+        assert_eq!(iso_ms("2000-02-29T00:00:00Z"), Some(951_782_400_000));
+        assert_eq!(iso_ms("2024-02-29T12:00:00Z"), Some(1_709_208_000_000));
+        for impossible in ["1900-02-29T00:00:00Z", "2023-02-29T00:00:00Z", "2024-02-30T00:00:00Z", "2024-04-31T00:00:00Z", "2024-00-10T00:00:00Z"] {
+            assert_eq!(iso_ms(impossible), None, "{impossible}");
+        }
+        // A leap second is the next second's time, as before.
+        assert_eq!(iso_ms("2016-12-31T23:59:60Z"), Some(1_483_228_800_000));
+    }
 }
