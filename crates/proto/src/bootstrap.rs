@@ -53,12 +53,25 @@ pub const MAX_URI: usize = 512;
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum BootstrapRequest {
-    Redeem { device_name: String, csr: Vec<u8>, password: String },
-    ConfirmTotp { code: String },
+    Redeem {
+        device_name: String,
+        csr: Vec<u8>,
+        password: String,
+    },
+    ConfirmTotp {
+        code: String,
+    },
     /// Redeem the invitation through the server's identity provider instead of a password (task T611i).
-    RedeemExternal { device_name: String, csr: Vec<u8> },
+    RedeemExternal {
+        device_name: String,
+        csr: Vec<u8>,
+    },
     /// Finish that redemption with the provider's code, the PKCE verifier and the loopback redirect URI.
-    ConfirmExternal { code: String, verifier: String, redirect_uri: String },
+    ConfirmExternal {
+        code: String,
+        verifier: String,
+        redirect_uri: String,
+    },
 }
 
 // A password and a code are secrets: they never reach logs or panics.
@@ -81,11 +94,23 @@ impl std::fmt::Debug for BootstrapRequest {
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum BootstrapResponse {
-    Setup { totp_uri: String },
-    Activated { certificate: Vec<u8>, issuer_certificate: Vec<u8> },
-    Error { code: u16 },
+    Setup {
+        totp_uri: String,
+    },
+    Activated {
+        certificate: Vec<u8>,
+        issuer_certificate: Vec<u8>,
+    },
+    Error {
+        code: u16,
+    },
     /// What the app needs to open the provider's sign-in page (task T611i); `nonce` is bound to this bootstrap key.
-    ExternalStart { issuer: String, client_id: String, authorization_endpoint: String, nonce: String },
+    ExternalStart {
+        issuer: String,
+        client_id: String,
+        authorization_endpoint: String,
+        nonce: String,
+    },
 }
 
 impl std::fmt::Debug for BootstrapResponse {

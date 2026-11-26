@@ -3,7 +3,9 @@
 //! hides, and that their tags stay apart from the sign-in and ordinary vocabularies.
 #![allow(clippy::unwrap_used)]
 
-use crewcraft_proto::bootstrap::{BootstrapRequest, BootstrapResponse, decode_bootstrap_request, decode_bootstrap_response, encode_bootstrap_request, encode_bootstrap_response};
+use crewcraft_proto::bootstrap::{
+    BootstrapRequest, BootstrapResponse, decode_bootstrap_request, decode_bootstrap_response, encode_bootstrap_request, encode_bootstrap_response,
+};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::request::decode_request;
 use crewcraft_proto::signin::{MAX_AUTH_CODE_BYTES, MAX_REDIRECT_BYTES, MAX_VERIFIER_LEN, MIN_VERIFIER_LEN, decode_opening, decode_reply};
@@ -96,8 +98,14 @@ fn the_limits_are_checked_both_ways() {
     field(&mut framed, b"http://127.0.0.1:5/callback");
     assert_eq!(decode_bootstrap_request(&framed).unwrap_err(), CodecError::FieldLength);
 
-    assert_eq!(encode_bootstrap_request(1, &BootstrapRequest::RedeemExternal { device_name: String::new(), csr: vec![1] }).unwrap_err(), CodecError::FieldLength);
-    assert_eq!(encode_bootstrap_request(1, &BootstrapRequest::RedeemExternal { device_name: "x".into(), csr: Vec::new() }).unwrap_err(), CodecError::FieldLength);
+    assert_eq!(
+        encode_bootstrap_request(1, &BootstrapRequest::RedeemExternal { device_name: String::new(), csr: vec![1] }).unwrap_err(),
+        CodecError::FieldLength
+    );
+    assert_eq!(
+        encode_bootstrap_request(1, &BootstrapRequest::RedeemExternal { device_name: "x".into(), csr: Vec::new() }).unwrap_err(),
+        CodecError::FieldLength
+    );
 
     // A nonce must be 32 bytes in base64url, like a session token.
     for nonce in ["short", "__________________________________________9", "=_________________________________________8"] {
@@ -112,7 +120,10 @@ fn the_limits_are_checked_both_ways() {
 
 #[test]
 fn truncated_and_trailing_input() {
-    for good in [encode_bootstrap_request(7, &redeem()).unwrap(), encode_bootstrap_request(7, &confirm("x", VERIFIER, "http://127.0.0.1:5/callback")).unwrap()] {
+    for good in [
+        encode_bootstrap_request(7, &redeem()).unwrap(),
+        encode_bootstrap_request(7, &confirm("x", VERIFIER, "http://127.0.0.1:5/callback")).unwrap(),
+    ] {
         for cut in 1..good.len() {
             assert_eq!(decode_bootstrap_request(&good[..cut]).unwrap_err(), CodecError::Truncated, "cut at {cut}");
         }
