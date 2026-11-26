@@ -81,6 +81,14 @@ certificate made with RustCrypto (P-256 and `x509-cert`) instead of `rcgen`. A p
 AWS-LC, `cc`, `cmake` or `ring` in its tree. The provider is a crate of its own (`crates/media-crypto`), tested against
 str0m's interface in memory (two peers completing DTLS and exchanging SRTP) before the media server uses it.
 
+**Built (T362a).** `crates/media-crypto` is that provider: `crewcraft_media_crypto::provider()` is handed to
+`RtcConfig::set_crypto_provider`. Its tests check the SRTP ciphers and hashes against published vectors (RFC 3711 B.2,
+FIPS-197, the GCM test cases, RFC 2202), the certificate (self-signed P-256, its PKCS#8 key loads, fresh each time),
+DTLS 1.2, 1.3 and either-version handshakes between two of its own peers (same SRTP keys, each sees the other's
+certificate, data both ways), and two str0m peers with no backend of str0m's own connecting over an in-memory network
+and carrying an audio stream that never crosses it in the clear. The gate (`tools/rust-only.sh`) fails if the crate's
+dependency tree ever gains C, assembly or a native crypto library.
+
 ## Audio (T360e) and video (T360f): decisions first
 
 These need native code or young crates; each is decided when its task starts and recorded in NON-RUST-DEPENDENCIES.md.

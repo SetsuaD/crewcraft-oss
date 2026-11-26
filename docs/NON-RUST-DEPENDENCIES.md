@@ -35,6 +35,16 @@ Programs that a build runs, rather than crates it compiles. Each is listed with 
 
 | Xcode with its iOS SDK and Simulator (the linker, clang and `xcrun`), and `codesign` | `cargo xtask ios`, on a Mac only ([RELEASE.md](RELEASE.md#ios-simulator)) | Rust's iOS targets link against Apple's iOS SDK through Apple's linker, and `cc` compiles ring's C and assembly with Xcode's clang, as for macOS; the SDK is licensed for Apple hardware. `codesign --sign -` seals `CrewCraft.app` ad hoc (no identity). The `Info.plist`, the icons and the bundle layout are written by xtask in Rust: no Xcode project, asset catalog (`actool`), storyboard (`ibtool`), Swift or Objective-C. `xcrun simctl` only installs and starts the app on a simulator | None: no other iOS SDK or linker exists. A build for iPhones adds a signing identity and provisioning profile (T424) | No: waits for the maintainers' review |
 
+## Crates that stay pure Rust
+
+Some crates must stay free of native code even though the workspace as a whole is not: `tools/rust-only.sh` fails when
+the normal or build dependencies of one of them, on any target, include `cc`, `cmake`, `bindgen`, `pkg-config`,
+`vcpkg`, `nasm-rs`, `ring`, AWS-LC, OpenSSL or `rcgen`.
+
+| Crate | Why it stays pure Rust |
+|---|---|
+| `crewcraft-media-crypto` | The media server's DTLS, SRTP and hashes (T362a, [CALLS.md](CALLS.md)). Every ready-made str0m backend links C (AWS-LC, OpenSSL, or `rcgen`'s AWS-LC even in str0m's RustCrypto mode), so CrewCraft supplies its own provider from RustCrypto crates and `dimpl`'s RustCrypto mode, and makes its DTLS certificate with `p256` and `x509-cert` |
+
 ## Shipped third-party binaries
 
 Prebuilt programs that are not built from source here but go into a release asset. Each is pinned by SHA-256, never
