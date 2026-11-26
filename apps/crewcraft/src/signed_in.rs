@@ -312,7 +312,7 @@ impl SignedInSession {
 
     /// Who reacted to each message in `room` with what, as the server pushed it (task T341b): by cursor, the reaction
     /// codes in order, each with the people, sorted.
-    pub fn reactions(&mut self, room: &str) -> Vec<(u64, Vec<(u8, Vec<String>)>)> {
+    pub fn reactions(&mut self, room: &str) -> crewcraft_ui_model::RoomReactions {
         let Some(view) = self.chat.view(room) else { return Vec::new() };
         view.reactions()
             .iter()

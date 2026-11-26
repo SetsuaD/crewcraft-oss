@@ -100,7 +100,7 @@ pub enum Event {
     /// Each reply's parent in `room`, by the reply's cursor, whenever they change (task T340b).
     Threads { room: String, parents: Vec<(u64, u64)> },
     /// Who reacted to each message in `room` with what, whenever it changes (task T341b).
-    Reactions { room: String, reactions: Vec<(u64, Vec<(u8, Vec<String>)>)> },
+    Reactions { room: String, reactions: crewcraft_ui_model::RoomReactions },
     /// A post that was not acknowledged; `text` is returned so the window can restore the draft. After
     /// `Problem::Lost` the post may still have arrived: the room's next snapshot shows it if so.
     PostFailed { room: String, text: String, problem: Problem },
@@ -482,7 +482,7 @@ struct Run {
     /// The last threads sent, per room (task T340b).
     threads_sent: BTreeMap<String, Vec<(u64, u64)>>,
     /// The last reactions sent, per room (task T341b).
-    reactions_sent: BTreeMap<String, Vec<(u64, Vec<(u8, Vec<String>)>)>>,
+    reactions_sent: BTreeMap<String, crewcraft_ui_model::RoomReactions>,
     next_poll: Instant,
     retry: Option<Retry>,
     keeper: Box<dyn TicketKeeper>,

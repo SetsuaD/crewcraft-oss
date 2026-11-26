@@ -143,7 +143,7 @@ pub enum Update {
     /// Who reacted to each message of `room` with what (task T341b): by cursor, each reaction code with the people.
     Reactions {
         room: String,
-        reactions: Vec<(u64, Vec<(u8, Vec<String>)>)>,
+        reactions: crewcraft_ui_model::RoomReactions,
     },
     /// The app was opened from an invitation link (task T405): fill in the enrollment form's link field. Ignored
     /// unless the enrollment screen is showing. `Debug` does not show the link, which holds a one-time secret.
@@ -276,7 +276,7 @@ pub struct Window {
     /// The thread composer's text (T340b).
     thread_draft: String,
     /// Who reacted to each message with what, per room and cursor (T341b).
-    reactions: HashMap<String, std::collections::BTreeMap<u64, Vec<(u8, Vec<String>)>>>,
+    reactions: HashMap<String, std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>>,
 }
 
 /// What a message is drawn with (T340b): who is reading, the theme's colours, which message is selected, the files and
@@ -289,7 +289,7 @@ struct Bubbles<'a> {
     files: &'a std::collections::BTreeMap<u64, Vec<FileChip>>,
     replies: &'a std::collections::BTreeMap<u64, usize>,
     /// Who reacted to each message with what (T341b).
-    reactions: &'a std::collections::BTreeMap<u64, Vec<(u8, Vec<String>)>>,
+    reactions: &'a std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>,
     /// Whether messages can be selected and threads opened from here (not inside the thread pane).
     actions: bool,
 }

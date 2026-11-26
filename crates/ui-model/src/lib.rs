@@ -81,3 +81,9 @@ pub struct RoomRow {
     pub unread: u32,
     pub selected: bool,
 }
+
+/// Who reacted to one message (task T341b): each reaction code, in order, with the people, sorted.
+pub type MessageReactions = Vec<(u8, Vec<String>)>;
+
+/// Who reacted to the messages of a room (task T341b), by cursor.
+pub type RoomReactions = Vec<(u64, MessageReactions)>;
