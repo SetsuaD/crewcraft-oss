@@ -1,0 +1,26 @@
+{
+  "id": "T316-edit-delete",
+  "title": "Edit and delete your own messages in the desktop app",
+  "crate": "crewcraft-server",
+  "files": [
+    "crates/ui-model/src/lib.rs",
+    "crates/ui-model/src/composer.rs",
+    "crates/ui-model/tests/t316_edit_composer.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t316_edit_delete.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t316_edit_delete.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t316_edit_delete",
+  "depends_on": [
+    "T315-layout",
+    "T303-connection-worker",
+    "T611i-app"
+  ],
+  "spec": "Command::Edit { room, target, text } and Command::Delete { room, target }; Composer::submit_edit trims and refuses like submit. In the window, clicking one of your own messages selects it (a second click clears it) and shows Edit and Delete under it; other people's messages cannot be selected. Edit puts the message's text in the composer, which says it is editing, offers Cancel editing, and saves (Action::Room(Command::Edit)) instead of sending. Delete asks 'Delete this message?' with Delete and Keep. The worker sends the edit or deletion, reports Event::Changed and syncs the room; a refusal is reported and the session stays open. End to end against a running server: a posted message is edited (same cursor, marked edited, new text only) and then deleted (gone from the snapshot).",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md"
+  ]
+}

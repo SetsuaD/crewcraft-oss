@@ -185,6 +185,22 @@ pub struct Window {
     room_filter: String,
     /// The bubble colours from the theme, or `None` to derive them from egui's visuals (T315).
     bubbles: Option<appearance::BubbleColors>,
+    /// The person's own message they clicked, by cursor: its Edit and Delete show under it (T316).
+    selected_message: Option<u64>,
+    /// Asking "Delete this message?" for this selected message (T316).
+    confirm_delete: bool,
+    /// The composer is replacing the text of this message, `(room, cursor)` (T316).
+    editing: Option<(String, u64)>,
+}
+
+/// What the person did to a message in the feed (T316).
+enum MessageAction {
+    /// Clicked one of their own messages: select it, or clear the selection.
+    Select(u64),
+    Edit(u64, String),
+    AskDelete,
+    Delete(u64),
+    Keep,
 }
 
 /// The panes of the phone layout (REQUIREMENTS 2.9): the room list, one conversation, and the account.
@@ -230,6 +246,11 @@ impl Window {
 
     pub fn screen(&self) -> Screen {
         self.screen.unwrap_or(Screen::Enroll)
+    }
+
+    /// The message the composer is editing, `(room, cursor)` (T316).
+    pub fn editing(&self) -> Option<(&str, u64)> {
+        self.editing.as_ref().map(|(room, cursor)| (room.as_str(), *cursor))
     }
 
     /// Whether the sign-in screen is waiting for the person to finish signing in in the browser (T611h).
@@ -299,6 +320,8 @@ impl Window {
             Update::Failed(text) => self.notice = Some(text),
             Update::SignedOut => {
                 self.phone_pane = PhonePane::Chats;
+                self.selected_message = None;
+                self.editing = None;
                 self.feeds.clear();
                 self.rooms = RoomList::new();
                 self.composer = Composer::new();
@@ -504,13 +527,16 @@ impl Window {
         egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
         let me = self.email.clone();
         let bubbles = self.bubbles;
+        let (selected, confirming) = (self.selected_message, self.confirm_delete);
+        let mut action = None;
         egui::CentralPanel::default_margins().show(ui, |ui| {
             ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
                 for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
-                    bubble_ui(ui, row, &me, bubbles);
+                    action = bubble_ui(ui, row, &me, bubbles, selected, confirming).or(action.take());
                 }
             });
         });
+        self.message_action(&room, action);
     }
 
     /// The phone layout: one pane at a time, a bottom tab bar, and larger touch targets (T402).
@@ -546,13 +572,16 @@ impl Window {
                 egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
                 let me = self.email.clone();
                 let bubbles = self.bubbles;
+                let (selected, confirming) = (self.selected_message, self.confirm_delete);
+                let mut action = None;
                 egui::CentralPanel::default_margins().show(ui, |ui| {
                     ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
                         for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
-                            bubble_ui(ui, row, &me, bubbles);
+                            action = bubble_ui(ui, row, &me, bubbles, selected, confirming).or(action.take());
                         }
                     });
                 });
+                self.message_action(&room, action);
             }
             PhonePane::Account => {
                 egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -593,7 +622,41 @@ impl Window {
         }
     }
 
+    /// Apply what the person did to a message (T316).
+    fn message_action(&mut self, room: &str, action: Option<MessageAction>) {
+        match action {
+            None => {}
+            Some(MessageAction::Select(cursor)) => {
+                self.selected_message = (self.selected_message != Some(cursor)).then_some(cursor);
+                self.confirm_delete = false;
+            }
+            Some(MessageAction::Edit(cursor, text)) => {
+                self.editing = Some((room.to_owned(), cursor));
+                self.draft = text;
+                self.selected_message = None;
+            }
+            Some(MessageAction::AskDelete) => self.confirm_delete = true,
+            Some(MessageAction::Delete(cursor)) => {
+                self.actions.push(Action::Room(Command::Delete { room: room.to_owned(), target: cursor }));
+                self.selected_message = None;
+                self.confirm_delete = false;
+            }
+            Some(MessageAction::Keep) => self.confirm_delete = false,
+        }
+    }
+
     fn composer_ui(&mut self, ui: &mut Ui, room: &str) {
+        let editing = self.editing.as_ref().filter(|(edited_room, _)| edited_room == room).map(|(_, cursor)| *cursor);
+        if editing.is_some() {
+            ui.horizontal(|ui| {
+                ui.label("Editing your message");
+                if ui.button("Cancel editing").clicked() {
+                    self.editing = None;
+                    self.draft.clear();
+                }
+            });
+        }
+        let editing = self.editing.as_ref().filter(|(edited_room, _)| edited_room == room).map(|(_, cursor)| *cursor);
         ui.horizontal(|ui| {
             let label = ui.label("Message");
             // Enter sends, as in other chat apps; Shift+Enter starts a new line. The key is taken before the text box
@@ -612,11 +675,17 @@ impl Window {
                 .desired_width(ui.available_width() - 80.0);
             ui.add(edit).labelled_by(label.id);
             self.composer.set(room, &self.draft);
-            if ui.button("Send").clicked() || enter {
-                match self.composer.submit(room) {
+            let send = if editing.is_some() { "Save" } else { "Send" };
+            if ui.button(send).clicked() || enter {
+                let submitted = match editing {
+                    Some(cursor) => self.composer.submit_edit(room, cursor),
+                    None => self.composer.submit(room),
+                };
+                match submitted {
                     Ok(command) => {
                         self.draft.clear();
                         self.notice = None;
+                        self.editing = None;
                         self.actions.push(Action::Room(command));
                     }
                     Err(DraftError::Empty) => {}
@@ -630,6 +699,9 @@ impl Window {
 
     fn open_room(&mut self, room: &str) {
         if let Some(command) = self.rooms.select(room) {
+            self.selected_message = None;
+            self.confirm_delete = false;
+            self.editing = None;
             self.draft = self.composer.draft(room).to_owned();
             self.actions.push(Action::Room(command));
         }
@@ -664,8 +736,22 @@ pub fn visible_rooms(rows: Vec<crewcraft_ui_model::RoomRow>, filter: &str) -> Ve
 
 /// One feed row as a bubble (T315): the person's own on the right in `bubble-mine`, others on the left in
 /// `bubble-other` with the author's name above the first of a run.
-fn bubble_ui(ui: &mut Ui, row: &FeedRow, me: &str, colors: Option<appearance::BubbleColors>) {
+/// One message. The person's own messages can be clicked to select them; a selected one shows Edit and Delete (with a
+/// confirmation) under it (T316). Returns what the person did, if anything.
+fn bubble_ui(
+    ui: &mut Ui,
+    row: &FeedRow,
+    me: &str,
+    colors: Option<appearance::BubbleColors>,
+    selected: Option<u64>,
+    confirming: bool,
+) -> Option<MessageAction> {
     let mine = side(row, me) == Side::Mine;
+    let own_message = match row {
+        FeedRow::Message { cursor, html, .. } if mine => Some((*cursor, text::html_to_text(html))),
+        _ => None,
+    };
+    let mut action = None;
     let fill = match colors {
         Some(colors) => colors.pick(mine, ui.visuals().dark_mode),
         None if mine => ui.visuals().selection.bg_fill,
@@ -701,10 +787,37 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, me: &str, colors: Option<appearance::Bu
             } else {
                 rich
             };
-            ui.add(egui::Label::new(rich).wrap());
+            let label = egui::Label::new(rich).wrap();
+            let label = if own_message.is_some() { label.sense(egui::Sense::click()) } else { label };
+            if ui.add(label).clicked()
+                && let Some((cursor, _)) = &own_message
+            {
+                action = Some(MessageAction::Select(*cursor));
+            }
         });
     });
+    if let Some((cursor, text)) = own_message.filter(|(cursor, _)| Some(*cursor) == selected) {
+        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+            if confirming {
+                if ui.button("Keep").clicked() {
+                    action = Some(MessageAction::Keep);
+                }
+                if ui.button("Delete").clicked() {
+                    action = Some(MessageAction::Delete(cursor));
+                }
+                ui.label("Delete this message?");
+            } else {
+                if ui.button("Delete").clicked() {
+                    action = Some(MessageAction::AskDelete);
+                }
+                if ui.button("Edit").clicked() {
+                    action = Some(MessageAction::Edit(cursor, text));
+                }
+            }
+        });
+    }
     ui.add_space(2.0);
+    action
 }
 
 /// A labelled one-line field whose text is zeroed when dropped. `hidden` draws it as a password field.
