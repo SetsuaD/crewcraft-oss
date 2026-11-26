@@ -6,7 +6,7 @@
 use crewcraft_proto::frame::{Decoder, FrameError, encode};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{MAX_MENTIONS, Push, encode_push};
-use crewcraft_proto::request::{Request, Response, decode_request, encode_response, encode_rooms};
+use crewcraft_proto::request::{Request, Response, SearchHit, decode_request, encode_hits, encode_response, encode_rooms};
 
 use crate::cursor_log::Since;
 use crate::dispatch::{Backend, handle, handle_backend, listed_rooms};
@@ -78,12 +78,14 @@ impl Connection {
     ///    the requested cursor (`RoomService::sync`), oldest first, using `to_push`. If the log no longer holds them
     ///    (`Since::Gap`), no pushes follow: the client sees from the response's head that it must resync;
     /// 4. if it was a `ListRooms` and the response is `Ok`: append, framed, the room-list frame for this user
-    ///    (`dispatch::listed_rooms`, which the response's cursor counts), with the request's id.
+    ///    (`dispatch::listed_rooms`, which the response's cursor counts), with the request's id;
+    /// 5. if it was a `Search` and the response is `Ok`: append, framed, the hits frame for this user
+    ///    (`DurableServer::found`; none without a journal), with the request's id (task T320b).
     ///
     /// Returns everything to send, in that order. On a fatal error, returns only the error: no bytes from this call
     /// are sent and the caller closes the connection.
     pub fn receive(&mut self, server: &mut Server, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, ConnError> {
-        self.receive_with(server, bytes, now_ms, |s, user, request, now| Ok(handle(s, user, request, now)), |s| s)
+        self.receive_with(server, bytes, now_ms, |s, user, request, now| Ok(handle(s, user, request, now)), |s| s, |_, _, _| Vec::new())
     }
 
     /// Handle framed requests with the same wire behavior as [Self::receive].
@@ -98,6 +100,7 @@ impl Connection {
             now_ms,
             |s, user, request, now| handle_backend(&mut Backend::Durable(s), user, request, now).map_err(DurableConnError::Storage),
             DurableServer::server,
+            DurableServer::found,
         )
     }
 
@@ -108,6 +111,7 @@ impl Connection {
         now_ms: u64,
         mut dispatch: impl FnMut(&mut S, &str, &Request, u64) -> Result<Response, E>,
         read: impl Fn(&S) -> &Server,
+        found: impl Fn(&S, &str, &str) -> Vec<SearchHit>,
     ) -> Result<Vec<u8>, E> {
         self.decoder.push(bytes);
         let mut out = Vec::new();
@@ -137,6 +141,13 @@ impl Connection {
             {
                 let rooms = encode_rooms(id, &listed_rooms(read(server), &self.user)).map_err(ConnError::Request)?;
                 out.extend_from_slice(&encode(&rooms).map_err(ConnError::Frame)?);
+            }
+            // After a successful Search, the hits frame (task T320b), as the response counted them.
+            if let Request::Search { query } = &request
+                && matches!(response, Response::Ok { .. })
+            {
+                let hits = encode_hits(id, &found(server, &self.user, query)).map_err(ConnError::Request)?;
+                out.extend_from_slice(&encode(&hits).map_err(ConnError::Frame)?);
             }
         }
 

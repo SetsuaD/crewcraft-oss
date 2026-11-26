@@ -1,0 +1,24 @@
+{
+  "id": "T320b-search-wire",
+  "title": "The Search request, its hits frame, and the server's answer",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs"
+  ],
+  "test_path": "crates/server-core/tests/t320b_search_wire.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t320b_search_wire",
+  "depends_on": [
+    "T320a-search-index",
+    "T233-list-rooms"
+  ],
+  "spec": "Request tag 9 Search { query (1 to MAX_QUERY bytes) }, announced by FEATURE_SEARCH (2), answered Ok { cursor: n } then one hits frame (tag 132: id, u16 n up to MAX_HITS, each room, u64 cursor, author up to MAX_AUTHOR, snippet up to MAX_SNIPPET), with the same limit checks both ways and Truncated/TrailingBytes/BadKind as the room-list frame. DurableServer::found gives each hit's author and the start of its current plain text (an edit's new text; cut at a character boundary), newest first, only from the asker's rooms; a connection over a server without a journal answers Ok { cursor: 0 } and an empty hits frame. The network server advertises FEATURE_SEARCH.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md"
+  ]
+}
