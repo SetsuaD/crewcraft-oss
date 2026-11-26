@@ -150,6 +150,43 @@ impl Appearance {
     }
 }
 
+/// The feed's bubble colours from a theme (`bubble-mine`, `bubble-other`), for light and dark (T315).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BubbleColors {
+    pub light_mine: Color32,
+    pub light_other: Color32,
+    pub dark_mine: Color32,
+    pub dark_other: Color32,
+}
+
+impl BubbleColors {
+    pub fn from_theme(theme: &Theme) -> Self {
+        Self {
+            light_mine: color(theme, Variant::Light, "bubble-mine"),
+            light_other: color(theme, Variant::Light, "bubble-other"),
+            dark_mine: color(theme, Variant::Dark, "bubble-mine"),
+            dark_other: color(theme, Variant::Dark, "bubble-other"),
+        }
+    }
+
+    /// The fill for one bubble.
+    pub fn pick(self, mine: bool, dark: bool) -> Color32 {
+        match (mine, dark) {
+            (true, false) => self.light_mine,
+            (false, false) => self.light_other,
+            (true, true) => self.dark_mine,
+            (false, true) => self.dark_other,
+        }
+    }
+}
+
+impl Appearance {
+    /// The bubble colours for this appearance's theme, if it has one.
+    pub fn bubble_colors(&self) -> Option<BubbleColors> {
+        self.theme.as_ref().map(BubbleColors::from_theme)
+    }
+}
+
 fn color(theme: &Theme, variant: Variant, token: &str) -> Color32 {
     // Every token in COLOR_TOKENS is present in a parsed palette, so the fallback is never drawn.
     theme.palette(variant).get(token).map_or(Color32::MAGENTA, |c| Color32::from_rgb(c.r, c.g, c.b))
