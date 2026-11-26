@@ -1,6 +1,7 @@
 //! Transport adapters for the CrewCraft server binary.
 
 #[cfg(unix)]
+pub mod audit_file;
 pub mod control;
 pub mod device_session;
 pub mod external_signin;
