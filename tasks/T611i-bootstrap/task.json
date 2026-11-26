@@ -1,0 +1,21 @@
+{
+  "id": "T611i-bootstrap",
+  "title": "The bootstrap connection's enrollment through the identity provider",
+  "crate": "crewcraft-bootstrap",
+  "files": [
+    "crates/bootstrap/src/lib.rs",
+    "crates/bootstrap/src/staging.rs",
+    "crates/bootstrap/src/store.rs"
+  ],
+  "test_path": "crates/bootstrap/tests/t611i_external_enrollment.rs",
+  "test_cmd": "cargo test -p crewcraft-bootstrap --test t611i_external_enrollment",
+  "depends_on": [
+    "T611i-enroll-wire",
+    "T611i-store"
+  ],
+  "spec": "Enroller::with_external(provider) makes a server enroll through its identity provider (ExternalEnrollment: begin and verify). RedeemExternal takes Redeem's checks and limits with no password, stages the device, calls begin (with no lock held through receive_shared) and answers ExternalStart with nothing durable (ERR_UNAVAILABLE and nothing staged if begin fails). ConfirmExternal on the same attempt takes the limits, calls verify (no lock held), requires the token's email to normalize to the invitation's (ERR_EXTERNAL_REFUSED otherwise, nothing durable, the attempt dropped, the invitation live), then commits ONE record with the binding (ActivationRecord::external; no password; a TOTP secret no one is shown) and only then sends Activated. A server with a provider refuses Redeem, and one without refuses RedeemExternal, with ERR_WRONG_PATH. Out-of-order requests close without a reply.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

@@ -133,6 +133,28 @@ impl Staging {
         })
     }
 
+    /// Take the limits for exactly this attempt's `ConfirmExternal` (task T611i), before the provider call.
+    pub fn take_external(&mut self, source: &str, bootstrap_pub: &[u8; 32], attempt: u64, now_ms: u64) -> Result<(), StageError> {
+        self.take_call(source, now_ms)?;
+        match self.pending.get(bootstrap_pub) {
+            Some(pending) if pending.attempt == attempt => Ok(()),
+            _ => Err(StageError::NoAttempt),
+        }
+    }
+
+    /// What this attempt staged, for an enrollment the provider verified (task T611i). No authenticator code was
+    /// accepted, so the counter is 0.
+    pub fn confirmed_external(&self, bootstrap_pub: &[u8; 32], attempt: u64) -> Option<Confirmed> {
+        let pending = self.pending.get(bootstrap_pub).filter(|pending| pending.attempt == attempt)?;
+        Some(Confirmed {
+            email: pending.email.clone(),
+            device_name: pending.device_name.clone(),
+            key_id: pending.key_id,
+            secret: pending.secret.clone(),
+            counter: 0,
+        })
+    }
+
     /// The activation is durable: the staged setup is spent.
     pub fn finish(&mut self, bootstrap_pub: &[u8; 32]) {
         self.pending.remove(bootstrap_pub);
