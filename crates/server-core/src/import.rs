@@ -515,6 +515,16 @@ impl DurableServer {
         Ok(true)
     }
 
+    /// Every live imported message's stored files, as `(room, cursor, [(file id, name, size)])` (task T331a).
+    pub(crate) fn imported_file_lists(&self) -> Vec<(String, u64, Vec<([u8; 16], String, u64)>)> {
+        self.imports
+            .messages
+            .values()
+            .filter(|m| !m.deleted && !m.files.is_empty())
+            .map(|m| (m.slug.clone(), m.cursor, m.files.iter().filter_map(|f| f.id.map(|id| (id, f.name.clone(), f.size))).collect()))
+            .collect()
+    }
+
     /// The files of the imported message at `cursor` in `slug`, if it has any and is not deleted (T350e).
     pub(crate) fn imported_files(&self, slug: &str, cursor: u64) -> Option<&[ImportedFile]> {
         let key = self.imports.by_cursor.get(&(slug.to_owned(), cursor))?;

@@ -1,0 +1,26 @@
+{
+  "id": "T331a-file-list",
+  "title": "The file list: ListFiles and its files frame",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/import.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/client-core/src/client.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs"
+  ],
+  "test_path": "crates/server-core/tests/t331a_file_list.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t331a_file_list",
+  "depends_on": [
+    "T330c-attach",
+    "T350e-imported-media"
+  ],
+  "spec": "REQUIREMENTS 2.4 (the Files area). FEATURE_FILE_LIST (128); request 24 ListFiles (no fields), answered Ok { cursor: n } then a files frame (tag 135: u32 id | u16 n | n × (16 file | str room | u64 message cursor | str uploader | str name | u64 size | u8 has image | [u32 w | u32 h]), at most MAX_LISTED_FILES = 500; encode_files/decode_files refuse more, cut frames and trailing bytes). DurableServer::listed_files(user): every stored file attached to a live message in a room the user is in now, and every stored file of a live imported message there; never unposted uploads, files of deleted messages, files not archived, or rooms the user is not in; newest message cursor first, then room, then name. The memory backend answers E_NO_STORAGE. The client reads the frame as ClientEvent::Files. The network server advertises the feature.",
+  "status": "done",
+  "context": [
+    "docs/FILES.md"
+  ]
+}
