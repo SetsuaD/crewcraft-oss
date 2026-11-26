@@ -78,6 +78,11 @@ read and current-call metadata. If this second Sync encounters another gap or fa
 without recursively starting another Current walk. A completely installed captured window remains explicitly
 marked as recovered state; partial records are never exposed as a complete replacement.
 
+When calls are negotiated without either pin or read snapshots, an equal-head Sync acknowledgement alone does not
+delimit the trailing call metadata. Recovery then uses the existing Ping exchange as a final drain barrier, within
+the same deadline. Receiving its matched reply proves that the preceding Sync sidebands were consumed. Ordinary
+incremental Sync and the protocol numbers stay unchanged.
+
 The worker forces all replacement metadata updates, including empty file/thread/reaction/time/call lists, even if
 message text is unchanged. It refreshes the personal Saved view when requested. Pins and saved references outside
 the 50-message window continue to resolve through the existing full current-state APIs.

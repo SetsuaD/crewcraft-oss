@@ -21,7 +21,7 @@ use crewcraft_accounts::identity::normalize_email;
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_proto::handshake::ServerSide;
 use crewcraft_proto::request::{
-    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_READ_STATE,
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_READ_STATE,
     FEATURE_SEARCH, FEATURE_THREADS,
 };
 #[cfg(unix)]
@@ -698,7 +698,8 @@ fn serve_lab(state: &Path, trusted_root: &Path, port: u16) -> io::Result<()> {
                 | FEATURE_CALLS
                 | FEATURE_FILE_LIST
                 | FEATURE_PINS_SAVED
-                | FEATURE_READ_STATE,
+                | FEATURE_READ_STATE
+                | FEATURE_GAP_REPLAY,
             name: "CrewCraft Lab".into(),
         },
     };

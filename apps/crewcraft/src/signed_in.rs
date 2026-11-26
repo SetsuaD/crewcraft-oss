@@ -18,7 +18,7 @@ use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
 use crewcraft_proto::request::{
-    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_READ_STATE,
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_READ_STATE,
     FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, Request, SavedMessage, SearchHit,
 };
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
@@ -143,7 +143,8 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
             | FEATURE_CALLS
             | FEATURE_FILE_LIST
             | FEATURE_PINS_SAVED
-            | FEATURE_READ_STATE,
+            | FEATURE_READ_STATE
+            | FEATURE_GAP_REPLAY,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -168,7 +169,8 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
             | FEATURE_CALLS
             | FEATURE_FILE_LIST
             | FEATURE_PINS_SAVED
-            | FEATURE_READ_STATE,
+            | FEATURE_READ_STATE
+            | FEATURE_GAP_REPLAY,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -208,7 +210,8 @@ pub(crate) fn finish_external(
             | FEATURE_CALLS
             | FEATURE_FILE_LIST
             | FEATURE_PINS_SAVED
-            | FEATURE_READ_STATE,
+            | FEATURE_READ_STATE
+            | FEATURE_GAP_REPLAY,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -403,6 +406,19 @@ impl SignedInSession {
     pub fn read_state(&mut self, room: &str) -> Option<crewcraft_client_core::room_view::ReadState> {
         let view = self.chat.view(room)?;
         if view.awaiting_read_state() { None } else { view.read_state().cloned() }
+    }
+
+    pub fn gap_notice(&mut self, room: &str) -> Option<crewcraft_client_core::room_view::GapNotice> {
+        self.chat.view(room)?.gap_notice().cloned()
+    }
+
+    pub fn recovery_epoch(&mut self, room: &str) -> u64 {
+        self.chat.view(room).map_or(0, |view| view.recovery_epoch())
+    }
+
+    /// The last completely installed room view, including after a follow-up Sync failed (T345).
+    pub fn room_shown(&mut self, room: &str) -> Option<Vec<Shown>> {
+        Some(self.chat.view(room)?.shown())
     }
 
     /// Pin or conditionally unpin the message at `target` (T343).

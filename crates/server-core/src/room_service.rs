@@ -351,6 +351,12 @@ impl RoomService {
         self.reactions.get(&target).cloned().unwrap_or_default()
     }
 
+    /// Borrow individual sorted reaction edges so bounded recovery never clones an unbounded reactor set (T345).
+    pub(crate) fn reaction_edges(&self, target: u64) -> impl Iterator<Item = (u8, &str)> {
+        self.reactions.get(&target).into_iter().flat_map(|reactions| reactions.iter())
+            .flat_map(|(code, people)| people.iter().map(move |person| (*code, person.as_str())))
+    }
+
     /// Replace the room's pin, or clear it only when it still points at `target` (task T343).
     pub fn pin(&mut self, actor: &str, target: u64, on: bool) -> Result<u64, ServiceError> {
         self.check_pin_access(actor)?;

@@ -115,6 +115,8 @@ pub enum Update {
         room: String,
         shown: Vec<Shown>,
     },
+    Recovered { room: String },
+    Gap { room: String, notice: crewcraft_client_core::room_view::GapNotice },
     Unread {
         room: String,
         unread: u32,
@@ -225,6 +227,8 @@ impl fmt::Debug for Update {
             Self::Snapshot { room, shown } => f.debug_struct("Snapshot").field("room", room).field("rows", &shown.len()).finish(),
             Self::Unread { room, unread } => f.debug_struct("Unread").field("room", room).field("unread", unread).finish(),
             Self::ReadState { room, unread } => f.debug_struct("ReadState").field("room", room).field("unread", unread).finish(),
+            Self::Recovered { room } => f.debug_struct("Recovered").field("room", room).finish(),
+            Self::Gap { room, notice } => f.debug_struct("Gap").field("room", room).field("notice", notice).finish(),
             Self::MarkedUnread { room } => f.debug_struct("MarkedUnread").field("room", room).finish(),
             Self::LastEmail(email) => f.debug_tuple("LastEmail").field(email).finish(),
             Self::SearchResults { query, results } => f.debug_struct("SearchResults").field("query", query).field("results", &results.len()).finish(),
@@ -364,6 +368,7 @@ pub struct Window {
     /// Current saved-message references, with no stale copies of edited or deleted bodies (T343).
     saved_messages: Option<Vec<crewcraft_proto::request::SavedMessage>>,
     saved_view: bool,
+    gaps: HashMap<String, crewcraft_client_core::room_view::GapNotice>,
     /// The bytes the person's files take, and their quota (T332b).
     storage: Option<(u64, u64)>,
     /// Image previews (T333): asked for, decoded and waiting for a texture, shown, or given up on.
@@ -535,6 +540,22 @@ impl Window {
             Update::Snapshot { room, shown } => {
                 self.feeds.insert(room, feed_rows(&shown));
             }
+            Update::Gap { room, notice } => { self.gaps.insert(room, notice); }
+            Update::Recovered { room } => {
+                self.message_files.remove(&room);
+                self.threads.remove(&room);
+                self.reactions.remove(&room);
+                self.archived.remove(&room);
+                self.sent_times.remove(&room);
+                self.open_calls.remove(&room);
+                self.call_lines.remove(&room);
+                if self.rooms.selected() == Some(room.as_str()) {
+                    self.selected_message = None;
+                }
+                if self.open_thread.as_ref().is_some_and(|(of, _)| of == &room) {
+                    self.open_thread = None;
+                }
+            }
             Update::Unread { room, unread } => {
                 self.rooms.set_unread(&room, unread);
             }
@@ -652,6 +673,7 @@ impl Window {
                 self.open_thread = None;
                 self.thread_draft.clear();
                 self.feeds.clear();
+                self.gaps.clear();
                 self.rooms = RoomList::new();
                 self.composer = Composer::new();
                 self.draft.clear();
@@ -926,6 +948,7 @@ impl Window {
             });
             self.pin_bar(ui, &room);
             self.read_controls(ui, &room);
+            self.gap_ui(ui, &room);
         });
         egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
         // A thread opens beside the conversation (T340b).
@@ -944,6 +967,7 @@ impl Window {
         let mut focus_found = false;
         let read_only = self.archived.contains(&room);
         let threads = self.threads.get(&room).cloned().unwrap_or_default();
+        let present = self.message_cursors(&room);
         let call_lines = self.call_lines.get(&room).cloned().unwrap_or_default();
         let look = Bubbles {
             me: &me,
@@ -966,13 +990,16 @@ impl Window {
             ScrollArea::vertical().stick_to_bottom(focus.is_none() || self.focus_scrolled).auto_shrink(false).show(ui, |ui| {
                 // Replies live in their thread, not in the conversation (T340b).
                 let mut shown_lines = 0;
+                let mut previous_orphan = None;
                 for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
                     if let FeedRow::Message { cursor, .. } = row {
                         shown_lines = call_lines_ui(ui, &call_lines, shown_lines, *cursor);
                     }
-                    if matches!(row, FeedRow::Message { cursor, .. } if threads.contains_key(cursor)) {
+                    let parent = match row { FeedRow::Message { cursor, .. } => threads.get(cursor).copied(), _ => None };
+                    if parent.is_some_and(|parent| present.contains(&parent)) {
                         continue;
                     }
+                    action = orphan_thread_ui(ui, parent, &mut previous_orphan).or(action.take());
                     if matches!(row, FeedRow::Message { cursor, .. } if Some(*cursor) == focus) {
                         focus_found = true;
                     }
@@ -1040,6 +1067,7 @@ impl Window {
                     });
                     self.pin_bar(ui, &room);
                     self.read_controls(ui, &room);
+                    self.gap_ui(ui, &room);
                 });
                 egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
                 // On a phone an open thread takes the conversation's place (T340b).
@@ -1059,6 +1087,7 @@ impl Window {
                 let mut focus_found = false;
                 let read_only = self.archived.contains(&room);
                 let threads = self.threads.get(&room).cloned().unwrap_or_default();
+                let present = self.message_cursors(&room);
                 let call_lines = self.call_lines.get(&room).cloned().unwrap_or_default();
                 let look = Bubbles {
                     me: &me,
@@ -1080,13 +1109,16 @@ impl Window {
                 egui::CentralPanel::default_margins().show(ui, |ui| {
                     ScrollArea::vertical().stick_to_bottom(focus.is_none() || self.focus_scrolled).auto_shrink(false).show(ui, |ui| {
                         let mut shown_lines = 0;
+                        let mut previous_orphan = None;
                         for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
                             if let FeedRow::Message { cursor, .. } = row {
                                 shown_lines = call_lines_ui(ui, &call_lines, shown_lines, *cursor);
                             }
-                            if matches!(row, FeedRow::Message { cursor, .. } if threads.contains_key(cursor)) {
+                            let parent = match row { FeedRow::Message { cursor, .. } => threads.get(cursor).copied(), _ => None };
+                            if parent.is_some_and(|parent| present.contains(&parent)) {
                                 continue;
                             }
+                            action = orphan_thread_ui(ui, parent, &mut previous_orphan).or(action.take());
                             if matches!(row, FeedRow::Message { cursor, .. } if Some(*cursor) == focus) {
                                 focus_found = true;
                             }
@@ -1209,6 +1241,26 @@ impl Window {
 
     fn saved_in(&self, room: &str) -> std::collections::BTreeSet<u64> {
         self.saved_messages.iter().flatten().filter(|message| message.room == room).map(|message| message.cursor).collect()
+    }
+
+    fn message_cursors(&self, room: &str) -> std::collections::BTreeSet<u64> {
+        self.feeds.get(room).into_iter().flatten().filter_map(|row| match row {
+            FeedRow::Message { cursor, .. } => Some(*cursor),
+            FeedRow::Pending { .. } => None,
+        }).collect()
+    }
+
+    fn gap_ui(&self, ui: &mut Ui, room: &str) {
+        if let Some(gap) = self.gaps.get(room) {
+            ui.label("Earlier event history could not be replayed.");
+            if gap.recovered {
+                ui.label("Showing recovered current messages.");
+                ui.weak("Earlier call history is unavailable in this window.");
+            } else {
+                ui.label("Current-state recovery is incomplete; the previous view is shown.");
+            }
+            if gap.older { ui.label("Earlier current messages are not loaded in this window."); }
+        }
     }
 
     fn open_saved(&mut self) {
@@ -1481,6 +1533,9 @@ impl Window {
                 self.open_thread = None;
             }
         });
+        if !rows.iter().any(|row| matches!(row, FeedRow::Message { cursor, .. } if *cursor == parent)) {
+            ui.label("The original message is unavailable in this view.");
+        }
         let me = self.email.clone();
         let files = self.message_files.get(room).cloned().unwrap_or_default();
         let previews = self.shown_previews();
@@ -1719,6 +1774,17 @@ pub fn visible_rooms(rows: Vec<crewcraft_ui_model::RoomRow>, filter: &str) -> Ve
 fn message_text(html: &str) -> String {
     let text = text::html_to_text(html);
     if text.trim().is_empty() { "Message with attachments".to_owned() } else { text }
+}
+
+/// Keep orphaned replies visible with their true parent and an ordinary accessible thread action (T345).
+fn orphan_thread_ui(ui: &mut Ui, parent: Option<u64>, previous: &mut Option<u64>) -> Option<MessageAction> {
+    let show = parent.is_some() && parent != *previous;
+    *previous = parent;
+    if show {
+        ui.label("Replies to an unavailable message");
+        if ui.add(egui::Button::new("View thread").min_size(egui::vec2(0.0, TOUCH_TARGET))).clicked() { return parent.map(MessageAction::OpenThread); }
+    }
+    None
 }
 
 /// One feed row as a bubble (T315): the person's own on the right, everyone else's on the left. Selected messages

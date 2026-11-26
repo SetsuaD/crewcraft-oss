@@ -133,7 +133,7 @@ impl Connection {
     /// Returns everything to send, in that order. On a fatal error, returns only the error: no bytes from this call
     /// are sent and the caller closes the connection.
     pub fn receive(&mut self, server: &mut Server, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, ConnError> {
-        self.receive_with(server, bytes, now_ms, |s, user, request, now| Ok((handle(s, user, request, now), None)))
+        self.receive_with(server, bytes, now_ms, |s, user, _, request, now| Ok((handle(s, user, request, now), None)))
     }
 
     /// Handle framed requests with the same wire behavior as [Self::receive].
@@ -145,8 +145,8 @@ impl Connection {
         // Calls whose people stopped sending heartbeats close first (task T360a1).
         server.sweep_calls(now_ms).map_err(DurableConnError::Storage)?;
         let media_device = self.device.filter(|_| self.features & crewcraft_proto::request::FEATURE_MEDIA != 0);
-        self.receive_with(server, bytes, now_ms, |s, user, request, now| {
-            match upload(s, user, request, now).or_else(|| calls(s, user, request, now, media_device)) {
+        self.receive_with(server, bytes, now_ms, |s, user, id, request, now| {
+            match current_answer(s, user, id, request).or_else(|| upload(s, user, request, now)).or_else(|| calls(s, user, request, now, media_device)) {
                 Some(answer) => answer,
                 None => handle_backend(&mut Backend::Durable(s), user, request, now).map(|r| (r, None)).map_err(DurableConnError::Storage),
             }
@@ -158,7 +158,7 @@ impl Connection {
         server: &mut S,
         bytes: &[u8],
         now_ms: u64,
-        mut dispatch: impl FnMut(&mut S, &str, &Request, u64) -> Result<Answered, E>,
+        mut dispatch: impl FnMut(&mut S, &str, u32, &Request, u64) -> Result<Answered, E>,
     ) -> Result<Vec<u8>, E> {
         self.decoder.push(bytes);
         let mut out = Vec::new();
@@ -167,11 +167,14 @@ impl Connection {
             let (id, request) = decode_request(&payload).map_err(ConnError::Request)?;
             let pins_saved = self.features & crewcraft_proto::request::FEATURE_PINS_SAVED != 0;
             let reads = self.features & crewcraft_proto::request::FEATURE_READ_STATE != 0;
+            let gap_replay = self.features & crewcraft_proto::request::FEATURE_GAP_REPLAY != 0;
             let needs_pins_saved = matches!(request, Request::Pin { .. } | Request::SaveMessage { .. } | Request::ListSaved { .. });
-            let (response, follow) = if (needs_pins_saved && !pins_saved) || (matches!(request, Request::MarkUnread { .. }) && !reads) {
+            let (response, follow) = if (needs_pins_saved && !pins_saved)
+                || (matches!(request, Request::MarkUnread { .. }) && !reads)
+                || (matches!(request, Request::Current { .. }) && !gap_replay) {
                 (refusal_of(crate::dispatch::E_NOT_ALLOWED), None)
             } else {
-                dispatch(server, &self.user, &request, now_ms)?
+                dispatch(server, &self.user, id, &request, now_ms)?
             };
             // An offer to relay is answered by the caller, after the media server has answered (task T360b6). Nothing
             // after it is read yet, so answers stay in request order.
@@ -185,6 +188,7 @@ impl Connection {
             // An upload's answer carries the new upload's id or the finished file's (task T330b); a download's, the bytes
             // (task T330d).
             match follow {
+                Some(Follow::Current(frames)) => out.extend_from_slice(&frames),
                 Some(Follow::Id(value)) => out.extend_from_slice(&encode(&encode_id(id, &value)).map_err(ConnError::Frame)?),
                 Some(Follow::Files(files)) => {
                     let frame = crewcraft_proto::request::encode_files(id, &files).map_err(ConnError::Request)?;
@@ -296,6 +300,18 @@ impl Connection {
                 let hits = encode_hits(id, &server.found(&self.user, query)).map_err(ConnError::Request)?;
                 out.extend_from_slice(&encode(&hits).map_err(ConnError::Frame)?);
             }
+            // This is deliberately the last frame of a successful gapped Sync: drain all negotiated metadata
+            // before starting Current. Older clients retain their original explicit HistoryGap behavior.
+            if let Request::Sync { room, cursor } = &request
+                && gap_replay
+                && matches!(response, Response::Ok { .. })
+                && let Ok(service) = server.server().room(room)
+                && let Ok(Since::Gap { oldest }) = service.sync(&self.user, *cursor)
+            {
+                let gap = Push::Gap { room: room.clone(), cursor: service.head(), after: *cursor, oldest };
+                let frame = encode_push(&gap).map_err(ConnError::Request)?;
+                out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
+            }
         }
 
         Ok(out)
@@ -381,6 +397,19 @@ fn memory_read_state(server: &Server, slug: &str, user: &str) -> Option<Push> {
     let (position, revision) = room.read_position(user).ok()?;
     let unread = room.unread(user).ok()? as u64;
     Some(Push::ReadState { room: slug.to_owned(), cursor: room.head(), position, revision, unread })
+}
+
+/// Build the complete bounded reply before returning its acknowledgement; storage failures remain fatal.
+fn current_answer(server: &DurableServer, user: &str, id: u32, request: &Request) -> Option<Result<Answered, DurableConnError>> {
+    use crate::current::CurrentError;
+    let Request::Current { room } = request else { return None };
+    Some(match server.current(room, user, id) {
+        Ok((head, frames)) => Ok((Response::Ok { cursor: head }, Some(Follow::Current(frames)))),
+        Err(CurrentError::NoSuchRoom) => Ok((refusal_of(crate::dispatch::E_NO_SUCH_ROOM), None)),
+        Err(CurrentError::Unavailable) => Ok((refusal_of(crate::dispatch::E_NO_STORAGE), None)),
+        Err(CurrentError::TooLarge) => Ok((refusal_of(crate::dispatch::E_OTHER), None)),
+        Err(CurrentError::Storage(error)) => Err(DurableConnError::Storage(error)),
+    })
 }
 
 /// Answer a call request over a durable server (task T360a1): `None` for any other request. `Ok { cursor }` carries
@@ -530,6 +559,8 @@ fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64
 /// What follows a request's answer, when anything does: an id frame (an upload's id or a file's, task T330b) or a
 /// bytes frame (a download, task T330d).
 enum Follow {
+    /// Already bounded, encoded follow pages captured at one room head (T345).
+    Current(Vec<u8>),
     Id([u8; 16]),
     Bytes(Vec<u8>),
     /// The files frame answering `ListFiles` (task T331a).

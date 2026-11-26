@@ -1,0 +1,42 @@
+{
+  "id": "T345-gap-replay",
+  "title": "Recover a current room window after an explicit event-history gap",
+  "crate": "crewcraft-server",
+  "files": [
+    "docs/GAP-REPLAY.md",
+    "crates/proto/src/current.rs",
+    "crates/proto/src/lib.rs",
+    "crates/proto/src/request.rs",
+    "crates/proto/src/push.rs",
+    "crates/server-core/src/current.rs",
+    "crates/server-core/src/lib.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/server-core/src/dispatch.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/inbox.rs",
+    "crates/client-core/src/room_view.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t345_gap_replay_window.rs",
+    "apps/crewcraft-server/tests/t345_gap_replay.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t345_gap_replay.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t345_gap_replay",
+  "depends_on": [
+    "T343-pins-saved",
+    "T344-mark-unread"
+  ],
+  "spec": "The design in docs/GAP-REPLAY.md is published before implementation. FEATURE_GAP_REPLAY (2048) negotiates Current request 30, terminal Gap push 81 and CurrentPage follow frame 139. In-tail Sync remains incremental and old clients retain explicit HistoryGap behavior. A gap identifies requested cursor, oldest retained event and room head, without advancing the timeline. One authenticated Current request atomically captures at most the newest 50 live messages and their current files, thread parents, imported times and reaction edges. Consistent room/head/archive/older flags and consecutive page indexes bind at most 16 flattened records per page, 32768 records and 8 MiB of framed follow bytes per response. A final page is mandatory, including a sole empty page for an empty capture. Bounds are enforced before unbounded cloning; any oversized capture is refused without partial success. Clients stage and validate the complete stream before atomically replacing timeline and room metadata at the captured event head, preserving pending sends and acknowledgement safety. Snapshot records create no new-message notifications. One fresh Sync catches later events and current pin, personal read and open-call metadata; repeated gaps stay explicit and bounded within the original deadline. Malformed or interrupted transfer keeps the prior view and an honest gap. The worker forces empty metadata replacements and captured-room publication, refreshes Saved when requested, and keeps a persistent room-specific gap notice. Earlier unloaded current messages are distinguished from unavailable historical events. Pins and saved references outside the window remain authoritative. Replies to parents absent from the window remain visible with truthful unavailable-parent context and the real parent thread action on both desktop and phone. Older call chronology is not invented; current open calls are restored from Sync. Real enrolled-session recovery, metadata replacement, hostile streams, worker updates, legacy and membership cases provide acceptance evidence.",
+  "status": "open",
+  "context": [
+    "docs/GAP-REPLAY.md",
+    "docs/REQUIREMENTS.md"
+  ]
+}

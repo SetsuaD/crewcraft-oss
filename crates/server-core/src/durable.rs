@@ -74,9 +74,9 @@ pub struct DurableServer {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CurrentMessage {
-    author: String,
-    html: String,
-    edited: bool,
+    pub(crate) author: String,
+    pub(crate) html: String,
+    pub(crate) edited: bool,
 }
 
 /// An upload in progress (task T330b).

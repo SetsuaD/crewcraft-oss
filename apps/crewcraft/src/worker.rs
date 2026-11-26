@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crewcraft_client_core::room_view::{PinnedMessage, ReadState, Shown};
+use crewcraft_client_core::room_view::{GapNotice, PinnedMessage, ReadState, Shown};
 use crewcraft_ui_model::Command;
 use rand_core::{OsRng, RngCore};
 use rustls::client::ResolvesClientCert;
@@ -89,6 +89,9 @@ pub enum Event {
     SignedIn { email: String, rooms: Vec<String> },
     /// The open room as it is drawn now. Sent when the room is opened and whenever it changes.
     Room { room: String, shown: Vec<Shown> },
+    /// An atomic recovered window replaced this room's side metadata, including empty lists (T345).
+    Recovered { room: String },
+    Gap { room: String, notice: GapNotice },
     /// A followed room's count. With personal read-state support, a remote rewind can leave an open room unread.
     Unread { room: String, count: u32 },
     /// Authoritative personal state, including a rewind made on another device (T344).
@@ -437,6 +440,8 @@ impl Worker {
             seen: BTreeMap::new(),
             unread: BTreeMap::new(),
             read_states_sent: BTreeMap::new(),
+            gaps_sent: BTreeMap::new(),
+            recovery_epochs: BTreeMap::new(),
             files_sent: BTreeMap::new(),
             threads_sent: BTreeMap::new(),
             reactions_sent: BTreeMap::new(),
@@ -530,6 +535,8 @@ struct Run {
     /// The last unread count sent, per room.
     unread: BTreeMap<String, u32>,
     read_states_sent: BTreeMap<String, ReadState>,
+    gaps_sent: BTreeMap<String, GapNotice>,
+    recovery_epochs: BTreeMap<String, u64>,
     /// The last attachments sent, per room (task T330e).
     files_sent: BTreeMap<String, Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)>>,
     /// The last threads sent, per room (task T340b).
@@ -736,6 +743,8 @@ impl Run {
     fn start_session(&mut self, mut session: SignedInSession, email: &str) {
         self.pins_sent.clear();
         self.read_states_sent.clear();
+        self.gaps_sent.clear();
+        self.recovery_epochs.clear();
         self.saved_sent = None;
         self.saved_requested = false;
         if let Some(ticket) = session.resume_ticket() {
@@ -844,6 +853,8 @@ impl Run {
         self.seen.retain(|room, _| followed.contains(room));
         self.unread.retain(|room, _| followed.contains(room));
         self.read_states_sent.retain(|room, _| followed.contains(room));
+        self.gaps_sent.retain(|room, _| followed.contains(room));
+        self.recovery_epochs.retain(|room, _| followed.contains(room));
     }
 
     fn follow(&mut self, room: &str) -> Result<(), Problem> {
@@ -1282,10 +1293,30 @@ impl Run {
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        let lines = match session.sync(room) {
+        let result = session.sync(room);
+        let epoch = session.recovery_epoch(room);
+        let recovered = epoch > self.recovery_epochs.get(room).copied().unwrap_or(0);
+        let recovered_lines = if recovered { session.room_shown(room) } else { None };
+        let notice = session.gap_notice(room);
+        if let Some(notice) = notice
+            && self.gaps_sent.get(room) != Some(&notice)
+        {
+            self.gaps_sent.insert(room.to_owned(), notice.clone());
+            self.emit(Event::Gap { room: room.to_owned(), notice });
+        }
+        if recovered {
+            self.recovery_epochs.insert(room.to_owned(), epoch);
+            self.emit(Event::Recovered { room: room.to_owned() });
+        }
+        let mut failure = None;
+        let lines = match result {
             Ok((_, lines)) => lines,
+            Err(error) if recovered => {
+                failure = Some(error);
+                recovered_lines.unwrap_or_default()
+            }
             Err(LabError::Chat(ChatError::HistoryGap { reached, head })) if reached < head => {
-                let pinned = session.pinned(room);
+                let pinned = self.session.as_mut().and_then(|session| session.pinned(room));
                 if force || self.pins_sent.get(room) != Some(&pinned) {
                     self.pins_sent.insert(room.to_owned(), pinned.clone());
                     self.emit(Event::Pin { room: room.to_owned(), pinned });
@@ -1308,7 +1339,7 @@ impl Run {
         let is_open = self.open.as_deref() == Some(room);
         if let Some(session) = self.session.as_mut() {
             let pinned = session.pinned(room);
-            if force || self.pins_sent.get(room) != Some(&pinned) {
+            if force || recovered || self.pins_sent.get(room) != Some(&pinned) {
                 self.pins_sent.insert(room.to_owned(), pinned.clone());
                 self.emit(Event::Pin { room: room.to_owned(), pinned });
             }
@@ -1316,7 +1347,7 @@ impl Run {
         // The files the room's messages carry, when they change (task T330e).
         if let Some(session) = self.session.as_mut() {
             let files: Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)> = session.attachments(room).into_iter().collect();
-            if !files.is_empty() && self.files_sent.get(room) != Some(&files) {
+            if recovered || (!files.is_empty() && self.files_sent.get(room) != Some(&files)) {
                 self.files_sent.insert(room.to_owned(), files.clone());
                 self.emit(Event::Attachments { room: room.to_owned(), files });
             }
@@ -1324,7 +1355,7 @@ impl Run {
         // The room's open call and its history lines, when they change (task T360a2).
         if let Some(session) = self.session.as_mut() {
             let calls = session.calls(room);
-            let changed = match self.calls_sent.get(room) {
+            let changed = recovered || match self.calls_sent.get(room) {
                 Some(last) => *last != calls,
                 None => calls.0.is_some() || !calls.1.is_empty(),
             };
@@ -1334,13 +1365,13 @@ impl Run {
             }
         }
         // The call's keys, for the call this app is in (task T360d3).
-        if self.in_call.as_ref().is_some_and(|(in_room, _)| in_room == room) {
+        if failure.is_none() && self.in_call.as_ref().is_some_and(|(in_room, _)| in_room == room) {
             self.step_call_keys();
         }
         // An archive room, and its original times when they change (task T350d2).
         if let Some(session) = self.session.as_mut()
             && let Some(times) = session.archive(room)
-            && self.archive_sent.get(room) != Some(&times)
+            && (recovered || self.archive_sent.get(room) != Some(&times))
         {
             self.archive_sent.insert(room.to_owned(), times.clone());
             self.emit(Event::Archive { room: room.to_owned(), times });
@@ -1348,7 +1379,7 @@ impl Run {
         // Who reacted with what, when it changes; an empty list once the last reaction goes (task T341b).
         if let Some(session) = self.session.as_mut() {
             let reactions = session.reactions(room);
-            let changed = match self.reactions_sent.get(room) {
+            let changed = recovered || match self.reactions_sent.get(room) {
                 Some(last) => *last != reactions,
                 None => !reactions.is_empty(),
             };
@@ -1360,21 +1391,31 @@ impl Run {
         // The room's threads, when they change (task T340b).
         if let Some(session) = self.session.as_mut() {
             let parents: Vec<(u64, u64)> = session.parents(room).into_iter().collect();
-            if !parents.is_empty() && self.threads_sent.get(room) != Some(&parents) {
+            if recovered || (!parents.is_empty() && self.threads_sent.get(room) != Some(&parents)) {
                 self.threads_sent.insert(room.to_owned(), parents.clone());
                 self.emit(Event::Threads { room: room.to_owned(), parents });
             }
         }
-        if is_open {
-            let newest = lines.iter().filter_map(|entry| if let Shown::Line(line) = entry { Some(line.cursor) } else { None }).max();
-            let seen = self.seen.entry(room.to_owned()).or_insert(0);
-            *seen = newest.map_or(*seen, |newest| newest.max(*seen));
-            if force || self.shown.get(room) != Some(&lines) {
+        if is_open || recovered {
+            if is_open {
+                let newest = lines.iter().filter_map(|entry| if let Shown::Line(line) = entry { Some(line.cursor) } else { None }).max();
+                let seen = self.seen.entry(room.to_owned()).or_insert(0);
+                *seen = newest.map_or(*seen, |newest| newest.max(*seen));
+            }
+            if force || recovered || self.shown.get(room) != Some(&lines) {
                 self.shown.insert(room.to_owned(), lines.clone());
                 self.emit(Event::Room { room: room.to_owned(), shown: lines.clone() });
             }
         }
-        if self.publish_read_state(room, force) {
+        let authoritative = self.publish_read_state(room, force || recovered);
+        if let Some(error) = failure {
+            self.request_failed(error);
+            return;
+        }
+        if recovered && self.saved_requested {
+            self.refresh_saved(true);
+        }
+        if authoritative {
             return;
         }
         let seen = self.seen.get(room).copied().unwrap_or(0);

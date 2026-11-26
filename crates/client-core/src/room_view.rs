@@ -3,6 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crewcraft_proto::current::{CurrentPage, CurrentRecord, MAX_CURRENT_BYTES, MAX_CURRENT_MESSAGES, MAX_CURRENT_PAGE_RECORDS, MAX_CURRENT_RECORDS};
+use crewcraft_proto::message::CodecError;
+
 use crate::outbox::{Outbox, State};
 use crate::timeline::{Apply, Change, Line, Timeline};
 
@@ -13,6 +16,99 @@ pub enum Shown {
     /// One of the user's own messages that is not in the timeline yet, by its outbox id. `failed` when the outbox has
     /// given up on it (`State::Dead`).
     Pending { id: u64, body: String, failed: bool },
+}
+
+#[cfg(test)]
+mod current_window_tests {
+    use super::*;
+    use crewcraft_proto::current::encode_page;
+    use crewcraft_proto::push::AttachedFile;
+
+    fn page(index: u32, last: bool, records: Vec<CurrentRecord>) -> CurrentPage {
+        CurrentPage { room: "room".into(), head: 40, index, last, older: true, archived: false, records }
+    }
+
+    fn stage(window: &mut CurrentWindow, page: CurrentPage) -> Result<bool, CodecError> {
+        let bytes = encode_page(7, &page)?.len() + 4;
+        window.page(page, bytes)
+    }
+
+    fn message() -> CurrentRecord {
+        CurrentRecord::Message {
+            cursor: 30, author: "writer@example.org".into(), html: "<p>Current edited reply</p>".into(),
+            edited: true, parent: Some(2), sent_ms: Some(0),
+        }
+    }
+
+    #[test]
+    fn replacement_is_atomic_and_replaces_sidecars_without_losing_pending_sends() -> Result<(), CodecError> {
+        let mut view = RoomView::new();
+        view.snapshot(vec![Line { cursor: 1, author: "writer@example.org".into(), html: "old body".into(), edited: false }], 1);
+        let pending = view.send("still sending", 0);
+        let reached_ack = view.send("already accepted", 0);
+        let future_ack = view.send("accepted beyond capture", 0);
+        assert!(view.acked(reached_ack, 10));
+        assert!(view.acked(future_ack, 100));
+        view.attach(1, vec![AttachedFile { file: [1; 16], name: "old.txt".into(), size: 3, image: None }]);
+        view.thread(1, 9);
+        view.react(1, "reader@example.org", 1, true);
+        view.set_archived();
+        view.sent(1, 12);
+        view.set_call(Some(OpenCall { call: 8, video: false, started_by: "reader@example.org".into(), started_ms: 1, participants: Vec::new() }));
+        view.call_line(2, CallLineRow { call: 8, ended: false, author: "reader@example.org".into(), text: "old call".into() });
+        view.set_call_keys(8, vec![("reader@example.org".into(), [4; 32])]);
+        view.add_sealed(8, "reader@example.org".into(), 2, vec![5]);
+        view.pin_state(40, Some(PinnedMessage { target: 1, author: "writer@example.org".into(), html: "pin".into(), edited: false }));
+        view.set_read_state(ReadState { head: 40, position: 20, revision: 3, unread: 1 });
+        view.note_gap(40, 1, 20);
+        let before = view.shown();
+        let mut incomplete = CurrentWindow::new("room", 40);
+        assert!(!stage(&mut incomplete, page(0, false, vec![message()]))?);
+        assert!(view.install_current(incomplete).is_err());
+        assert_eq!(view.shown(), before);
+        assert!(view.attachments().contains_key(&1));
+
+        let mut complete = CurrentWindow::new("room", 40);
+        assert!(!stage(&mut complete, page(0, false, vec![message()]))?);
+        assert!(stage(&mut complete, page(1, true, vec![
+            CurrentRecord::File { cursor: 30, index: 0, file: AttachedFile { file: [2; 16], name: "current.txt".into(), size: 6, image: None } },
+            CurrentRecord::Reaction { cursor: 30, reaction: 1, author: "reader@example.org".into() },
+        ]))?);
+        view.install_current(complete)?;
+        assert_eq!(view.cursor(), 40);
+        let shown = view.shown();
+        assert!(shown.iter().any(|row| matches!(row, Shown::Line(line) if line.cursor == 30 && line.edited)));
+        assert!(!shown.iter().any(|row| matches!(row, Shown::Line(line) if line.cursor == 1)));
+        assert!(shown.iter().any(|row| matches!(row, Shown::Pending { id, .. } if *id == pending)));
+        assert!(shown.iter().any(|row| matches!(row, Shown::Pending { id, .. } if *id == future_ack)));
+        assert!(!shown.iter().any(|row| matches!(row, Shown::Pending { id, .. } if *id == reached_ack)));
+        assert!(!view.attachments().contains_key(&1));
+        assert!(view.attachments().contains_key(&30));
+        assert_eq!(view.parents().get(&30), Some(&2));
+        assert!(!view.parents().contains_key(&1));
+        assert!(!view.reactions().contains_key(&1));
+        assert!(view.reactions().contains_key(&30));
+        assert_eq!(view.sent_times().get(&30), Some(&0));
+        assert!(!view.sent_times().contains_key(&1));
+        assert!(!view.archived());
+        assert!(view.call().is_none() && view.call_lines().is_empty() && view.call_keys(8).is_none() && view.sealed(8).is_none());
+        assert_eq!(view.pin_revision(), Some(40));
+        assert!(view.read_state().is_some_and(|state| state.revision == 3));
+        assert!(view.gap_notice().is_some_and(|gap| gap.recovered && gap.older));
+        assert!(!view.needs_resync());
+
+        let mut empty = CurrentWindow::new("room", 45);
+        let page = CurrentPage { room: "room".into(), head: 45, index: 0, last: true, older: false, archived: true, records: Vec::new() };
+        let bytes = encode_page(9, &page)?.len() + 4;
+        empty.page(page, bytes)?;
+        view.install_current(empty)?;
+        assert!(!view.shown().iter().any(|row| matches!(row, Shown::Line(_))));
+        assert!(view.attachments().is_empty() && view.parents().is_empty() && view.reactions().is_empty() && view.sent_times().is_empty());
+        assert!(view.shown().iter().any(|row| matches!(row, Shown::Pending { id, .. } if *id == pending)));
+        assert!(view.archived());
+        assert!(view.gap_notice().is_some_and(|gap| gap.recovered && !gap.older));
+        Ok(())
+    }
 }
 
 /// A room's open call, as the server last said (task T360a1).
@@ -52,6 +148,90 @@ pub struct ReadState {
     pub unread: u64,
 }
 
+/// A missing event interval, distinct from older current messages outside a recovered window (T345).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GapNotice {
+    pub after: u64,
+    pub oldest: u64,
+    pub head: u64,
+    pub older: bool,
+    pub recovered: bool,
+}
+
+/// A bounded current-state stream staged away from the visible room until its last page validates (T345).
+pub struct CurrentWindow {
+    room: String,
+    head: u64,
+    next: u32,
+    bytes: usize,
+    records: usize,
+    flags: Option<(bool, bool)>,
+    last_key: Option<(u64, u8, u8, String)>,
+    complete: bool,
+    lines: Vec<Line>,
+    attachments: BTreeMap<u64, Vec<crewcraft_proto::push::AttachedFile>>,
+    parents: BTreeMap<u64, u64>,
+    reactions: BTreeMap<u64, BTreeMap<u8, BTreeSet<String>>>,
+    sent: BTreeMap<u64, u64>,
+}
+
+impl CurrentWindow {
+    pub fn new(room: &str, head: u64) -> Self {
+        Self {
+            room: room.to_owned(), head, next: 0, bytes: 0, records: 0, flags: None, last_key: None,
+            complete: false, lines: Vec::new(), attachments: BTreeMap::new(), parents: BTreeMap::new(),
+            reactions: BTreeMap::new(), sent: BTreeMap::new(),
+        }
+    }
+
+    /// Validate one decoded page and its actual framed byte count. A refused stream must be discarded.
+    pub fn page(&mut self, page: CurrentPage, framed_bytes: usize) -> Result<bool, CodecError> {
+        let bytes = self.bytes.checked_add(framed_bytes).ok_or(CodecError::FieldLength)?;
+        let records = self.records.checked_add(page.records.len()).ok_or(CodecError::FieldLength)?;
+        if self.complete || page.room != self.room || page.head != self.head || page.index != self.next
+            || page.records.len() > MAX_CURRENT_PAGE_RECORDS || bytes > MAX_CURRENT_BYTES || records > MAX_CURRENT_RECORDS
+            || self.flags.is_some_and(|flags| flags != (page.older, page.archived))
+            || (page.records.is_empty() && !(page.index == 0 && page.last))
+        {
+            return Err(CodecError::FieldLength);
+        }
+        self.flags = Some((page.older, page.archived));
+        for record in page.records {
+            let (cursor, kind, index, actor) = record.key();
+            let key = (cursor, kind, index, actor.to_owned());
+            if cursor == 0 || cursor > self.head || self.last_key.as_ref().is_some_and(|last| &key <= last) {
+                return Err(CodecError::FieldLength);
+            }
+            self.last_key = Some(key);
+            match record {
+                CurrentRecord::Message { cursor, author, html, edited, parent, sent_ms } => {
+                    if self.lines.len() >= MAX_CURRENT_MESSAGES || parent == Some(0) {
+                        return Err(CodecError::FieldLength);
+                    }
+                    self.lines.push(Line { cursor, author, html, edited });
+                    if let Some(parent) = parent { self.parents.insert(cursor, parent); }
+                    if let Some(sent_ms) = sent_ms { self.sent.insert(cursor, sent_ms); }
+                }
+                CurrentRecord::File { cursor, index, file } => {
+                    if self.lines.last().is_none_or(|line| line.cursor != cursor) { return Err(CodecError::FieldLength); }
+                    let files = self.attachments.entry(cursor).or_default();
+                    if usize::from(index) != files.len() { return Err(CodecError::FieldLength); }
+                    files.push(file);
+                }
+                CurrentRecord::Reaction { cursor, reaction, author } => {
+                    if self.lines.last().is_none_or(|line| line.cursor != cursor) { return Err(CodecError::FieldLength); }
+                    self.reactions.entry(cursor).or_default().entry(reaction).or_default().insert(author);
+                }
+            }
+        }
+        self.bytes = bytes;
+        self.records = records;
+        self.next = self.next.checked_add(1).ok_or(CodecError::FieldLength)?;
+        self.complete = page.last;
+        Ok(self.complete)
+    }
+}
+
 pub struct RoomView {
     timeline: Timeline,
     outbox: Outbox,
@@ -84,6 +264,8 @@ pub struct RoomView {
     awaiting_pin: bool,
     read_state: Option<ReadState>,
     awaiting_read_state: bool,
+    gap_notice: Option<GapNotice>,
+    recovery_epoch: u64,
 }
 
 impl Default for RoomView {
@@ -115,6 +297,8 @@ impl RoomView {
             awaiting_pin: false,
             read_state: None,
             awaiting_read_state: false,
+            gap_notice: None,
+            recovery_epoch: 0,
         }
     }
 
@@ -359,6 +543,50 @@ impl RoomView {
         self.timeline.reset(lines, cursor);
         self.needs_resync = false;
         self.drop_reached();
+    }
+
+    /// Record the missing event interval without moving the timeline or discarding pending sends.
+    pub fn note_gap(&mut self, head: u64, after: u64, oldest: u64) {
+        let previous = self.gap_notice.as_ref();
+        self.gap_notice = Some(GapNotice {
+            after: previous.map_or(after, |gap| gap.after.min(after)),
+            oldest: previous.map_or(oldest, |gap| gap.oldest.max(oldest)),
+            head: previous.map_or(head, |gap| gap.head.max(head)),
+            older: previous.is_some_and(|gap| gap.older),
+            recovered: previous.is_some_and(|gap| gap.recovered),
+        });
+        self.needs_resync = true;
+    }
+
+    pub fn gap_notice(&self) -> Option<&GapNotice> { self.gap_notice.as_ref() }
+
+    pub fn recovery_epoch(&self) -> u64 { self.recovery_epoch }
+
+    /// Install only a complete current window. No message notifications are produced; pending sends survive.
+    pub fn install_current(&mut self, window: CurrentWindow) -> Result<(), CodecError> {
+        if !window.complete || window.head < self.cursor()
+            || self.gap_notice.as_ref().is_some_and(|gap| window.head < gap.head)
+        {
+            return Err(CodecError::FieldLength);
+        }
+        let (older, archived) = window.flags.ok_or(CodecError::FieldLength)?;
+        self.snapshot(window.lines, window.head);
+        self.attachments = window.attachments;
+        self.parents = window.parents;
+        self.reactions = window.reactions;
+        self.sent = window.sent;
+        self.archived = archived;
+        self.call = None;
+        self.call_lines.clear();
+        self.call_keys = None;
+        self.sealed.clear();
+        self.recovery_epoch = self.recovery_epoch.saturating_add(1);
+        if let Some(gap) = self.gap_notice.as_mut() {
+            gap.older = older;
+            gap.recovered = true;
+            gap.head = window.head;
+        }
+        Ok(())
     }
 
     /// The timeline's cursor.

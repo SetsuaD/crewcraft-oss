@@ -21,7 +21,7 @@ use crewcraft_enroll::invitation::{InvitationLink, LinkError, write_link};
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_proto::handshake::ServerSide;
 use crewcraft_proto::request::{
-    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_READ_STATE,
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_READ_STATE,
     FEATURE_SEARCH, FEATURE_THREADS,
 };
 use sha2::{Digest, Sha256};
@@ -113,7 +113,8 @@ impl ServerConfig {
                     | FEATURE_CALLS
                     | FEATURE_FILE_LIST
                     | FEATURE_PINS_SAVED
-                    | FEATURE_READ_STATE,
+                    | FEATURE_READ_STATE
+                    | FEATURE_GAP_REPLAY,
                 name: "CrewCraft".into(),
             },
         }
