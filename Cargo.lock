@@ -1079,6 +1079,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "crewcraft-media-auth"
+version = "0.1.0-beta.1"
+dependencies = [
+ "ring",
+]
+
+[[package]]
 name = "crewcraft-oidc"
 version = "0.1.0-beta.1"
 dependencies = [

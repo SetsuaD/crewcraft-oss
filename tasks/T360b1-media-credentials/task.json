@@ -1,0 +1,19 @@
+{
+  "id": "T360b1-media-credentials",
+  "title": "Media credentials: signed, short-lived, single-use admission to a call",
+  "crate": "crewcraft-media-auth",
+  "files": [
+    "crates/media-auth/Cargo.toml",
+    "crates/media-auth/src/lib.rs",
+    "Cargo.lock",
+    "docs/NON-RUST-DEPENDENCIES.md"
+  ],
+  "test_path": "crates/media-auth/tests/t360b1_media_credentials.rs",
+  "test_cmd": "cargo test -p crewcraft-media-auth --test t360b1_media_credentials",
+  "depends_on": [],
+  "spec": "docs/CALLS.md 'Admission'. A credential is version 1 | u64 call | str room | str person | u64 device | str media server | u64 not_after_ms | 16 random nonce | 64-byte Ed25519 signature over the rest (str: u16 length + UTF-8, 1 to 320 bytes). Issuer (a PKCS#8 Ed25519 media key: generate, from_pkcs8, public_key) issues credentials good for LIFETIME_MS (60 s). Verifier (the chat server's public key and its own server name) checks shape, signature, expiry, the media server named, and single use (a used nonce is refused as Replayed and forgotten once it would have expired, so memory stays bounded); a refusal uses nothing up. Ed25519 from ring.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}
