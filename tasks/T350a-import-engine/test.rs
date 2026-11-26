@@ -73,10 +73,22 @@ fn has_account(people: &[&str]) -> impl Fn(&str) -> bool {
     move |email: &str| people.iter().any(|p| p == email)
 }
 
-/// The room's messages as `(cursor, author, html)`, read as `reader`, oldest first (posts only).
+/// The room's messages as `(cursor, author, html)` with edits applied, read as `reader`, oldest first.
 fn posts(ds: &DurableServer, slug: &str, reader: &str) -> Vec<(u64, String, String)> {
     let Since::Events(events) = ds.server().room(slug).unwrap().sync(reader, 0).unwrap() else { panic!("gap") };
-    events.into_iter().filter(|(_, e)| e.kind == EventKind::Posted).map(|(c, e)| (c, e.actor, e.html)).collect()
+    let mut out: Vec<(u64, String, String)> = Vec::new();
+    for (cursor, event) in events {
+        match event.kind {
+            EventKind::Posted => out.push((cursor, event.actor, event.html)),
+            EventKind::Edited { target } => {
+                if let Some(post) = out.iter_mut().find(|(c, _, _)| *c == target) {
+                    post.2 = event.html;
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 #[test]
@@ -105,7 +117,7 @@ fn a_bundle_becomes_read_only_archive_rooms() {
     let (launch, agreed) = (channel_posts[0].0, channel_posts[1].0);
     assert_eq!((ds.parent_of(&channel, agreed), ds.parent_of(&channel, channel_posts[2].0)), (Some(launch), None));
     assert_eq!(ds.imported_sent_ms(&channel, launch), Some(T0 + 2 * 60_000));
-    assert_eq!(posts(&ds, &dm, BO).iter().map(|(_, _, h)| h.as_str()).collect::<Vec<_>>(), vec!["<p>hello Bo</p>", "<p>here is the plan</p>"]);
+    assert_eq!(posts(&ds, &dm, BO).iter().map(|(_, _, h)| h.as_str()).collect::<Vec<_>>(), vec!["hello Bo", "here is the plan"]);
     // Search covers archive rooms.
     assert_eq!(ds.found(BO, "Friday").len(), 2);
 
@@ -155,17 +167,17 @@ fn re_runs_add_nothing_and_later_runs_bring_changes_in() {
 
     let dm = ds.archive_room("teams", "dm1").unwrap().to_owned();
     let channel = ds.archive_room("teams", "ch1").unwrap().to_owned();
-    assert_eq!(posts(&ds, &dm, ANA)[0].2, "<p>hello Bo!</p>", "the edit");
+    assert_eq!(posts(&ds, &dm, ANA)[0].2, "hello Bo!", "the edit");
     let channel_posts = posts(&ds, &channel, CY);
     assert_eq!(channel_posts[0].2, "", "deleted since");
     assert_eq!(channel_posts[3].2, "", "never un-deleted");
-    assert_eq!(channel_posts.last().unwrap().2, "<p>new since the last export</p>");
+    assert_eq!(channel_posts.last().unwrap().2, "new since the last export");
     drop(ds);
 
     // Everything survives a restart, and a re-run after it still adds nothing.
     let mut ds = DurableServer::open(&p).unwrap();
     assert_eq!(ds.archive_room("teams", "ch1"), Some(channel.as_str()));
-    assert_eq!(posts(&ds, &dm, ANA)[0].2, "<p>hello Bo!</p>");
+    assert_eq!(posts(&ds, &dm, ANA)[0].2, "hello Bo!");
     assert_eq!(ds.parent_of(&channel, channel_posts[1].0), Some(channel_posts[0].0));
     assert_eq!(ds.imported_sent_ms(&channel, channel_posts[1].0), Some(T0 + 3 * 60_000));
     let after = ds.import(&later, &has_account(&[ANA, BO, CY]), false).unwrap();
