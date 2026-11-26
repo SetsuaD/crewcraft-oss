@@ -55,6 +55,9 @@ crewcraft-server import <data-directory> --bundle <bundle-directory> [--map-doma
     Import history from another system as read-only archive rooms (docs/IMPORT.md), with the server stopped. Safe to
     run again: a second run adds nothing, a later export adds what is new. Writes import-report.json into the bundle
     directory and exits non-zero when any part of the bundle was refused. --dry-run changes nothing.
+crewcraft-server import-teams --export <teams-export-directory> --out <new-bundle-directory>
+    Turn saved Microsoft Graph chat and channel pages into an import bundle (docs/IMPORT.md). Exits non-zero, after
+    writing the bundle, when messages were left out because users.json does not name their sender.
 crewcraft-server lab init <new-state-directory>
 crewcraft-server lab invite <state-directory> <trusted-root.der> <email>
 crewcraft-server lab serve <state-directory> <trusted-root.der> <port>
@@ -85,6 +88,9 @@ fn run(args: &[OsString]) -> io::Result<()> {
             invite(Path::new(data), text_arg(email)?, Some(Path::new(path)))?
         }
         [command, data, rest @ ..] if command == "import" => import(Path::new(data), rest)?,
+        [command, f1, export, f2, out] if command == "import-teams" && f1 == "--export" && f2 == "--out" => {
+            import_teams(Path::new(export), Path::new(out))?
+        }
         [command, data, owner, name] if command == "room" => println!("Room {}", create_room(Path::new(data), owner, name)?),
         [command, data, room, owner, member] if command == "add-member" => {
             add_member(Path::new(data), room, owner, member)?;
@@ -298,6 +304,25 @@ fn create_room(data: &Path, owner: &OsString, name: &OsString) -> io::Result<Str
     }
     let (mut installation, _) = open_offline(data)?;
     installation.rooms.create_room(&lab_email(owner)?, text_arg(name)?).map_err(lab_error)
+}
+
+/// `import-teams` (docs/IMPORT.md, task T350c): read a Teams export into a new bundle directory.
+fn import_teams(export: &Path, out: &Path) -> io::Result<()> {
+    let report = crewcraft_server::import_teams::read_teams(export, out)?;
+    println!("Bundle written to {}", out.display());
+    println!("  {} conversations, {} messages", report.conversations, report.messages);
+    println!("  {} attachments captured, {} not captured", report.files_captured, report.files_not_captured);
+    if report.system_messages > 0 {
+        println!("  {} system messages left out", report.system_messages);
+    }
+    if report.unmapped_senders.is_empty() {
+        return Ok(());
+    }
+    let left_out: usize = report.unmapped_senders.values().sum();
+    for (sender, count) in &report.unmapped_senders {
+        println!("  sender {sender:?} is not in users.json: {count} messages left out");
+    }
+    Err(io::Error::other(format!("{left_out} messages were left out: add their senders to users.json and run it again into a new directory")))
 }
 
 /// `import` (docs/IMPORT.md, task T350b): read the bundle, import it offline, and write the report.

@@ -1,0 +1,21 @@
+{
+  "id": "T350c-teams-reader",
+  "title": "Teams reader: saved Graph chat and channel pages become an import bundle",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/import_teams.rs",
+    "apps/crewcraft-server/src/lib.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "docs/IMPORT.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t350c_teams_reader.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t350c_teams_reader",
+  "depends_on": [
+    "T350b-import-command"
+  ],
+  "spec": "docs/IMPORT.md 'Reading a Teams export', built only from Microsoft's public Graph documentation. import_teams::read_teams(export, out) reads users.json (one page or a list of pages; id to mail or userPrincipalName, lowercased), conversations/*.json in name order ({chat} or {team, channel}, members, pages; channel replies expanded under a message are read too) and files/<message id>/<name>, and writes a new bundle directory: oneOnOne chats direct, other chats group, channels 'Team / Channel'; members by email or userId; createdDateTime to sent_ms (iso_ms: Z or +hh:mm offsets, fraction to milliseconds), lastModifiedDateTime later than created to edited_ms, deletedDateTime to deleted, replyToId to reply_to, HTML bodies to plain text (html_to_text: block tags and br to line breaks, list items '- ', script/style dropped, entities and numeric references decoded, lines trimmed, blank lines dropped); captured attachments copied into the bundle, others listed without bytes; system messages left out and counted; unmapped senders counted and their messages left out. `crewcraft-server import-teams --export <dir> --out <new dir>` prints the counts and exits non-zero, after writing the bundle, when senders were unmapped; the output directory must be new. Unknown Graph fields are ignored.",
+  "status": "done",
+  "context": [
+    "docs/IMPORT.md"
+  ]
+}
