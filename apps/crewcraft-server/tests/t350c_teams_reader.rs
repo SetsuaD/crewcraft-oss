@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crewcraft_server::import_bundle::read_bundle;
 use crewcraft_server::import_teams::{html_to_text, iso_ms, read_teams};
 use crewcraft_server_core::durable::DurableServer;
+use crewcraft_server_core::file_store::FileStore;
 use crewcraft_server_core::import::RoomKind;
 use serde_json::{Value, json};
 
@@ -144,7 +145,7 @@ fn an_export_becomes_a_bundle_that_imports() {
 
     // And the server imports it: the reply lands in its thread.
     let journal = dir.join("rooms.journal");
-    let mut ds = DurableServer::open(&journal).unwrap();
+    let mut ds = DurableServer::open(&journal).unwrap().with_files(FileStore::open(&dir.join("store")).unwrap()).unwrap();
     let imported = ds.import(&bundle, &|_| true, false).unwrap();
     assert!(imported.ok(), "{:?}", imported.refusals);
     assert_eq!((imported.rooms_created, imported.messages_added, imported.members_added), (2, 5, 5));

@@ -16,6 +16,8 @@
 //!   (0 for none)`
 //! - tag 22 `ImportEdit`: `str slug | str key | str text | u64 edited_ms`
 //! - tag 23 `ImportDelete`: `str slug | str key`
+//! - tag 24 `ImportFiles` (task T350e): `str slug | str key | u8 count | count × (str name | u64 size | u8 stored (0 or
+//!   1) | [16 file id when stored])`, the message's whole file list
 
 use crewcraft_proto::message::CodecError;
 
@@ -91,6 +93,12 @@ pub enum Op {
     ImportDelete {
         slug: String,
         key: String,
+    },
+    /// An imported message's files, each stored (with its file id) or not archived (task T350e).
+    ImportFiles {
+        slug: String,
+        key: String,
+        files: Vec<(String, u64, Option<[u8; 16]>)>,
     },
     /// A reaction added or taken back (task T341a).
     React {
@@ -242,6 +250,23 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             out.push(IMPORT_DELETE);
             encode_str(&mut out, slug)?;
             encode_str(&mut out, key)?;
+        }
+        Op::ImportFiles { slug, key, files } => {
+            out.push(IMPORT_FILES);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, key)?;
+            out.push(u8::try_from(files.len()).map_err(|_| CodecError::FieldLength)?);
+            for (name, size, id) in files {
+                encode_str(&mut out, name)?;
+                out.extend_from_slice(&size.to_be_bytes());
+                match id {
+                    Some(id) => {
+                        out.push(1);
+                        out.extend_from_slice(id);
+                    }
+                    None => out.push(0),
+                }
+            }
         }
         Op::React { slug, actor, target, reaction, on, now_ms } => {
             out.push(REACT);
@@ -462,6 +487,26 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::ImportDelete { slug, key })
         }
+        IMPORT_FILES => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let key = decode_str(bytes, &mut pos)?;
+            let [count] = decode_array::<1>(bytes, &mut pos)?;
+            let mut files = Vec::with_capacity(usize::from(count));
+            for _ in 0..count {
+                let name = decode_str(bytes, &mut pos)?;
+                let size = decode_u64(bytes, &mut pos)?;
+                let id = match decode_array::<1>(bytes, &mut pos)? {
+                    [0] => None,
+                    [1] => Some(decode_array::<16>(bytes, &mut pos)?),
+                    [other] => return Err(CodecError::BadKind(other)),
+                };
+                files.push((name, size, id));
+            }
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::ImportFiles { slug, key, files })
+        }
         _ => Err(CodecError::BadKind(tag)),
     }
 }
@@ -479,6 +524,7 @@ const IMPORT_ROOM: u8 = 20;
 const IMPORT_MESSAGE: u8 = 21;
 const IMPORT_EDIT: u8 = 22;
 const IMPORT_DELETE: u8 = 23;
+const IMPORT_FILES: u8 = 24;
 
 fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;

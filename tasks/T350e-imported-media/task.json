@@ -1,0 +1,24 @@
+{
+  "id": "T350e-imported-media",
+  "title": "Imported media: captured files stored and attached, the rest not archived",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/import_media.rs",
+    "crates/server-core/src/import.rs",
+    "crates/server-core/src/lib.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/durable.rs",
+    "apps/crewcraft-server/src/import_bundle.rs",
+    "crates/desktop-ui/src/lib.rs"
+  ],
+  "test_path": "crates/server-core/tests/t350e_imported_media.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t350e_imported_media",
+  "depends_on": [
+    "T350d2-archive-app"
+  ],
+  "spec": "docs/IMPORT.md files. BundleFile gains source (where captured bytes are) and sha256 (optional; the bundle reader parses 64 hex digits). A captured file of an imported message is streamed into the file store as ARCHIVE_OWNER's upload, checked against the bundle's size (when not 0) and sha256, recorded (Op::FileStored) and attached; a file not captured, or refused (reported as 'message n file m' with the reason, e.g. a hash or size mismatch, or a server without a file store), is kept by name and size with id NOT_ARCHIVED ([0; 16]), which is never found. The message's whole list is recorded as Op::ImportFiles (tag 24) and replayed. DurableServer::attachments returns an imported message's files (at most MAX_ATTACHMENTS; none once deleted), so Sync sends them in Attached to clients with FEATURE_FILES, and members download stored ones. A later run stores newly captured files (the message counts as updated), keeps every file already stored (by position and name, and any the bundle no longer lists), and never drops one. Report: files_stored and files_not_archived (replacing files_not_imported); a dry run counts and stores nothing. The window shows a not-archived file as 'name (not archived)' with no Save.",
+  "status": "done",
+  "context": [
+    "docs/IMPORT.md"
+  ]
+}
