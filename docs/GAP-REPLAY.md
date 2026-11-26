@@ -67,6 +67,11 @@ record ordering, message uniqueness, terminal shape and all byte/count limits. T
 the current timeline cursor and the Gap push's head. Interrupted, mismatched, repeated, stale or oversized pages
 leave the previous view and pending sends intact and retain an explicit gap. They never report successful Sync.
 
+The page-reading phase decodes only CurrentPage frames. After its terminal page, the existing Ping exchange seals
+the response boundary before installation: normal receive paths reject unexpected CurrentPage frames, so an extra
+or repeated page before the matched Ping acknowledgement invalidates the transfer while the old view is still
+intact. The Ping stays within the original deadline and introduces no protocol number.
+
 After a complete valid stream, installation replaces the timeline at the captured **event head**, rather than the
 last message cursor. It replaces files, thread parents, reactions, archive times and archive status, clears old
 call history/open-call/key/seal caches, and preserves outbox and acknowledgement safety. Snapshot rows do not enter
@@ -78,10 +83,11 @@ read and current-call metadata. If this second Sync encounters another gap or fa
 without recursively starting another Current walk. A completely installed captured window remains explicitly
 marked as recovered state; partial records are never exposed as a complete replacement.
 
-When calls are negotiated without either pin or read snapshots, an equal-head Sync acknowledgement alone does not
-delimit the trailing call metadata. Recovery then uses the existing Ping exchange as a final drain barrier, within
-the same deadline. Receiving its matched reply proves that the preceding Sync sidebands were consumed. Ordinary
-incremental Sync and the protocol numbers stay unchanged.
+Without either pin or read snapshots, a Sync acknowledgement and last Posted event do not delimit trailing file,
+thread, imported-time or call metadata. Recovery then uses the existing Ping exchange as a final drain barrier,
+within the same deadline. Receiving its matched reply proves that the preceding Sync sidebands were consumed.
+This barrier follows the fresh Sync; it serves a different purpose from the pre-installation page boundary.
+Ordinary incremental Sync and the protocol numbers stay unchanged.
 
 The worker forces all replacement metadata updates, including empty file/thread/reaction/time/call lists, even if
 message text is unchanged. It refreshes the personal Saved view when requested. Pins and saved references outside

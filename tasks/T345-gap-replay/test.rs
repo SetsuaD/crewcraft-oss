@@ -586,33 +586,49 @@ fn script_complete_capture(replies: &mut Vec<Vec<u8>>) {
 
 #[test]
 fn a_complete_multipage_capture_replaces_cached_state_and_syncs_from_the_captured_head() {
-    for features in [SCRIPT_FEATURES, FEATURE_GAP_REPLAY | FEATURE_CALLS] {
+    for features in [SCRIPT_FEATURES, FEATURE_GAP_REPLAY | FEATURE_CALLS, FEATURE_GAP_REPLAY | FEATURE_FILES] {
+        let tail_files = features == (FEATURE_GAP_REPLAY | FEATURE_FILES);
+        let needs_barrier = features & (FEATURE_PINS_SAVED | FEATURE_READ_STATE) == 0;
+        let final_head = SCRIPT_HEAD + u64::from(tail_files);
+        let tail_file = AttachedFile { file: [9; 16], name: "after-capture.txt".into(), size: 5, image: None };
         let mut replies = script_prefix_with_features(features);
         script_complete_capture(&mut replies);
-        replies.push(encode_response(4, &Response::Ok { cursor: SCRIPT_HEAD }).unwrap());
-        script_metadata(&mut replies, SCRIPT_HEAD, features);
-        // In the calls-only variant the recovery operation itself needs Ping5 to drain CallState after an
-        // equal-head Sync. The pin/read variant completes on its terminal metadata without that extra request.
-        replies.push(encode_response(5, &Response::Ok { cursor: 0 }).unwrap());
-        if features & FEATURE_CALLS != 0 {
-            replies.push(encode_response(6, &Response::Ok { cursor: 0 }).unwrap());
+        // A matched Ping after the terminal page establishes the capture boundary before installation.
+        replies.push(encode_response(4, &Response::Ok { cursor: 0 }).unwrap());
+        replies.push(encode_response(5, &Response::Ok { cursor: final_head }).unwrap());
+        if tail_files {
+            replies.push(encode_push(&Push::Posted {
+                room: SCRIPT_ROOM.into(), cursor: final_head, author: BOB.into(), html: "a post-capture attached message".into(), mentions: Vec::new(),
+            }).unwrap());
+            replies.push(encode_push(&Push::Attached { room: SCRIPT_ROOM.into(), cursor: final_head, files: vec![tail_file.clone()] }).unwrap());
+        }
+        script_metadata(&mut replies, final_head, features);
+        // Without pin/read metadata the recovery operation needs Ping6 to drain either the equal-head CallState
+        // or an attachment after Posted reached the newer head. Pin/read completes without that extra request.
+        replies.push(encode_response(6, &Response::Ok { cursor: 0 }).unwrap());
+        if needs_barrier {
+            replies.push(encode_response(7, &Response::Ok { cursor: 0 }).unwrap());
         }
         let mut session = ScriptedSession::with_features(replies, features);
-        assert_eq!(session.chat.sync(SCRIPT_ROOM, false, 0, 0, session.deadline), Ok(SCRIPT_HEAD));
+        assert_eq!(session.chat.sync(SCRIPT_ROOM, false, 0, 0, session.deadline), Ok(final_head));
         let requests = session.requests();
-        assert_eq!(requests.len(), if features & FEATURE_CALLS != 0 { 5 } else { 4 });
+        assert_eq!(requests.len(), if needs_barrier { 6 } else { 5 });
         assert_eq!(requests.iter().filter(|request| matches!(request, Request::Current { .. })).count(), 1);
-        assert!(matches!(&requests[3], Request::Sync { room, cursor } if room == SCRIPT_ROOM && *cursor == SCRIPT_HEAD));
-        if features & FEATURE_CALLS != 0 {
-            assert!(matches!(&requests[4], Request::Ping));
+        assert!(matches!(&requests[3], Request::Ping));
+        assert!(matches!(&requests[4], Request::Sync { room, cursor } if room == SCRIPT_ROOM && *cursor == SCRIPT_HEAD));
+        if needs_barrier {
+            assert!(matches!(&requests[5], Request::Ping));
         }
         let view = session.chat.view(SCRIPT_ROOM).unwrap();
-        assert_eq!(view.cursor(), SCRIPT_HEAD, "metadata cursors do not replace the captured event head");
+        assert_eq!(view.cursor(), final_head, "the captured event head includes any subsequent timeline events");
         let shown = view.shown();
-        assert_eq!(shown.len(), 1);
+        assert_eq!(shown.len(), if tail_files { 2 } else { 1 });
         assert!(matches!(&shown[0], Shown::Line(line) if line.cursor == 10 && line.edited && line.html == "current recovered body"));
-        assert_eq!(view.attachments().len(), 1);
+        assert_eq!(view.attachments().len(), if tail_files { 2 } else { 1 });
         assert_eq!(view.attachments().get(&10), Some(&vec![script_file(true)]));
+        if tail_files {
+            assert_eq!(view.attachments().get(&final_head), Some(&vec![tail_file]), "the post-capture attachment is present immediately when sync returns");
+        }
         assert!(view.parents().is_empty() && view.reactions().is_empty());
         assert_eq!(view.recovery_epoch(), 1);
         assert!(view.gap_notice().is_some_and(|notice| notice.recovered && !notice.older && notice.after == 3));
@@ -634,7 +650,6 @@ fn a_complete_multipage_capture_replaces_cached_state_and_syncs_from_the_capture
 
 #[test]
 fn interrupted_or_inconsistent_current_pages_preserve_the_cached_view_and_explicit_gap() {
-    let first = script_page(0, false, vec![script_message(10)]);
     let valid_next = script_page(1, true, vec![script_message(11)]);
     let mut wrong_room = valid_next.clone();
     wrong_room.room = "another-room".into();
@@ -647,20 +662,26 @@ fn interrupted_or_inconsistent_current_pages_preserve_the_cached_view_and_explic
     let mut changed_flags = valid_next.clone();
     changed_flags.older = true;
     let cases = [
-        ("interrupted after the first page", None),
-        ("wrong room", Some(encode_page(3, &wrong_room).unwrap())),
-        ("wrong head", Some(encode_page(3, &wrong_head).unwrap())),
-        ("skipped index", Some(encode_page(3, &skipped_index).unwrap())),
-        ("repeated index", Some(encode_page(3, &repeated_index).unwrap())),
-        ("changed flags", Some(encode_page(3, &changed_flags).unwrap())),
-        ("descending message cursor", Some(encode_page(3, &script_page(1, true, vec![script_message(9)])).unwrap())),
-        ("duplicate message cursor", Some(encode_page(3, &script_page(1, true, vec![script_message(10)])).unwrap())),
-        ("wrong request id", Some(encode_page(99, &valid_next).unwrap())),
+        ("interrupted after the first page", false, None),
+        ("wrong room", false, Some(encode_page(3, &wrong_room).unwrap())),
+        ("wrong head", false, Some(encode_page(3, &wrong_head).unwrap())),
+        ("skipped index", false, Some(encode_page(3, &skipped_index).unwrap())),
+        ("repeated index", false, Some(encode_page(3, &repeated_index).unwrap())),
+        ("changed flags", false, Some(encode_page(3, &changed_flags).unwrap())),
+        ("descending message cursor", false, Some(encode_page(3, &script_page(1, true, vec![script_message(9)])).unwrap())),
+        ("duplicate message cursor", false, Some(encode_page(3, &script_page(1, true, vec![script_message(10)])).unwrap())),
+        ("wrong request id", false, Some(encode_page(99, &valid_next).unwrap())),
+        ("duplicate page after last", true, Some(encode_page(3, &script_page(0, true, vec![script_message(10)])).unwrap())),
     ];
-    for (label, continuation) in cases {
+    for (label, ends_capture, continuation) in cases {
         let mut replies = script_prefix();
-        replies.push(encode_page(3, &first).unwrap());
+        replies.push(encode_page(3, &script_page(0, ends_capture, vec![script_message(10)])).unwrap());
         replies.extend(continuation);
+        if ends_capture {
+            // If the generic response reader silently drops the extra page, this valid Ping answer would let
+            // the staged replacement commit. It must instead be refused before any visible installation.
+            replies.push(encode_response(4, &Response::Ok { cursor: 0 }).unwrap());
+        }
         let mut session = ScriptedSession::new(replies);
         let before = session.chat.view(SCRIPT_ROOM).unwrap();
         let shown = before.shown();
@@ -676,7 +697,10 @@ fn interrupted_or_inconsistent_current_pages_preserve_the_cached_view_and_explic
         assert_eq!(after.reactions(), &reactions, "{label}");
         assert_eq!(after.recovery_epoch(), 0, "{label}");
         assert!(after.gap_notice().is_some_and(|notice| !notice.recovered && notice.after == 3 && notice.head == SCRIPT_HEAD), "{label}");
-        assert_eq!(session.requests().iter().filter(|request| matches!(request, Request::Current { .. })).count(), 1, "{label}");
+        let requests = session.requests();
+        assert_eq!(requests.iter().filter(|request| matches!(request, Request::Current { .. })).count(), 1, "{label}");
+        assert_eq!(requests.iter().filter(|request| matches!(request, Request::Sync { .. })).count(), 2, "no fresh sync follows a refused capture: {label}");
+        assert_eq!(requests.len(), if ends_capture { 4 } else { 3 }, "{label}");
     }
 }
 
@@ -684,8 +708,9 @@ fn interrupted_or_inconsistent_current_pages_preserve_the_cached_view_and_explic
 fn a_second_gap_after_install_keeps_the_completed_capture_and_does_not_recurse() {
     let mut replies = script_prefix();
     script_complete_capture(&mut replies);
+    replies.push(encode_response(4, &Response::Ok { cursor: 0 }).unwrap());
     let later_head = SCRIPT_HEAD + 10_001;
-    replies.push(encode_response(4, &Response::Ok { cursor: later_head }).unwrap());
+    replies.push(encode_response(5, &Response::Ok { cursor: later_head }).unwrap());
     script_metadata(&mut replies, later_head, SCRIPT_FEATURES);
     script_gap(&mut replies, later_head, SCRIPT_HEAD, SCRIPT_HEAD + 2);
     let mut session = ScriptedSession::new(replies);
@@ -701,5 +726,6 @@ fn a_second_gap_after_install_keeps_the_completed_capture_and_does_not_recurse()
         1,
         "a single sync cannot start unbounded recovery attempts"
     );
-    assert_eq!(requests.len(), 4);
+    assert!(matches!(&requests[3], Request::Ping));
+    assert_eq!(requests.len(), 5);
 }

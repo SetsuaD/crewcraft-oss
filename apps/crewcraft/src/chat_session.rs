@@ -485,9 +485,9 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
             let reached = self.view(room).ok_or(ChatError::Closed)?.cursor();
             Err(ChatError::HistoryGap { reached, head })
         } else {
-            // Without either terminal metadata snapshot, an equal-head Sync can leave call sidebands unread.
-            // Ping's matched response drains those existing frames before recovery reports success.
-            if self.calls() && !self.pins_saved() && !self.read_states() {
+            // Without a terminal pin/read snapshot, Sync can stop at a post before its file, thread or time
+            // sidebands, or at an equal head before call metadata. Ping drains all of them before success.
+            if !self.pins_saved() && !self.read_states() {
                 self.ping(now_ms, deadline)?;
             }
             Ok(head)
@@ -574,26 +574,29 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         }
         let mut window = CurrentWindow::new(room, head);
         loop {
-            for event in self.receive(now_ms, local_minute, deadline)? {
-                let ClientEvent::Current { id: answered, page, framed_bytes } = event else {
-                    self.closed = true;
-                    return Err(ChatError::UnexpectedResponse);
-                };
-                if answered != id {
-                    self.closed = true;
-                    return Err(ChatError::UnexpectedResponse);
-                }
-                let complete = window.page(page, framed_bytes).map_err(|_| {
+            // Capture pages never enter the ordinary push path, so unexpected records cannot change the old view.
+            let frame = self.read_frame(frame::MAX_FRAME, deadline)?;
+            let (answered, page) = crewcraft_proto::current::decode_page(frame.payload()).map_err(|_| {
+                self.closed = true;
+                ChatError::UnexpectedResponse
+            })?;
+            if answered != id {
+                self.closed = true;
+                return Err(ChatError::UnexpectedResponse);
+            }
+            let complete = window.page(page, frame.as_bytes().len()).map_err(|_| {
+                self.closed = true;
+                ChatError::UnexpectedResponse
+            })?;
+            if complete {
+                // Seal the stream before installation. Ordinary receive refuses any page after the last flag;
+                // Ping's matched reply proves no duplicate or surplus capture page was left unread.
+                self.ping(now_ms, deadline)?;
+                let view = self.session.client_mut().inbox_mut().view_mut(room).ok_or(ChatError::Closed)?;
+                return view.install_current(window).map_err(|_| {
                     self.closed = true;
                     ChatError::UnexpectedResponse
-                })?;
-                if complete {
-                    let view = self.session.client_mut().inbox_mut().view_mut(room).ok_or(ChatError::Closed)?;
-                    return view.install_current(window).map_err(|_| {
-                        self.closed = true;
-                        ChatError::UnexpectedResponse
-                    });
-                }
+                });
             }
         }
     }
@@ -642,10 +645,15 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
 
     fn receive(&mut self, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<Vec<ClientEvent>, ChatError> {
         let frame = self.read_frame(frame::MAX_FRAME, deadline)?;
-        self.session.receive(frame.as_bytes(), now_ms, local_minute).map_err(|error| {
+        let events = self.session.receive(frame.as_bytes(), now_ms, local_minute).map_err(|error| {
             self.closed = true;
             ChatError::Session(error)
-        })
+        })?;
+        if events.iter().any(|event| matches!(event, ClientEvent::Current { .. })) {
+            self.closed = true;
+            return Err(ChatError::UnexpectedResponse);
+        }
+        Ok(events)
     }
 
     fn prepare_frame(&mut self, deadline: Instant) -> Result<(), ChatError> {
