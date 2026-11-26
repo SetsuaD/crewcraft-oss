@@ -39,13 +39,13 @@ pub enum DurableError {
 }
 
 pub struct DurableServer {
-    server: Server,
+    pub(crate) server: Server,
     journal: Journal,
     poisoned: bool,
     /// Every message's searchable text, by room (task T320a).
-    search: RoomSearch,
+    pub(crate) search: RoomSearch,
     /// Every live message's author and current plain text, by room and cursor, for search results (task T320b).
-    previews: HashMap<String, HashMap<u64, (String, String)>>,
+    pub(crate) previews: HashMap<String, HashMap<u64, (String, String)>>,
     /// Every finished upload's record, by file id (docs/FILES.md, task T330a).
     files: HashMap<[u8; 16], StoredFile>,
     /// Where uploaded bytes are kept; `None` until `with_files` (task T330b).
@@ -59,7 +59,9 @@ pub struct DurableServer {
     /// Files whose message was deleted: they are not found (task T330c).
     detached: HashSet<[u8; 16]>,
     /// Each reply's parent, by room and the reply's cursor (task T340a).
-    parents: HashMap<(String, u64), u64>,
+    pub(crate) parents: HashMap<(String, u64), u64>,
+    /// What imports have made: archive rooms and messages by external key (docs/IMPORT.md, task T350a).
+    pub(crate) imports: crate::import::Imports,
 }
 
 /// An upload in progress (task T330b).
@@ -122,6 +124,8 @@ pub enum UploadError {
     NoStorage,
     /// The person is not a member of the room (now).
     NotMember,
+    /// The room is an archive room: it accepts no files (task T350a).
+    ReadOnly,
     /// The name is not a file name (`valid_file_name`).
     BadName,
     /// The size is 0 or over `MAX_FILE_SIZE`.
@@ -193,8 +197,20 @@ impl DurableServer {
         let mut attached: HashMap<[u8; 16], (String, u64)> = HashMap::new();
         let mut detached: HashSet<[u8; 16]> = HashSet::new();
         let mut parents: HashMap<(String, u64), u64> = HashMap::new();
+        let mut imports = crate::import::Imports::default();
         for (index, record) in records.iter().enumerate() {
             let op = decode_op(record).map_err(|_| DurableError::Corrupt { index })?;
+            // An import record (task T350a) changes the import's own bookkeeping as well as a room.
+            let op = match crate::import::replay(&mut server, &mut imports, &mut parents, op) {
+                Ok(crate::import::Replayed::Done { slug, cursor }) => {
+                    if cursor != 0 {
+                        index_event(&server, &mut search, &mut previews, &slug, crate::import::ARCHIVE_OWNER, cursor);
+                    }
+                    continue;
+                }
+                Ok(crate::import::Replayed::NotImport(op)) => op,
+                Err(()) => return Err(DurableError::Corrupt { index }),
+            };
             if let Op::FileStored { slug, uploader, file, sha256, size, name, image } = op {
                 check_file(&server, &files, &slug, &uploader, &file, size, &name).map_err(|_| DurableError::Corrupt { index })?;
                 files.insert(file, StoredFile { room: slug, uploader, sha256, size, name, image });
@@ -244,6 +260,7 @@ impl DurableServer {
             attached,
             detached,
             parents,
+            imports,
         })
     }
 
@@ -262,6 +279,9 @@ impl DurableServer {
         let Some(store) = &self.store else { return Err(UploadError::NoStorage) };
         if !self.server.room(slug).is_ok_and(|room| room.role(user).is_some()) {
             return Err(UploadError::NotMember);
+        }
+        if self.server.room(slug).is_ok_and(|room| room.is_read_only()) {
+            return Err(UploadError::ReadOnly);
         }
         if !valid_file_name(name) {
             return Err(UploadError::BadName);
@@ -566,7 +586,7 @@ impl DurableServer {
     /// Append `op` to the journal. The change is already in memory, so a failure poisons the server: memory is ahead of
     /// disk, and acting on it further would let a restart lose changes callers were told succeeded. An op the codec
     /// cannot encode is reported as `TooLarge`; `Server` limits keep every accepted change well under the codec's.
-    fn record(&mut self, op: &Op) -> Result<(), DurableError> {
+    pub(crate) fn record(&mut self, op: &Op) -> Result<(), DurableError> {
         let result = match encode_op(op) {
             Ok(bytes) => self.journal.append(&bytes),
             Err(_) => Err(JournalError::TooLarge),
@@ -592,6 +612,8 @@ fn replay(server: &mut Server, op: Op) -> Result<u64, ServerError> {
         Op::React { slug, actor, target, reaction, on, now_ms } => server.react(&slug, &actor, target, reaction, on, now_ms),
         // Handled before `replay` is called: a file record changes no room, and a post with files needs the records.
         Op::FileStored { .. } | Op::PostFiles { .. } | Op::Reply { .. } => Ok(0),
+        // Handled by `import::replay` (task T350a).
+        Op::ImportRoom { .. } | Op::ImportMessage { .. } | Op::ImportEdit { .. } | Op::ImportDelete { .. } => Ok(0),
     }
 }
 
@@ -662,7 +684,7 @@ fn searchable(op: &Op) -> Option<(String, String)> {
 
 /// Index the event the change by `actor` just made at `cursor` in room `slug`, read back from the room's log (the
 /// actor is a member: the change was accepted), and keep the message's preview: its author and current text.
-fn index_event(
+pub(crate) fn index_event(
     server: &Server,
     search: &mut RoomSearch,
     previews: &mut HashMap<String, HashMap<u64, (String, String)>>,

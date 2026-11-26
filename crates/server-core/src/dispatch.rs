@@ -40,6 +40,7 @@ pub fn upload_error_code(error: crate::durable::UploadError) -> u16 {
     match error {
         U::NoStorage => E_NO_STORAGE,
         U::NotMember => E_NO_SUCH_ROOM,
+        U::ReadOnly => E_NOT_ALLOWED,
         U::BadName | U::BadSize | U::BadChunk | U::WrongContent => E_BAD_FILE,
         U::TooMany => E_RATE_LIMITED,
         U::NoSuchUpload => E_NO_SUCH_UPLOAD,
