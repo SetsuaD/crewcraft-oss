@@ -149,10 +149,7 @@ fn bytes_that_do_not_match_are_refused_and_not_archived() {
     let refused: Vec<(&str, &str)> = report.refusals.iter().map(|r| (r.at.as_str(), r.reason.as_str())).collect();
     assert_eq!(
         refused,
-        vec![
-            ("message 0 file 0", "its bytes do not match the bundle's sha256"),
-            ("message 0 file 1", "its bytes are not the size the bundle gives")
-        ]
+        vec![("message 0 file 0", "its bytes do not match the bundle's sha256"), ("message 0 file 1", "its bytes are not the size the bundle gives")]
     );
     assert_eq!((report.files_stored, report.files_not_archived, report.messages_added), (0, 2, 1), "the message itself still imported");
 
