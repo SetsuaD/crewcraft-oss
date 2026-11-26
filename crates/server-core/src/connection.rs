@@ -103,7 +103,8 @@ impl Connection {
     ///    request's id), framed;
     /// 3. if it was a `Sync` and the response is `Ok`: append, framed, one push per event the room still holds after
     ///    the requested cursor (`RoomService::sync`), oldest first, using `to_push`. If the log no longer holds them
-    ///    (`Since::Gap`), no pushes follow: the client sees from the response's head that it must resync;
+    ///    (`Since::Gap`), no timeline pushes follow: the client sees from the response's head that it must resync.
+    ///    Negotiated pin and personal read snapshots still follow a successful sync, including a gap or equal head;
     /// 4. if it was a `ListRooms` and the response is `Ok`: append, framed, the room-list frame for this user
     ///    (`dispatch::listed_rooms`, which the response's cursor counts), with the request's id;
     /// 5. if it was a `Search` and the response is `Ok`: append, framed, the hits frame for this user
@@ -145,8 +146,9 @@ impl Connection {
         while let Some(payload) = self.decoder.next_frame().map_err(ConnError::Frame)? {
             let (id, request) = decode_request(&payload).map_err(ConnError::Request)?;
             let pins_saved = self.features & crewcraft_proto::request::FEATURE_PINS_SAVED != 0;
+            let reads = self.features & crewcraft_proto::request::FEATURE_READ_STATE != 0;
             let needs_pins_saved = matches!(request, Request::Pin { .. } | Request::SaveMessage { .. } | Request::ListSaved { .. });
-            let (response, follow) = if needs_pins_saved && !pins_saved {
+            let (response, follow) = if (needs_pins_saved && !pins_saved) || (matches!(request, Request::MarkUnread { .. }) && !reads) {
                 (refusal_of(crate::dispatch::E_NOT_ALLOWED), None)
             } else {
                 dispatch(server, &self.user, &request, now_ms)?
@@ -252,6 +254,15 @@ impl Connection {
                 let frame = encode_push(&pinned).map_err(ConnError::Request)?;
                 out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
             }
+            // Personal read metadata changes independently of the room's event head and follows even an empty sync.
+            if let Request::Sync { room, .. } = &request
+                && reads
+                && matches!(response, Response::Ok { .. })
+                && let Some(state) = server.read_state(room, &self.user)
+            {
+                let frame = encode_push(&state).map_err(ConnError::Request)?;
+                out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
+            }
             // After a successful Search, the hits frame (task T320b), as the response counted them.
             if let Request::Search { query } = &request
                 && matches!(response, Response::Ok { .. })
@@ -266,7 +277,7 @@ impl Connection {
 }
 
 /// What a connection reads from the server it serves, besides dispatching requests. The in-memory server has rooms and
-/// pinned messages only; the durable one adds search, files, threads, imported times and calls.
+/// pinned messages and personal read positions; the durable one adds search, files, threads, imported times and calls.
 trait Reads {
     fn server(&self) -> &Server;
     fn found(&self, user: &str, query: &str) -> Vec<SearchHit>;
@@ -275,6 +286,7 @@ trait Reads {
     fn sent_of(&self, room: &str, cursor: u64) -> Option<u64>;
     fn call_state(&self, room: &str, user: &str) -> Vec<Push>;
     fn pin_state(&self, room: &str, user: &str) -> Option<Push>;
+    fn read_state(&self, room: &str, user: &str) -> Option<Push>;
 }
 
 impl Reads for Server {
@@ -298,6 +310,9 @@ impl Reads for Server {
     }
     fn pin_state(&self, room: &str, user: &str) -> Option<Push> {
         memory_pin_state(self, room, user)
+    }
+    fn read_state(&self, room: &str, user: &str) -> Option<Push> {
+        memory_read_state(self, room, user)
     }
 }
 
@@ -323,6 +338,9 @@ impl Reads for DurableServer {
     fn pin_state(&self, room: &str, user: &str) -> Option<Push> {
         DurableServer::pin_state(self, room, user)
     }
+    fn read_state(&self, room: &str, user: &str) -> Option<Push> {
+        DurableServer::read_state(self, room, user)
+    }
 }
 
 fn memory_pin_state(server: &Server, slug: &str, user: &str) -> Option<Push> {
@@ -330,6 +348,13 @@ fn memory_pin_state(server: &Server, slug: &str, user: &str) -> Option<Push> {
     room.role(user)?;
     let (target, author, html, edited) = room.pinned_content().unwrap_or_default();
     Some(Push::Pinned { room: slug.to_owned(), cursor: room.head(), target, author, html, edited })
+}
+
+fn memory_read_state(server: &Server, slug: &str, user: &str) -> Option<Push> {
+    let room = server.room(slug).ok()?;
+    let (position, revision) = room.read_position(user).ok()?;
+    let unread = room.unread(user).ok()? as u64;
+    Some(Push::ReadState { room: slug.to_owned(), cursor: room.head(), position, revision, unread })
 }
 
 /// Answer a call request over a durable server (task T360a1): `None` for any other request. `Ok { cursor }` carries

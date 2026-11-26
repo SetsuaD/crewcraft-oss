@@ -51,6 +51,10 @@ impl Inbox {
     /// `mentioned` is whether the push's mentions contain `me` (ASCII case-insensitively) and whose `direct` is the room's
     /// flag; every other push is `Notify::None`.
     pub fn on_push(&mut self, push: Push, now_ms: u64, local_minute: u16) -> Option<(Apply, Notify)> {
+        if let Push::ReadState { room, cursor, position, revision, unread } = push {
+            self.views.get_mut(&room)?.set_read_state(crate::room_view::ReadState { head: cursor, position, revision, unread });
+            return Some((Apply::Duplicate, Notify::None));
+        }
         // A room-head pin snapshot also arrives after an empty sync or a history gap (T343).
         if let Push::Pinned { room, cursor, target, author, html, edited } = push {
             let pinned = (target != 0).then_some(crate::room_view::PinnedMessage { target, author, html, edited });
@@ -124,7 +128,12 @@ impl Inbox {
             Push::Deleted { room, cursor, target } => (room.as_str(), *cursor, Change::Deleted { target: *target }, false, None, None),
             Push::Other { room, cursor } => (room.as_str(), *cursor, Change::Other, false, None, None),
             Push::Attached { .. } | Push::Threaded { .. } | Push::Reacted { .. } | Push::Archived { .. } | Push::Sent { .. } => return None,
-            Push::CallLine { .. } | Push::CallState { .. } | Push::CallKeys { .. } | Push::CallSealed { .. } | Push::Pinned { .. } => return None,
+            Push::CallLine { .. }
+            | Push::CallState { .. }
+            | Push::CallKeys { .. }
+            | Push::CallSealed { .. }
+            | Push::Pinned { .. }
+            | Push::ReadState { .. } => return None,
         };
 
         let is_direct = self.direct.get(room).copied().unwrap_or(false);

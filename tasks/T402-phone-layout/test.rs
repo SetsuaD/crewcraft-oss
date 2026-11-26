@@ -47,7 +47,7 @@ fn tapping_a_room_opens_it_full_screen_and_back_returns_to_the_list() {
     h.get_by_label("general  (2)").click();
     h.run();
     assert_eq!(h.state().phone_pane(), PhonePane::Conversation);
-    assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::Sync { room: "general".to_owned() })]);
+    assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::Read { room: "general".to_owned() })]);
     // In a conversation the tab bar gives way to the composer.
     assert!(h.query_by_label("Account").is_none());
     h.get_by_label("Message");

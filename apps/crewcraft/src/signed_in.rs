@@ -18,8 +18,8 @@ use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
 use crewcraft_proto::request::{
-    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_SEARCH,
-    FEATURE_THREADS, MAX_CHUNK, Request, SavedMessage, SearchHit,
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_READ_STATE,
+    FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, Request, SavedMessage, SearchHit,
 };
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
 use sha2::{Digest, Sha256};
@@ -142,7 +142,8 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
             | FEATURE_ARCHIVE
             | FEATURE_CALLS
             | FEATURE_FILE_LIST
-            | FEATURE_PINS_SAVED,
+            | FEATURE_PINS_SAVED
+            | FEATURE_READ_STATE,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -166,7 +167,8 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
             | FEATURE_ARCHIVE
             | FEATURE_CALLS
             | FEATURE_FILE_LIST
-            | FEATURE_PINS_SAVED,
+            | FEATURE_PINS_SAVED
+            | FEATURE_READ_STATE,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -205,7 +207,8 @@ pub(crate) fn finish_external(
             | FEATURE_ARCHIVE
             | FEATURE_CALLS
             | FEATURE_FILE_LIST
-            | FEATURE_PINS_SAVED,
+            | FEATURE_PINS_SAVED
+            | FEATURE_READ_STATE,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -375,6 +378,31 @@ impl SignedInSession {
     /// Whether room pins and personal saved messages were negotiated (T343).
     pub fn pins_saved(&self) -> bool {
         self.chat.pins_saved()
+    }
+
+    pub fn read_states(&self) -> bool {
+        self.chat.read_states()
+    }
+
+    /// Mark a chosen message unread; zero asks the server for the newest live message written by somebody else.
+    pub fn mark_unread(&mut self, room: &str, target: u64) -> Result<u64, LabError> {
+        if !valid_room(room) {
+            return Err(LabError::Usage);
+        }
+        self.chat.mark_unread(room, target, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// Record an explicit read through `cursor`, using the existing monotonic marker.
+    pub fn mark_read(&mut self, room: &str, cursor: u64) -> Result<u64, LabError> {
+        if !valid_room(room) {
+            return Err(LabError::Usage);
+        }
+        self.chat.mark_read(room, cursor, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    pub fn read_state(&mut self, room: &str) -> Option<crewcraft_client_core::room_view::ReadState> {
+        let view = self.chat.view(room)?;
+        if view.awaiting_read_state() { None } else { view.read_state().cloned() }
     }
 
     /// Pin or conditionally unpin the message at `target` (T343).

@@ -119,6 +119,15 @@ pub enum Update {
         room: String,
         unread: u32,
     },
+    /// The server's count can remain nonzero for the selected room after another device rewinds it (T344).
+    ReadState {
+        room: String,
+        unread: u64,
+    },
+    /// An unread action was confirmed and read back; leave the conversation without clearing its badge (T344).
+    MarkedUnread {
+        room: String,
+    },
     /// The email address last used to sign in on this device, to fill in the sign-in form.
     LastEmail(String),
     /// What a message search found (task T320c), newest first.
@@ -215,6 +224,8 @@ impl fmt::Debug for Update {
             Self::SignedIn { email, rooms } => f.debug_struct("SignedIn").field("email", email).field("rooms", rooms).finish(),
             Self::Snapshot { room, shown } => f.debug_struct("Snapshot").field("room", room).field("rows", &shown.len()).finish(),
             Self::Unread { room, unread } => f.debug_struct("Unread").field("room", room).field("unread", unread).finish(),
+            Self::ReadState { room, unread } => f.debug_struct("ReadState").field("room", room).field("unread", unread).finish(),
+            Self::MarkedUnread { room } => f.debug_struct("MarkedUnread").field("room", room).finish(),
             Self::LastEmail(email) => f.debug_tuple("LastEmail").field(email).finish(),
             Self::SearchResults { query, results } => f.debug_struct("SearchResults").field("query", query).field("results", &results.len()).finish(),
             Self::Uploaded { room, file } => f.debug_struct("Uploaded").field("room", room).field("name", &file.name).finish(),
@@ -321,6 +332,8 @@ pub struct Window {
     bubbles: Option<appearance::BubbleColors>,
     /// The person's own message they clicked, by cursor: its Edit and Delete show under it (T316).
     selected_message: Option<u64>,
+    /// Return real keyboard focus to the room after a confirmed unread action closes its conversation (T344).
+    focus_room: Option<String>,
     /// Asking "Delete this message?" for this selected message (T316).
     confirm_delete: bool,
     /// The composer is replacing the text of this message, `(room, cursor)` (T316).
@@ -407,6 +420,7 @@ enum MessageAction {
     React(u64, u8, bool),
     Pin(u64, bool),
     SaveMessage(u64, bool),
+    MarkUnread(u64),
     Edit(u64, String),
     AskDelete,
     Delete(u64),
@@ -515,7 +529,7 @@ impl Window {
                 }
                 self.go(Screen::Chat);
                 if let Some(first) = self.rooms.rows().first().map(|row| row.name.clone()) {
-                    self.open_room(&first);
+                    self.open_room(&first, false);
                 }
             }
             Update::Snapshot { room, shown } => {
@@ -523,6 +537,18 @@ impl Window {
             }
             Update::Unread { room, unread } => {
                 self.rooms.set_unread(&room, unread);
+            }
+            Update::ReadState { room, unread } => {
+                self.rooms.set_read_state(&room, unread);
+            }
+            Update::MarkedUnread { room } => {
+                if self.rooms.selected() == Some(room.as_str()) {
+                    self.rooms.clear_selection(&room);
+                    self.selected_message = None;
+                    self.open_thread = None;
+                    self.phone_pane = PhonePane::Chats;
+                    self.focus_room = Some(room);
+                }
             }
             Update::SearchResults { query, results } => self.results = Some((query, results)),
             Update::Uploaded { room, file } => self.pending_files.entry(room).or_default().push(file),
@@ -604,6 +630,7 @@ impl Window {
             Update::SignedOut => {
                 self.phone_pane = PhonePane::Chats;
                 self.selected_message = None;
+                self.focus_room = None;
                 self.editing = None;
                 self.results = None;
                 self.message_query.clear();
@@ -853,7 +880,12 @@ impl Window {
                 for row in rows {
                     let text = if row.unread > 0 { format!("{}  ({})", row.name, row.unread) } else { row.name.clone() };
                     let text = if row.unread > 0 { RichText::new(text).strong() } else { RichText::new(text) };
-                    if ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(row.selected, text)).clicked() {
+                    let response = ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(row.selected, text));
+                    if self.focus_room.as_deref() == Some(row.name.as_str()) {
+                        response.request_focus();
+                        self.focus_room = None;
+                    }
+                    if response.clicked() {
                         open = Some(row.name);
                     }
                 }
@@ -862,19 +894,24 @@ impl Window {
                     ui.add_space(10.0);
                     ui.strong("Archive");
                     for row in archive {
-                        if ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(row.selected, row.name.clone())).clicked() {
+                        let response = ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(row.selected, row.name.clone()));
+                        if self.focus_room.as_deref() == Some(row.name.as_str()) {
+                            response.request_focus();
+                            self.focus_room = None;
+                        }
+                        if response.clicked() {
                             open = Some(row.name);
                         }
                     }
                 }
             });
             if let Some(room) = open {
-                self.open_room(&room);
+                self.open_room(&room, true);
             }
         });
         let Some(room) = self.rooms.selected().map(str::to_owned) else {
             egui::CentralPanel::default_margins().show(ui, |ui| {
-                ui.label("You are not in any rooms yet.");
+                ui.label(if self.rooms.rows().is_empty() { "You are not in any rooms yet." } else { "Choose a room to read." });
             });
             return;
         };
@@ -888,6 +925,7 @@ impl Window {
                 self.call_controls(ui, &room);
             });
             self.pin_bar(ui, &room);
+            self.read_controls(ui, &room);
         });
         egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
         // A thread opens beside the conversation (T340b).
@@ -1001,6 +1039,7 @@ impl Window {
                         self.call_controls(ui, &room);
                     });
                     self.pin_bar(ui, &room);
+                    self.read_controls(ui, &room);
                 });
                 egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
                 // On a phone an open thread takes the conversation's place (T340b).
@@ -1090,7 +1129,12 @@ impl Window {
                         let (archive, rows): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| self.archived.contains(&row.name));
                         for row in rows {
                             let text = if row.unread > 0 { format!("{}  ({})", row.name, row.unread) } else { row.name.clone() };
-                            if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, text)).clicked() {
+                            let response = ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, text));
+                            if self.focus_room.as_deref() == Some(row.name.as_str()) {
+                                response.request_focus();
+                                self.focus_room = None;
+                            }
+                            if response.clicked() {
                                 open = Some(row.name);
                             }
                         }
@@ -1098,16 +1142,19 @@ impl Window {
                             ui.add_space(10.0);
                             ui.strong("Archive");
                             for row in archive {
-                                if ui
-                                    .add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, row.name.clone()))
-                                    .clicked()
-                                {
+                                let response =
+                                    ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, row.name.clone()));
+                                if self.focus_room.as_deref() == Some(row.name.as_str()) {
+                                    response.request_focus();
+                                    self.focus_room = None;
+                                }
+                                if response.clicked() {
                                     open = Some(row.name);
                                 }
                             }
                         }
                         if let Some(room) = open {
-                            self.open_room(&room);
+                            self.open_room(&room, true);
                             self.phone_pane = PhonePane::Conversation;
                         }
                     });
@@ -1152,7 +1199,7 @@ impl Window {
     fn open_message(&mut self, room: &str, cursor: u64) {
         self.results = None;
         self.saved_view = false;
-        self.open_room(room);
+        self.open_room(room, true);
         let parent = self.threads.get(room).and_then(|threads| threads.get(&cursor)).copied();
         self.open_thread = parent.map(|parent| (room.to_owned(), parent));
         self.focus = Some((room.to_owned(), parent.unwrap_or(cursor)));
@@ -1173,6 +1220,21 @@ impl Window {
     /// Whether the person's Saved area is open (T343).
     pub fn saved_open(&self) -> bool {
         self.saved_view
+    }
+
+    pub fn selected_room(&self) -> Option<&str> {
+        self.rooms.selected()
+    }
+
+    fn read_controls(&mut self, ui: &mut Ui, room: &str) {
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Mark as unread").clicked() {
+                self.actions.push(Action::Room(Command::MarkUnread { room: room.to_owned(), target: 0 }));
+            }
+            if ui.button("Mark as read").clicked() {
+                self.actions.push(Action::Room(Command::Read { room: room.to_owned() }));
+            }
+        });
     }
 
     /// The pin's body comes from the current authoritative snapshot, including pins outside the loaded page (T343).
@@ -1510,6 +1572,9 @@ impl Window {
                 self.selected_message = None;
                 self.actions.push(Action::Room(Command::SaveMessage { room: room.to_owned(), target, on }));
             }
+            Some(MessageAction::MarkUnread(target)) => {
+                self.actions.push(Action::Room(Command::MarkUnread { room: room.to_owned(), target }));
+            }
             Some(MessageAction::OpenThread(parent)) => {
                 self.open_thread = Some((room.to_owned(), parent));
                 self.selected_message = None;
@@ -1610,14 +1675,16 @@ impl Window {
         });
     }
 
-    fn open_room(&mut self, room: &str) {
+    fn open_room(&mut self, room: &str, deliberate: bool) {
         if let Some(command) = self.rooms.select(room) {
             self.focus = None;
             self.selected_message = None;
             self.confirm_delete = false;
             self.editing = None;
             self.draft = self.composer.draft(room).to_owned();
-            self.actions.push(Action::Room(command));
+            self.actions.push(Action::Room(if deliberate { Command::Read { room: room.to_owned() } } else { command }));
+        } else if deliberate && self.rooms.selected() == Some(room) {
+            self.actions.push(Action::Room(Command::Read { room: room.to_owned() }));
         }
     }
 }
@@ -1791,15 +1858,20 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
         let saved = look.saved.contains(&cursor);
         let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
         ui.with_layout(layout, |ui| {
-            if ui.small_button(if saved { "Remove from saved" } else { "Save message" }).clicked() {
-                action = Some(MessageAction::SaveMessage(cursor, !saved));
-            }
-            if !look.read_only {
-                let pinned = look.pinned == Some(cursor);
-                if ui.small_button(if pinned { "Unpin message" } else { "Pin message" }).clicked() {
-                    action = Some(MessageAction::Pin(cursor, !pinned));
+            ui.horizontal_wrapped(|ui| {
+                if ui.small_button(if saved { "Remove from saved" } else { "Save message" }).clicked() {
+                    action = Some(MessageAction::SaveMessage(cursor, !saved));
                 }
-            }
+                if ui.button("Mark unread from here").clicked() {
+                    action = Some(MessageAction::MarkUnread(cursor));
+                }
+                if !look.read_only {
+                    let pinned = look.pinned == Some(cursor);
+                    if ui.small_button(if pinned { "Unpin message" } else { "Pin message" }).clicked() {
+                        action = Some(MessageAction::Pin(cursor, !pinned));
+                    }
+                }
+            });
         });
     }
     // The thread under a message that has replies (T340b).

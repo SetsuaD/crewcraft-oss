@@ -13,6 +13,7 @@
 //! - tag 19 `React` (task T341a): `str slug | str actor | u64 target | u8 reaction | u8 on (0 or 1) | u64 now_ms`
 //! - tag 29 `Pin` (task T343): `str slug | str actor | u64 target | u8 on (0 or 1) | u64 now_ms`
 //! - tag 30 `SaveMessage` (task T343): `str slug | str actor | u64 target | u8 on (0 or 1)`; a personal reference only
+//! - tag 31 `MarkUnread` (task T344): `str slug | str user | u64 target`; the concrete live target selected at acceptance
 //! - tag 20 `ImportRoom` (task T350a): `str key | str name`
 //! - tag 21 `ImportMessage`: `str slug | str key | str author | u64 sent_ms | str text | u8 deleted (0 or 1) | u64 parent
 //!   (0 for none)`
@@ -85,6 +86,12 @@ pub enum Op {
         slug: String,
         user: String,
         cursor: u64,
+    },
+    /// Mark unread before this resolved nonzero message, including when the request used a default target.
+    MarkUnread {
+        slug: String,
+        user: String,
+        target: u64,
     },
     /// An archive room made by an import, with its external key `source:key` (task T350a).
     ImportRoom {
@@ -241,6 +248,12 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             encode_str(&mut out, slug)?;
             encode_str(&mut out, user)?;
             out.extend_from_slice(&cursor.to_be_bytes());
+        }
+        Op::MarkUnread { slug, user, target } => {
+            out.push(MARK_UNREAD);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, user)?;
+            out.extend_from_slice(&target.to_be_bytes());
         }
         Op::FileStored { slug, uploader, file, sha256, size, name, image } => {
             out.push(FILE_STORED);
@@ -462,6 +475,15 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::MarkRead { slug, user, cursor })
         }
+        MARK_UNREAD => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let user = decode_str(bytes, &mut pos)?;
+            let target = decode_u64(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::MarkUnread { slug, user, target })
+        }
         FILE_STORED => {
             let slug = decode_str(bytes, &mut pos)?;
             let uploader = decode_str(bytes, &mut pos)?;
@@ -667,6 +689,7 @@ const CALL_LEAVE: u8 = 27;
 const CALL_END: u8 = 28;
 const PIN: u8 = 29;
 const SAVE_MESSAGE: u8 = 30;
+const MARK_UNREAD: u8 = 31;
 
 fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;
@@ -721,4 +744,24 @@ fn decode_u64(bytes: &[u8], pos: &mut usize) -> Result<u64, CodecError> {
     ]);
     *pos += 8;
     Ok(val)
+}
+
+#[cfg(test)]
+mod read_state_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_unread_records_refuse_truncated_and_trailing_bytes() -> Result<(), CodecError> {
+        let op = Op::MarkUnread { slug: "room".into(), user: "reader".into(), target: u64::MAX };
+        let bytes = encode_op(&op)?;
+        assert_eq!(bytes[0], 31);
+        assert_eq!(decode_op(&bytes)?, op);
+        for end in 0..bytes.len() {
+            assert!(decode_op(&bytes[..end]).is_err());
+        }
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert_eq!(decode_op(&trailing), Err(CodecError::TrailingBytes));
+        Ok(())
+    }
 }

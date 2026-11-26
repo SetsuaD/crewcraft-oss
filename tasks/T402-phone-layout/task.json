@@ -6,7 +6,7 @@
   "test_path": "crates/desktop-ui/tests/t402_phone_layout.rs",
   "test_cmd": "cargo test -p crewcraft-desktop-ui --test t402_phone_layout",
   "depends_on": ["T305-desktop-window"],
-  "spec": "Below PHONE_MAX_WIDTH (600 points) the chat screen shows one pane at a time (REQUIREMENTS 2.9): Chats (full-width room buttons with unread counts), Conversation (a '< Chats' back button, the feed, the composer; the tab bar gives way), and Account (who is signed in, the server, Sign out). A bottom tab bar switches between Chats and Account; touch targets are at least TOUCH_TARGET (44 points) high. Opening a room from Chats emits Command::Sync as on the desktop. Sign-out returns to Chats. Desktop widths keep the side-by-side layout.",
+  "spec": "Below PHONE_MAX_WIDTH (600 points) the chat screen shows one pane at a time (REQUIREMENTS 2.9): Chats (full-width room buttons with unread counts), Conversation (a '< Chats' back button, the feed, the composer; the tab bar gives way), and Account (who is signed in, the server, Sign out). A bottom tab bar switches between Chats and Account; touch targets are at least TOUCH_TARGET (44 points) high. Deliberately opening a room from Chats emits Command::Read as on the desktop, acknowledging the shared read position as extended by T344; automatic startup selection remains passive Command::Sync. Sign-out returns to Chats. Desktop widths keep the side-by-side layout.",
   "status": "done",
   "context": ["docs/MOBILE.md", "docs/REQUIREMENTS.md"]
 }

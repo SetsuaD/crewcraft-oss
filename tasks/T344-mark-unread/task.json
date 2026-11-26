@@ -1,0 +1,49 @@
+{
+  "id": "T344-mark-unread",
+  "title": "Mark a room unread from a message and share the personal read position",
+  "crate": "crewcraft-server",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/proto/src/push.rs",
+    "crates/server-core/src/unread.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/server.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/inbox.rs",
+    "crates/client-core/src/room_view.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/ui-model/src/lib.rs",
+    "crates/ui-model/src/room_list.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t344_mark_unread_window.rs",
+    "apps/crewcraft-server/tests/t344_mark_unread.rs",
+    "crates/desktop-ui/tests/t305_desktop_window.rs",
+    "crates/desktop-ui/tests/t320c_search_window.rs",
+    "crates/desktop-ui/tests/t402_phone_layout.rs",
+    "tasks/T305-desktop-window/test.rs",
+    "tasks/T305-desktop-window/task.json",
+    "tasks/T402-phone-layout/test.rs",
+    "tasks/T402-phone-layout/task.json"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t344_mark_unread.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t344_mark_unread",
+  "depends_on": [
+    "T105-unread",
+    "T145-durable-connection",
+    "T343-pins-saved"
+  ],
+  "spec": "FEATURE_READ_STATE (1024) announces Request::MarkUnread (29), with a room and target message cursor. A nonzero target must be a live message in a room the authenticated person can read. The person's position becomes exactly target minus one. Target zero chooses the newest live message by someone else, or makes no change if there is none. Only that person's cursor changes. Journal op MarkUnread (31) records the resolved target when the position changes. Existing MarkRead remains monotonic and can advance the position later. Both operations increment a personal read revision only on effective position changes. After every successful negotiated Sync, including equal-head and retained-history-gap responses, Push::ReadState (80) supplies room head, personal position, personal revision and unread count. Counts resolve complete current live messages by other authors; archives contribute zero. Snapshots never advance the timeline cursor. Clients require this Sync's own fresh read snapshot, reject older revisions and older heads at an equal revision, and preserve pin snapshot receipt. The signed-in app uses authoritative counts rather than a device-local seen map when negotiated. Only deliberate room opening or Mark as read sends MarkRead; background sync cannot undo a manual rewind on another device. Mark as unread is offered for a chosen message and as a room action. Selection closes only after server confirmation, while refusal leaves the view intact. An already selected room may show an authoritative unread count. Real signed-in sessions using distinct registered device keys prove shared positions, later reads, visibility refusals and durable reopen. Legacy clients keep their negotiated behavior.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md"
+  ]
+}

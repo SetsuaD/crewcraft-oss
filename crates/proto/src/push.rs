@@ -33,6 +33,10 @@
 //!   follows every successful Sync when `request::FEATURE_PINS_SAVED` was agreed, including a sync whose event tail
 //!   has a gap. Its cursor is the room-head revision and advances no timeline. A zero target with empty fields and
 //!   edited=0 means unpinned. Clients refuse older revisions, so stale snapshots cannot undo a later deletion.
+//! - tag 80 `ReadState` (task T344): `u64 position | u64 revision | u64 unread`. After every successful Sync with
+//!   `request::FEATURE_READ_STATE`, the asking person's current read position, personal revision and unread total.
+//!   Its cursor is the room head and advances no timeline. Personal revisions also change when the room head stays
+//!   the same. A legacy MarkRead may have placed the position beyond the head, which this snapshot preserves.
 //!
 //! `room`, `author` and each mention are 1 to `message::MAX_NAME` bytes; `html` is 0 to `MAX_HTML` bytes; at most
 //! `MAX_MENTIONS` mentions.
@@ -58,6 +62,8 @@ pub const CALL_KEYS: u8 = 77;
 pub const CALL_SEALED: u8 = 78;
 /// The authoritative room pin snapshot after a sync (task T343).
 pub const PINNED: u8 = 79;
+/// A snapshot of the asking person's read position and unread count (task T344).
+pub const READ_STATE: u8 = 80;
 /// The most participants a `CallState` lists.
 pub const MAX_PARTICIPANTS: usize = 255;
 /// The tag of `Push::Reacted` (task T341a).
@@ -88,6 +94,14 @@ pub struct AttachedFile {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Push {
+    /// Personal read metadata at a room head. Revision orders position changes, including a backwards move.
+    ReadState {
+        room: String,
+        cursor: u64,
+        position: u64,
+        revision: u64,
+        unread: u64,
+    },
     /// Current pin at room-head revision `cursor`. Zero target and empty fields mean no pin. Advances no timeline.
     Pinned {
         room: String,
@@ -249,6 +263,14 @@ fn read_u8(bytes: &[u8], pos: &mut usize) -> Result<u8, CodecError> {
 pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
     let mut out = Vec::new();
     match push {
+        Push::ReadState { room, cursor, position, revision, unread } => {
+            out.push(READ_STATE);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&position.to_be_bytes());
+            out.extend_from_slice(&revision.to_be_bytes());
+            out.extend_from_slice(&unread.to_be_bytes());
+        }
         Push::Pinned { room, cursor, target, author, html, edited } => {
             if (*target == 0 && (!author.is_empty() || !html.is_empty() || *edited)) || (*target != 0 && author.is_empty()) {
                 return Err(CodecError::FieldLength);
@@ -426,6 +448,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         && tag != CALL_KEYS
         && tag != CALL_SEALED
         && tag != PINNED
+        && tag != READ_STATE
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -434,6 +457,12 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
     let cursor = read_u64(bytes, &mut pos)?;
 
     let push = match tag {
+        READ_STATE => {
+            let position = read_u64(bytes, &mut pos)?;
+            let revision = read_u64(bytes, &mut pos)?;
+            let unread = read_u64(bytes, &mut pos)?;
+            Push::ReadState { room, cursor, position, revision, unread }
+        }
         PINNED => {
             let target = read_u64(bytes, &mut pos)?;
             let author = read_string(bytes, &mut pos, 0, crate::request::MAX_AUTHOR)?;
@@ -593,6 +622,30 @@ fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, CodecError> {
     let value = u32::from_be_bytes([bytes[*pos], bytes[*pos + 1], bytes[*pos + 2], bytes[*pos + 3]]);
     *pos = end;
     Ok(value)
+}
+
+#[cfg(test)]
+mod read_state_tests {
+    use super::*;
+
+    #[test]
+    fn read_state_preserves_future_legacy_positions_and_refuses_incomplete_or_trailing_fields() -> Result<(), CodecError> {
+        let snapshot = Push::ReadState { room: "room".into(), cursor: 3, position: u64::MAX, revision: 7, unread: 0 };
+        let bytes = encode_push(&snapshot)?;
+        assert_eq!(bytes[0], 80);
+        assert_eq!(decode_push(&bytes)?, snapshot);
+        for end in 0..bytes.len() {
+            assert!(decode_push(&bytes[..end]).is_err());
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert_eq!(decode_push(&trailing), Err(CodecError::TrailingBytes));
+        let mut empty_room = bytes;
+        empty_room[1..3].copy_from_slice(&0u16.to_be_bytes());
+        assert_eq!(decode_push(&empty_room), Err(CodecError::FieldLength));
+        assert!(encode_push(&Push::ReadState { room: String::new(), cursor: 0, position: 0, revision: 0, unread: 0 }).is_err());
+        Ok(())
+    }
 }
 
 #[cfg(test)]

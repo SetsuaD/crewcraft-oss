@@ -12,7 +12,7 @@
   "test_path": "crates/desktop-ui/tests/t305_desktop_window.rs",
   "test_cmd": "cargo test -p crewcraft-desktop-ui --test t305_desktop_window",
   "depends_on": ["T300-ui-room-list", "T301-ui-composer", "T302-ui-feed"],
-  "spec": "An egui Window with four screens (Enroll, Authenticator, SignIn, Chat) and no I/O: the app applies Updates and drains Actions. Secrets typed into forms are Zeroizing, moved into the one Action that needs them, cleared from the form, and never shown by Debug (nor the authenticator secret in Update). Chat draws the app bar (server, total unread, Sign out), the room list (ui-model RoomList; opening a room emits Command::Sync), the feed (feed_rows, message HTML shown as plain text, edited and pending states) and the composer (ui-model Composer; Send or Ctrl+Enter emits Command::Post). egui's default_fonts stay off; Inter (OFL-1.1) is the only font.",
+  "spec": "An egui Window with four screens (Enroll, Authenticator, SignIn, Chat) and no I/O: the app applies Updates and drains Actions. Secrets typed into forms are Zeroizing, moved into the one Action that needs them, cleared from the form, and never shown by Debug (nor the authenticator secret in Update). Chat draws the app bar (server, total unread, Sign out), the room list (ui-model RoomList; automatic startup selection emits Command::Sync, while deliberate opening emits Command::Read to acknowledge the shared read position, as extended by T344), the feed (feed_rows, message HTML shown as plain text, edited and pending states) and the composer (ui-model Composer; Send or Ctrl+Enter emits Command::Post). egui's default_fonts stay off; Inter (OFL-1.1) is the only font.",
   "status": "done",
   "context": [
     "crates/ui-model/src/lib.rs",

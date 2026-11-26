@@ -443,6 +443,40 @@ impl RoomService {
         Ok(self.markers.mark_read(user, ROOM_ID, cursor))
     }
 
+    /// The asking member's read position and personal revision (task T344).
+    pub fn read_position(&self, user: &str) -> Result<(u64, u64), ServiceError> {
+        if self.room.role(user).is_none() {
+            return Err(ServiceError::Room(RoomError::NotMember));
+        }
+        Ok((self.markers.last_read(user, ROOM_ID), self.markers.revision(user, ROOM_ID)))
+    }
+
+    /// Move just before the selected live message, or the newest live message by someone else for target zero.
+    pub fn mark_unread(&mut self, user: &str, target: u64) -> Result<u64, ServiceError> {
+        self.read_position(user)?;
+        let target = if target == 0 {
+            self.all_events()
+                .into_iter()
+                .filter(|(cursor, event)| matches!(event.kind, EventKind::Posted) && event.actor != user && !self.deleted.contains(cursor))
+                .map(|(cursor, _)| cursor)
+                .max()
+        } else {
+            self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
+            Some(target)
+        };
+        if let Some(target) = target {
+            self.mark_unread_validated(user, target)?;
+        }
+        Ok(self.markers.last_read(user, ROOM_ID))
+    }
+
+    /// The durable caller has checked this nonzero target in its full current-message projection.
+    pub(crate) fn mark_unread_validated(&mut self, user: &str, target: u64) -> Result<bool, ServiceError> {
+        self.read_position(user)?;
+        let cursor = target.checked_sub(1).ok_or(ServiceError::NoSuchMessage)?;
+        Ok(self.markers.mark_unread(user, ROOM_ID, cursor))
+    }
+
     /// How many `Posted` events still held, not deleted, after the member's read marker, were posted by someone else.
     /// Edits, deletions and membership events never count. `Room(NotMember)` for a non-member.
     pub fn unread(&self, user: &str) -> Result<usize, ServiceError> {

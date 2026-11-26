@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crewcraft_client_core::room_view::{PinnedMessage, Shown};
+use crewcraft_client_core::room_view::{PinnedMessage, ReadState, Shown};
 use crewcraft_ui_model::Command;
 use rand_core::{OsRng, RngCore};
 use rustls::client::ResolvesClientCert;
@@ -89,8 +89,12 @@ pub enum Event {
     SignedIn { email: String, rooms: Vec<String> },
     /// The open room as it is drawn now. Sent when the room is opened and whenever it changes.
     Room { room: String, shown: Vec<Shown> },
-    /// A followed room's count of messages from other people since it was last open. The open room is always 0.
+    /// A followed room's count. With personal read-state support, a remote rewind can leave an open room unread.
     Unread { room: String, count: u32 },
+    /// Authoritative personal state, including a rewind made on another device (T344).
+    ReadState { room: String, state: ReadState },
+    /// The confirmed unread action leaves its room's conversation without clearing the count (T344).
+    MarkedUnread { room: String },
     /// The server acknowledged a post at `cursor`.
     Posted { room: String, cursor: u64 },
     /// The server accepted an edit or a deletion, recorded at `cursor` (task T316). The room's next snapshot shows it.
@@ -222,6 +226,7 @@ pub enum Problem {
     PinsSavedNotOffered,
     /// The server supplied current pin metadata while its retained history could not replay this room (T343).
     HistoryGap,
+    ReadStateNotOffered,
     /// A file on this computer could not be read or written (task T330e).
     LocalFile(io::ErrorKind),
 }
@@ -253,6 +258,7 @@ impl std::fmt::Display for Problem {
             Self::FilesNotOffered => "This server does not keep files.",
             Self::PinsSavedNotOffered => "This server does not offer pins and saved messages.",
             Self::HistoryGap => "Some earlier messages are outside the server's retained history.",
+            Self::ReadStateNotOffered => "This server does not offer shared unread positions.",
             Self::LocalFile(_) => "CrewCraft could not read or write that file on this computer.",
         })
     }
@@ -278,6 +284,7 @@ impl Problem {
                 | Self::FilesNotOffered
                 | Self::PinsSavedNotOffered
                 | Self::HistoryGap
+                | Self::ReadStateNotOffered
                 | Self::LocalFile(_)
         )
     }
@@ -429,6 +436,7 @@ impl Worker {
             shown: BTreeMap::new(),
             seen: BTreeMap::new(),
             unread: BTreeMap::new(),
+            read_states_sent: BTreeMap::new(),
             files_sent: BTreeMap::new(),
             threads_sent: BTreeMap::new(),
             reactions_sent: BTreeMap::new(),
@@ -521,6 +529,7 @@ struct Run {
     seen: BTreeMap<String, u64>,
     /// The last unread count sent, per room.
     unread: BTreeMap<String, u32>,
+    read_states_sent: BTreeMap<String, ReadState>,
     /// The last attachments sent, per room (task T330e).
     files_sent: BTreeMap<String, Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)>>,
     /// The last threads sent, per room (task T340b).
@@ -603,6 +612,8 @@ impl Run {
                 Some(Input::SignIn(credentials)) => self.sign_in(&credentials),
                 Some(Input::SignInExternal(email)) => self.sign_in_external(&email),
                 Some(Input::Command(Command::Sync { room })) => self.open_room(room),
+                Some(Input::Command(Command::Read { room })) => self.read_room(room),
+                Some(Input::Command(Command::MarkUnread { room, target })) => self.mark_unread(room, target),
                 Some(Input::Command(Command::Post { room, text })) => self.post(room, text),
                 Some(Input::Command(Command::Edit { room, target, text })) => {
                     self.change(room, |session, room| session.edit(room, target, &text));
@@ -724,6 +735,7 @@ impl Run {
     /// `SignedIn` and poll.
     fn start_session(&mut self, mut session: SignedInSession, email: &str) {
         self.pins_sent.clear();
+        self.read_states_sent.clear();
         self.saved_sent = None;
         self.saved_requested = false;
         if let Some(ticket) = session.resume_ticket() {
@@ -831,6 +843,7 @@ impl Run {
         self.shown.retain(|room, _| followed.contains(room));
         self.seen.retain(|room, _| followed.contains(room));
         self.unread.retain(|room, _| followed.contains(room));
+        self.read_states_sent.retain(|room, _| followed.contains(room));
     }
 
     fn follow(&mut self, room: &str) -> Result<(), Problem> {
@@ -855,6 +868,69 @@ impl Run {
             return self.emit(Event::Failed(Problem::NotSignedIn));
         }
         self.sync_room(&room, true);
+    }
+
+    /// Only a deliberate room-open or Mark as read command writes a read marker. Polling and automatic startup
+    /// selection keep another device's explicit rewind intact (T344).
+    fn read_room(&mut self, room: String) {
+        self.open_room(room.clone());
+        let Some(session) = self.session.as_mut() else { return };
+        if !session.read_states() {
+            return;
+        }
+        let Some(state) = session.read_state(&room) else { return };
+        match session.mark_read(&room, state.head) {
+            Ok(_) => self.sync_room(&room, true),
+            Err(error) => {
+                self.request_failed(error);
+            }
+        }
+    }
+
+    fn mark_unread(&mut self, room: String, target: u64) {
+        if let Err(problem) = self.follow(&room) {
+            return self.emit(Event::Failed(problem));
+        }
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        if !session.read_states() {
+            return self.emit(Event::Failed(Problem::ReadStateNotOffered));
+        }
+        let before = session.read_state(&room);
+        let position = match session.mark_unread(&room, target) {
+            Ok(position) => position,
+            Err(error) => {
+                self.request_failed(error);
+                return;
+            }
+        };
+        self.sync_room(&room, false);
+        let after = self.session.as_mut().and_then(|session| session.read_state(&room));
+        if let Some(after) = after
+            && after.position == position
+            && (target != 0 || after.unread != 0 || before.as_ref().is_some_and(|before| before.position != after.position))
+        {
+            if self.open.as_deref() == Some(room.as_str()) {
+                self.open = None;
+            }
+            self.emit(Event::MarkedUnread { room });
+        }
+    }
+
+    fn publish_read_state(&mut self, room: &str, force: bool) -> bool {
+        let state = self.session.as_mut().and_then(|session| session.read_state(room));
+        let Some(state) = state else { return false };
+        let count = u32::try_from(state.unread).unwrap_or(u32::MAX);
+        if self.unread.get(room) != Some(&count) {
+            self.unread.insert(room.to_owned(), count);
+            self.emit(Event::Unread { room: room.to_owned(), count });
+        }
+        if force || self.read_states_sent.get(room) != Some(&state) {
+            self.read_states_sent.insert(room.to_owned(), state.clone());
+            self.emit(Event::ReadState { room: room.to_owned(), state });
+        }
+        true
     }
 
     fn post(&mut self, room: String, text: String) {
@@ -1214,6 +1290,7 @@ impl Run {
                     self.pins_sent.insert(room.to_owned(), pinned.clone());
                     self.emit(Event::Pin { room: room.to_owned(), pinned });
                 }
+                self.publish_read_state(room, force);
                 self.emit(Event::Failed(Problem::HistoryGap));
                 return;
             }
@@ -1296,6 +1373,9 @@ impl Run {
                 self.shown.insert(room.to_owned(), lines.clone());
                 self.emit(Event::Room { room: room.to_owned(), shown: lines.clone() });
             }
+        }
+        if self.publish_read_state(room, force) {
+            return;
         }
         let seen = self.seen.get(room).copied().unwrap_or(0);
         let count = if is_open {
