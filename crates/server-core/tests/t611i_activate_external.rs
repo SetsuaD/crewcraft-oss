@@ -119,7 +119,11 @@ fn another_device_needs_the_person_bound_to_exactly_that_identity() {
     invite(&mut s, B, 4);
     let before = size(&p);
     assert_eq!(s.activate_external(device(3, false, None), ISSUER, "sub-x", T0 + 2).unwrap_err(), StoreError::ExternalMismatch);
-    assert_eq!(s.activate_external(device(4, false, None), ISSUER, "sub-b", T0 + 2).unwrap_err(), StoreError::ExternalMismatch, "B is bound to nothing");
+    assert_eq!(
+        s.activate_external(device(4, false, None), ISSUER, "sub-b", T0 + 2).unwrap_err(),
+        StoreError::ExternalMismatch,
+        "B is bound to nothing"
+    );
     assert_eq!(size(&p), before);
 
     let second = s.activate_external(device(3, false, None), ISSUER, "sub-a", T0 + 2).unwrap();
