@@ -315,10 +315,12 @@ fn an_imported_room_reaches_the_app_as_an_archive() {
     let _ = &mut bob;
     assert!(alice.act(Action::Room(Command::Sync { room: archive.clone() })).is_empty());
     let updates = poll_until(&mut alice, "the archive", |update| matches!(update, Update::Archive { times, .. } if times.len() == 2));
+    // The last archive update, the one with both times: an earlier sync may have carried only the first.
     let times = updates
         .iter()
+        .rev()
         .find_map(|update| match update {
-            Update::Archive { room, times } if *room == archive => Some(times.clone()),
+            Update::Archive { room, times } if *room == archive && times.len() == 2 => Some(times.clone()),
             _ => None,
         })
         .unwrap();
