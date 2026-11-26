@@ -1,0 +1,26 @@
+{
+  "id": "T611g-app-external-flow",
+  "title": "The app's external sign-in flow: begin, browser, loopback, finish",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/src/external_flow.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/server_endpoint.rs",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft/Cargo.toml",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft/tests/t611g_external_flow.rs",
+  "test_cmd": "cargo test -p crewcraft --test t611g_external_flow",
+  "depends_on": [
+    "T611a-external-signin-wire",
+    "T611d-loopback",
+    "T610-oidc-checks"
+  ],
+  "spec": "chat_session::begin_external sends one BeginExternal frame and returns the ExternalStart (issuer, client id, authorization endpoint, nonce; Debug hides the nonce), None for Refused, SignInProtocol for any other reply and an Io error if the server closes; ChatSession::finish_external opens a session with the FinishExternal opening. signed_in and ServerEndpoint expose both over a fresh device connection. external_flow::run asks the server to begin (NotOffered if it has no provider), makes a PKCE pair and a state from two separate random draws, listens on the loopback, opens the browser at the provider's code-flow URL (client id, redirect URI, scope, state, the server's nonce, S256 challenge), waits for the redirect (Loopback errors on timeout or a provider error, Browser if the browser cannot be opened), and finishes with the code, the verifier matching the challenge, and the same redirect URI (Server on refusal).",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

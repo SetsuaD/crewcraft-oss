@@ -16,6 +16,10 @@ use crewcraft_proto::signin::{self, Opening, SignIn};
 use zeroize::Zeroizing;
 
 const SIGN_IN_REPLY_LIMIT: usize = 1 + signin::TOKEN_LEN;
+/// The largest `ExternalStart` reply (task T611g): issuer, client id, authorization endpoint and nonce, each with a
+/// `u16` length.
+const EXTERNAL_START_LIMIT: usize =
+    1 + 2 + signin::MAX_URL_BYTES + 2 + signin::MAX_CLIENT_ID_BYTES + 2 + signin::MAX_URL_BYTES + 2 + signin::TOKEN_LEN;
 const WELCOME_LIMIT: usize = 9 + MAX_NAME;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +89,25 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         deadline: Instant,
     ) -> Result<Self, ChatError> {
         Self::open(stream, set_deadline, &Opening::Resume { token }, email, hello, settings, frame_timeout, deadline)
+    }
+
+    /// As `connect`, but finishing a sign-in through the server's external identity provider (task T611g): the code
+    /// from the loopback redirect, the PKCE verifier and that redirect URI. A refusal is `SignInRefused`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_external(
+        stream: S,
+        set_deadline: D,
+        email: &str,
+        code: &str,
+        verifier: &str,
+        redirect_uri: &str,
+        hello: Hello,
+        settings: Settings,
+        frame_timeout: Duration,
+        deadline: Instant,
+    ) -> Result<Self, ChatError> {
+        let opening = Opening::FinishExternal { code, verifier, redirect_uri };
+        Self::open(stream, set_deadline, &opening, email, hello, settings, frame_timeout, deadline)
     }
 
     /// The session token, for a later `resume`. A secret: keep it as the device record is kept, never in a log.
@@ -285,6 +308,56 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
                 Err(ChatError::Io(result.err().map_or(io::ErrorKind::UnexpectedEof, |error| error.kind())))
             }
         }
+    }
+}
+
+/// What the server answers to the start of an external sign-in (task T611g).
+#[derive(Clone, PartialEq, Eq)]
+pub struct ExternalStart {
+    pub issuer: String,
+    pub client_id: String,
+    pub authorization_endpoint: String,
+    /// Bound by the server to this device; the provider puts it in the ID token.
+    pub nonce: Zeroizing<String>,
+}
+
+impl std::fmt::Debug for ExternalStart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExternalStart")
+            .field("issuer", &self.issuer)
+            .field("client_id", &self.client_id)
+            .field("authorization_endpoint", &self.authorization_endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Ask the server to begin an external sign-in for this device (task T611g), over a stream that has authenticated the
+/// device. `None` when the server has no identity provider, or refuses. The server then closes the connection: the
+/// finish comes on a new one.
+pub fn begin_external<S: Read + Write>(
+    stream: &mut S,
+    mut set_deadline: impl FnMut(&mut S, Instant),
+    deadline: Instant,
+) -> Result<Option<ExternalStart>, ChatError> {
+    let request = signin::encode_opening(&Opening::BeginExternal).map_err(|_| ChatError::SignInProtocol)?;
+    let framed = frame::encode(&request).map_err(|_| ChatError::SignInProtocol)?;
+    set_deadline(stream, deadline);
+    stream.write_all(&framed).and_then(|()| stream.flush()).map_err(|error| ChatError::Io(error.kind()))?;
+    set_deadline(stream, deadline);
+    let reply = match frame::read_frame(stream, EXTERNAL_START_LIMIT) {
+        Ok(Some(reply)) => reply,
+        Ok(None) => return Err(ChatError::Io(io::ErrorKind::UnexpectedEof)),
+        Err(error) => return Err(ChatError::Io(error.kind())),
+    };
+    match signin::decode_reply(reply.payload()).map_err(|_| ChatError::SignInProtocol)? {
+        signin::Reply::ExternalStart { issuer, client_id, authorization_endpoint, nonce } => Ok(Some(ExternalStart {
+            issuer: issuer.to_owned(),
+            client_id: client_id.to_owned(),
+            authorization_endpoint: authorization_endpoint.to_owned(),
+            nonce: Zeroizing::new(nonce.to_owned()),
+        })),
+        signin::Reply::Refused => Ok(None),
+        _ => Err(ChatError::SignInProtocol),
     }
 }
 

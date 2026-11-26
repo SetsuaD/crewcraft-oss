@@ -8,6 +8,7 @@ pub mod device;
 pub mod device_store;
 pub mod enroll_client;
 pub mod enrollment;
+pub mod external_flow;
 pub mod hardware_key;
 pub mod ios;
 #[cfg(target_os = "ios")]

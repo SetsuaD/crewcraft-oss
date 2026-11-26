@@ -18,6 +18,8 @@ chacha20poly1305.workspace = true
 crewcraft-client-core.workspace = true
 crewcraft-desktop-ui.workspace = true
 crewcraft-enroll.workspace = true
+# External sign-in (T611g): PKCE, state and the provider's authorization URL.
+crewcraft-oidc.workspace = true
 crewcraft-proto.workspace = true
 crewcraft-tls.workspace = true
 # Only for the self-test (feature `selftest`): it answers the authenticator step itself.
@@ -88,6 +90,8 @@ apple-native-keyring-store = { version = "1.0.2", default-features = false, feat
 zbus-secret-service-keyring-store = { version = "1.0.1", default-features = false, features = ["rt-async-io-crypto-rust"] }
 
 [dev-dependencies]
+# T611g: the PKCE challenge recomputed in the test.
+base64.workspace = true
 crewcraft-admission.workspace = true
 crewcraft-pki.workspace = true
 crewcraft-server-core.workspace = true
