@@ -13,7 +13,7 @@ use std::io::Read;
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 
-use crate::durable::{DurableError, DurableServer, FileError, MAX_FILE_SIZE, valid_file_name};
+use crate::durable::{DurableError, DurableServer, FileError, MAX_FILE_SIZE, StoredFile, valid_file_name};
 use crate::import::{ARCHIVE_OWNER, BundleFile};
 
 /// The file id clients are sent for a file the export did not capture: no file has it, so it is never found.
@@ -83,7 +83,8 @@ impl DurableServer {
         let image = store.image_size(&sha256);
         let mut id = [0u8; 16];
         OsRng.fill_bytes(&mut id);
-        match self.record_file(slug, ARCHIVE_OWNER, id, sha256, size, &file.name, image) {
+        let stored = StoredFile { room: slug.to_owned(), uploader: ARCHIVE_OWNER.to_owned(), sha256, size, name: file.name.clone(), image };
+        match self.record_file(id, stored) {
             Ok(()) => Ok(Ok(id)),
             Err(FileError::Durable(error)) => Err(error),
             Err(_) => Ok(Err("the file record was refused")),
