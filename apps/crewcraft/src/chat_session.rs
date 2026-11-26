@@ -12,7 +12,7 @@ use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
 use crewcraft_proto::request::{
-    FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS,
+    FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_READ_STATE, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS,
     MAX_SAVED_PAGE, Request, Response, SavedMessage, SavedPage, SearchHit,
 };
 use crewcraft_proto::signin::{self, Opening, SignIn};
@@ -345,6 +345,24 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         self.features() & FEATURE_PINS_SAVED != 0
     }
 
+    /// Whether authoritative personal read state was negotiated (T344).
+    pub fn read_states(&self) -> bool {
+        self.features() & FEATURE_READ_STATE != 0
+    }
+
+    /// Rewind the read position to before `target`, or before the newest other person's message for zero (T344).
+    pub fn mark_unread(&mut self, room: &str, target: u64, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
+        if !self.read_states() {
+            return Err(ChatError::Unsupported);
+        }
+        self.request(Request::MarkUnread { room: room.to_owned(), target }, now_ms, 0, deadline)
+    }
+
+    /// A deliberate read advances the existing monotonic server marker (T344).
+    pub fn mark_read(&mut self, room: &str, cursor: u64, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
+        self.request(Request::MarkRead { room: room.to_owned(), cursor }, now_ms, 0, deadline)
+    }
+
     /// Pin a message, or unpin it only if it is still the room's pin (T343).
     pub fn pin(&mut self, room: &str, target: u64, on: bool, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
         if !self.pins_saved() {
@@ -464,30 +482,36 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         let start = inbox.view(room).ok_or(ChatError::Closed)?.cursor();
         let head = self.request(Request::Sync { room: room.to_owned(), cursor: start }, now_ms, local_minute, deadline)?;
         let pins_saved = self.pins_saved();
+        let read_states = self.read_states();
         if pins_saved {
             // receive() reads exactly one framed payload. Older sideband frames were drained before the matched
             // response, and this response cannot also consume its following pin snapshot.
             self.session.client_mut().inbox_mut().view_mut(room).ok_or(ChatError::Closed)?.expect_pin_state();
+        }
+        if read_states {
+            self.session.client_mut().inbox_mut().view_mut(room).ok_or(ChatError::Closed)?.expect_read_state();
         }
 
         loop {
             let view = self.view(room).ok_or(ChatError::Closed)?;
             let reached = view.cursor();
             let pin_received = !view.awaiting_pin() && view.pin_revision().is_some_and(|revision| revision >= head);
+            let read_received = !view.awaiting_read_state() && view.read_state().is_some_and(|state| state.head >= head);
+            let metadata_received = (!pins_saved || pin_received) && (!read_states || read_received);
             if head < start {
                 self.closed = true;
                 return Err(ChatError::HistoryGap { reached, head });
             }
-            if view.needs_resync() && (!pins_saved || pin_received) {
-                self.closed = !pins_saved;
+            if view.needs_resync() && metadata_received {
+                self.closed = !pins_saved && !read_states;
                 return Err(ChatError::HistoryGap { reached, head });
             }
-            if reached >= head && (!pins_saved || pin_received) {
+            if reached >= head && metadata_received {
                 return Ok(head);
             }
             // The pin snapshot ends this sync even when retained history cannot replay its prefix. Keep the
             // authoritative pin and a usable transport for saved messages while reporting the history gap.
-            if pins_saved && pin_received && reached < head {
+            if (pins_saved || read_states) && metadata_received && reached < head {
                 return Err(ChatError::HistoryGap { reached, head });
             }
             match self.receive(now_ms, local_minute, deadline) {

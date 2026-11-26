@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::request::{MAX_AUTHOR, MAX_HITS, MAX_SAVED_PAGE, MAX_SNIPPET, SavedMessage, SavedPage, SearchHit};
@@ -45,7 +45,7 @@ pub struct DurableServer {
     /// Every message's searchable text, by room (task T320a).
     pub(crate) search: RoomSearch,
     /// The authoritative current bodies and authors, including messages outside the bounded room log (task T343).
-    pub(crate) previews: HashMap<String, HashMap<u64, CurrentMessage>>,
+    pub(crate) previews: HashMap<String, BTreeMap<u64, CurrentMessage>>,
     /// Personal bookmarks hold references only; every list resolves current state and current membership.
     saved: HashMap<String, BTreeSet<(String, u64)>>,
     /// Every finished upload's record, by file id (docs/FILES.md, task T330a).
@@ -203,7 +203,7 @@ pub const MAX_SEARCH_HITS: usize = 100;
 
 impl DurableServer {
     /// Open the journal at `path` (as `Journal::open`, creating it if missing) and replay its records in order into a
-    /// fresh `Server`: `CreateRoom`, `AddMember`, `RemoveMember`, `Post`, `Edit`, `Delete` and `MarkRead` call the
+    /// fresh `Server`: `CreateRoom`, `AddMember`, `RemoveMember`, `Post`, `Edit`, `Delete`, `MarkRead` and `MarkUnread` call the
     /// matching `Server` method with the recorded fields. Any record that does not decode, or that the server refuses,
     /// is `Corrupt { index }`.
     pub fn open(path: &Path) -> Result<Self, DurableError> {
@@ -748,6 +748,34 @@ impl DurableServer {
         Some(crewcraft_proto::push::Push::Pinned { room: slug.to_owned(), cursor: room.head(), target, author, html, edited })
     }
 
+    /// The asking person's authoritative read position and full-history unread total (task T344).
+    pub fn read_state(&self, slug: &str, user: &str) -> Option<crewcraft_proto::push::Push> {
+        let room = self.server.room(slug).ok()?;
+        let (position, revision) = room.read_position(user).ok()?;
+        let unread = if room.is_read_only() {
+            0
+        } else {
+            self.previews.get(slug).map_or(0, |messages| {
+                messages.range((std::ops::Bound::Excluded(position), std::ops::Bound::Unbounded)).filter(|(_, message)| message.author != user).count() as u64
+            })
+        };
+        Some(crewcraft_proto::push::Push::ReadState { room: slug.to_owned(), cursor: room.head(), position, revision, unread })
+    }
+
+    /// Mark unread before a selected message, or the newest live message by another person for target zero.
+    pub fn mark_unread(&mut self, slug: &str, user: &str, target: u64) -> Result<u64, DurableError> {
+        self.check_alive()?;
+        let target = unread_target(&self.server, &self.previews, slug, user, target).map_err(DurableError::Server)?;
+        if let Some(target) = target {
+            let moved = self.server.mark_unread_validated(slug, user, target).map_err(DurableError::Server)?;
+            if moved {
+                self.record(&Op::MarkUnread { slug: slug.to_owned(), user: user.to_owned(), target })?;
+            }
+        }
+        let room = self.server.room(slug).map_err(DurableError::Server)?;
+        room.read_position(user).map(|(position, _)| position).map_err(|error| DurableError::Server(ServerError::Service(error)))
+    }
+
     /// As above, except that a `MarkRead` is recorded only when the marker moved (`Ok(true)`).
     pub fn mark_read(&mut self, slug: &str, user: &str, cursor: u64) -> Result<bool, DurableError> {
         self.check_alive()?;
@@ -779,7 +807,7 @@ impl DurableServer {
 
 /// Apply one recorded change to `server`, as the call that made it did, and return the cursor it made (0 for changes
 /// that make none).
-fn replay(server: &mut Server, op: Op, messages: &HashMap<String, HashMap<u64, CurrentMessage>>) -> Result<u64, ServerError> {
+fn replay(server: &mut Server, op: Op, messages: &HashMap<String, BTreeMap<u64, CurrentMessage>>) -> Result<u64, ServerError> {
     match op {
         Op::CreateRoom { owner, name } => server.create_room(&owner, &name).map(|_| 0),
         Op::AddMember { slug, actor, user, role } => server.add_member(&slug, &actor, &user, role),
@@ -800,6 +828,13 @@ fn replay(server: &mut Server, op: Op, messages: &HashMap<String, HashMap<u64, C
         // Personal bookmark records are handled before the room operation replay.
         Op::SaveMessage { .. } => Ok(0),
         Op::MarkRead { slug, user, cursor } => server.mark_read(&slug, &user, cursor).map(|_| 0),
+        Op::MarkUnread { slug, user, target } => {
+            if target == 0 {
+                return Err(ServerError::Service(ServiceError::NoSuchMessage));
+            }
+            live_message(server, messages, &slug, &user, target)?;
+            server.mark_unread_validated(&slug, &user, target).map(|_| 0)
+        }
         Op::React { slug, actor, target, reaction, on, now_ms } => server.react(&slug, &actor, target, reaction, on, now_ms),
         // Handled before `replay` is called: a file record changes no room, and a post with files needs the records.
         Op::FileStored { .. } | Op::PostFiles { .. } | Op::Reply { .. } => Ok(0),
@@ -880,7 +915,7 @@ fn searchable(op: &Op) -> Option<(String, String)> {
 pub(crate) fn index_event(
     server: &Server,
     search: &mut RoomSearch,
-    previews: &mut HashMap<String, HashMap<u64, CurrentMessage>>,
+    previews: &mut HashMap<String, BTreeMap<u64, CurrentMessage>>,
     slug: &str,
     actor: &str,
     cursor: u64,
@@ -911,7 +946,7 @@ pub(crate) fn index_event(
 
 fn live_message<'a>(
     server: &Server,
-    messages: &'a HashMap<String, HashMap<u64, CurrentMessage>>,
+    messages: &'a HashMap<String, BTreeMap<u64, CurrentMessage>>,
     slug: &str,
     actor: &str,
     target: u64,
@@ -924,7 +959,7 @@ fn live_message<'a>(
 
 fn validate_pin(
     server: &Server,
-    messages: &HashMap<String, HashMap<u64, CurrentMessage>>,
+    messages: &HashMap<String, BTreeMap<u64, CurrentMessage>>,
     slug: &str,
     actor: &str,
     target: u64,
@@ -939,7 +974,7 @@ fn validate_pin(
 
 fn change_saved(
     server: &Server,
-    messages: &HashMap<String, HashMap<u64, CurrentMessage>>,
+    messages: &HashMap<String, BTreeMap<u64, CurrentMessage>>,
     saved: &mut HashMap<String, BTreeSet<(String, u64)>>,
     slug: &str,
     actor: &str,
@@ -959,6 +994,21 @@ fn change_saved(
         saved.remove(actor);
     }
     Ok(changed)
+}
+
+fn unread_target(
+    server: &Server,
+    messages: &HashMap<String, BTreeMap<u64, CurrentMessage>>,
+    slug: &str,
+    user: &str,
+    target: u64,
+) -> Result<Option<u64>, ServerError> {
+    server.room(slug)?.read_position(user).map_err(ServerError::Service)?;
+    if target != 0 {
+        live_message(server, messages, slug, user, target)?;
+        return Ok(Some(target));
+    }
+    Ok(messages.get(slug).and_then(|room| room.iter().rev().find(|(_, message)| message.author != user).map(|(cursor, _)| *cursor)))
 }
 
 /// At most `max` bytes of `text`, cut at a character boundary.
@@ -993,6 +1043,93 @@ mod pins_saved_tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
+    }
+
+    #[test]
+    fn unread_default_journals_the_live_other_author_target_once_and_reconstructs_its_revision() {
+        let journal = TestJournal::new();
+        let mut server = DurableServer::open(&journal.0).unwrap();
+        let room = server.create_room("owner", "Room").unwrap();
+        server.add_member(&room, "owner", "reader", Role::Member).unwrap();
+        let chosen = server.post(&room, "owner", "first", 10_000).unwrap();
+        let own = server.post(&room, "reader", "own", 10_000).unwrap();
+        let deleted = server.post(&room, "owner", "deleted", 10_000).unwrap();
+        server.delete(&room, "owner", deleted).unwrap();
+        assert!(server.mark_read(&room, "reader", u64::MAX).unwrap());
+        assert_eq!(server.mark_unread(&room, "reader", 0), Ok(chosen - 1));
+        let before_noop = server.journal.len();
+        assert_eq!(server.mark_unread(&room, "reader", 0), Ok(chosen - 1));
+        assert_eq!(server.journal.len(), before_noop);
+        assert_eq!(server.server().room(&room).unwrap().read_position("reader"), Ok((chosen - 1, 2)));
+        assert!(matches!(server.read_state(&room, "reader"), Some(crewcraft_proto::push::Push::ReadState { unread: 1, .. })));
+        assert_eq!(server.mark_unread(&room, "reader", deleted), Err(DurableError::Server(ServerError::Service(ServiceError::NoSuchMessage))));
+        assert_eq!(
+            server.mark_unread(&room, "outsider", chosen),
+            Err(DurableError::Server(ServerError::Service(ServiceError::Room(RoomError::NotMember))))
+        );
+        assert!(server.read_state(&room, "outsider").is_none());
+        assert_eq!(server.journal.len(), before_noop);
+        drop(server);
+        let mut reopened = DurableServer::open(&journal.0).unwrap();
+        assert_eq!(reopened.server().room(&room).unwrap().read_position("reader"), Ok((chosen - 1, 2)));
+        assert_eq!(reopened.server().room(&room).unwrap().read_position("owner"), Ok((0, 0)));
+        // An explicit target is exact, even when that advances a previously rewound position.
+        assert_eq!(reopened.mark_unread(&room, "reader", own), Ok(own - 1));
+        assert_eq!(reopened.server().room(&room).unwrap().read_position("reader"), Ok((own - 1, 3)));
+        assert!(matches!(reopened.read_state(&room, "reader"), Some(crewcraft_proto::push::Push::ReadState { unread: 0, .. })));
+        drop(reopened);
+        let (_, records) = Journal::open(&journal.0).unwrap();
+        let recorded: Vec<_> = records.iter().filter_map(|bytes| match decode_op(bytes).unwrap() {
+            Op::MarkUnread { target, .. } => Some(target),
+            _ => None,
+        }).collect();
+        assert_eq!(recorded, vec![chosen, own]);
+    }
+
+    #[test]
+    fn unread_default_without_another_author_is_a_durable_noop_and_poison_still_refuses() {
+        let journal = TestJournal::new();
+        let mut server = DurableServer::open(&journal.0).unwrap();
+        let room = server.create_room("reader", "Room").unwrap();
+        server.post(&room, "reader", "own", 10_000).unwrap();
+        server.mark_read(&room, "reader", 20).unwrap();
+        let before = server.journal.len();
+        assert_eq!(server.mark_unread(&room, "reader", 0), Ok(20));
+        assert_eq!(server.server().room(&room).unwrap().read_position("reader"), Ok((20, 1)));
+        assert_eq!(server.journal.len(), before);
+        server.poisoned = true;
+        assert_eq!(server.mark_unread(&room, "reader", 0), Err(DurableError::Poisoned));
+        assert_eq!(server.journal.len(), before);
+    }
+
+    #[test]
+    fn unread_feature_refusal_is_nonmutating_and_empty_sync_keeps_the_next_response_aligned() {
+        use crewcraft_proto::request::FEATURE_READ_STATE;
+        use crewcraft_proto::push::{Push, decode_push};
+
+        let journal = TestJournal::new();
+        let mut server = DurableServer::open(&journal.0).unwrap();
+        let room = server.create_room("owner", "Room").unwrap();
+        let message = server.post(&room, "owner", "message", 10_000).unwrap();
+        server.mark_read(&room, "owner", 20).unwrap();
+        let before = server.journal.len();
+        let request = encode(&encode_request(1, &Request::MarkUnread { room: room.clone(), target: message }).unwrap()).unwrap();
+        let answer = Connection::new("owner").receive_durable(&mut server, &request, 10_000).unwrap();
+        let mut decoder = Decoder::new();
+        decoder.push(&answer);
+        assert!(matches!(decode_response(&decoder.next_frame().unwrap().unwrap()).unwrap(), (1, Response::Error { code: crate::dispatch::E_NOT_ALLOWED, .. })));
+        assert!(decoder.next_frame().unwrap().is_none());
+        assert_eq!(server.journal.len(), before);
+        assert_eq!(server.server().room(&room).unwrap().read_position("owner"), Ok((20, 1)));
+        let head = server.server().room(&room).unwrap().head();
+        let mut requests = encode(&encode_request(2, &Request::Sync { room: room.clone(), cursor: head }).unwrap()).unwrap();
+        requests.extend_from_slice(&encode(&encode_request(3, &Request::Ping).unwrap()).unwrap());
+        let answer = Connection::with_features("owner", FEATURE_READ_STATE).receive_durable(&mut server, &requests, 10_000).unwrap();
+        decoder.push(&answer);
+        assert_eq!(decode_response(&decoder.next_frame().unwrap().unwrap()).unwrap(), (2, Response::Ok { cursor: head }));
+        assert_eq!(decode_push(&decoder.next_frame().unwrap().unwrap()).unwrap(), Push::ReadState { room, cursor: head, position: 20, revision: 1, unread: 0 });
+        assert_eq!(decode_response(&decoder.next_frame().unwrap().unwrap()).unwrap(), (3, Response::Ok { cursor: 0 }));
+        assert!(decoder.next_frame().unwrap().is_none());
     }
 
     #[test]
@@ -1037,7 +1174,7 @@ mod pins_saved_tests {
         let room = server.create_archive_room("Archive").unwrap();
         server.add_member(&room, crate::import::ARCHIVE_OWNER, "reader", Role::Guest).unwrap();
         let messages =
-            HashMap::from([(room.clone(), HashMap::from([(1, CurrentMessage { author: "author".into(), html: String::new(), edited: false })]))]);
+            HashMap::from([(room.clone(), BTreeMap::from([(1, CurrentMessage { author: "author".into(), html: String::new(), edited: false })]))]);
         let mut saved = HashMap::new();
         assert_eq!(change_saved(&server, &messages, &mut saved, &room, "reader", 1, true), Ok(true));
         assert_eq!(validate_pin(&server, &messages, &room, "reader", 1, true), Err(ServerError::Service(ServiceError::NotAllowed)));

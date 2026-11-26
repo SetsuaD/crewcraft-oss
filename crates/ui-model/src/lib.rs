@@ -21,6 +21,10 @@ pub const MAX_DRAFT_CHARS: usize = 4000;
 pub enum Command {
     /// Fetch the room's current messages (a snapshot), for example when the room is opened.
     Sync { room: String },
+    /// A deliberate room-open or Mark as read action. Background sync never clears another device's rewind (T344).
+    Read { room: String },
+    /// Mark unread from a message, or from the newest other author's message for target zero (T344).
+    MarkUnread { room: String, target: u64 },
     /// Post `text` to `room`. `text` is already trimmed and within `MAX_DRAFT_CHARS`.
     Post { room: String, text: String },
     /// Replace the text of one of the person's own messages, `target` being its cursor (task T316). `text` is trimmed

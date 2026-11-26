@@ -64,6 +64,20 @@ impl RoomList {
         true
     }
 
+    /// Apply an authoritative personal count, including a rewind from another device while this room is selected.
+    pub fn set_read_state(&mut self, name: &str, unread: u64) -> bool {
+        let Some(index) = self.position(name) else { return false };
+        self.rooms[index].1 = u32::try_from(unread).unwrap_or(u32::MAX);
+        true
+    }
+
+    /// Leave the conversation without clearing its authoritative unread count (T344).
+    pub fn clear_selection(&mut self, name: &str) {
+        if self.is_selected(name) {
+            self.selected = None;
+        }
+    }
+
     /// The sum of every room's unread count, for the app-bar badge. Saturates at `u32::MAX`.
     pub fn total_unread(&self) -> u32 {
         self.rooms.iter().fold(0u32, |sum, (_, unread)| sum.saturating_add(*unread))

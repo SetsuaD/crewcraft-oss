@@ -558,6 +558,8 @@ pub fn worker_update(event: Event) -> Vec<Update> {
         Event::WaitingForBrowser => vec![Update::WaitingForBrowser],
         Event::Room { room, shown } => vec![Update::Snapshot { room, shown }],
         Event::Unread { room, count } => vec![Update::Unread { room, unread: count }],
+        Event::ReadState { room, state } => vec![Update::ReadState { room, unread: state.unread }],
+        Event::MarkedUnread { room } => vec![Update::MarkedUnread { room }],
         Event::PostFailed { room, problem, .. } => vec![Update::Failed(format!("A message to {room} was not sent: {problem}"))],
         Event::Failed(problem) => vec![Update::Failed(problem.to_string())],
         Event::Disconnected => vec![Update::SignedOut, Update::Failed("The connection was lost. Sign in again with a new code.".to_owned())],

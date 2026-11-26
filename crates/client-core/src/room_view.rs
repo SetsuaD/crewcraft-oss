@@ -43,6 +43,15 @@ pub struct PinnedMessage {
     pub edited: bool,
 }
 
+/// The signed-in person's authoritative room read position and unread count (T344).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadState {
+    pub head: u64,
+    pub position: u64,
+    pub revision: u64,
+    pub unread: u64,
+}
+
 pub struct RoomView {
     timeline: Timeline,
     outbox: Outbox,
@@ -73,6 +82,8 @@ pub struct RoomView {
     pinned: Option<PinnedMessage>,
     pin_revision: Option<u64>,
     awaiting_pin: bool,
+    read_state: Option<ReadState>,
+    awaiting_read_state: bool,
 }
 
 impl Default for RoomView {
@@ -102,6 +113,8 @@ impl RoomView {
             pinned: None,
             pin_revision: None,
             awaiting_pin: false,
+            read_state: None,
+            awaiting_read_state: false,
         }
     }
 
@@ -291,6 +304,28 @@ impl RoomView {
     /// The authoritative current body of the room's pinned message (T343).
     pub fn pinned_message(&self) -> Option<&PinnedMessage> {
         self.pinned.as_ref()
+    }
+
+    /// Apply personal read metadata without advancing the message timeline (T344). Personal revisions order rewinds
+    /// at an unchanged room head; a later room head may change the count without changing that revision.
+    pub fn set_read_state(&mut self, state: ReadState) {
+        let current = self.read_state.as_ref();
+        if current.is_none_or(|current| (state.revision, state.head) >= (current.revision, current.head)) {
+            self.read_state = Some(state);
+            self.awaiting_read_state = false;
+        }
+    }
+
+    pub fn read_state(&self) -> Option<&ReadState> {
+        self.read_state.as_ref()
+    }
+
+    pub fn expect_read_state(&mut self) {
+        self.awaiting_read_state = true;
+    }
+
+    pub fn awaiting_read_state(&self) -> bool {
+        self.awaiting_read_state
     }
 
     /// The files of each message that has any, by cursor (task T330c).

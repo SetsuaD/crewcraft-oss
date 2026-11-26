@@ -57,7 +57,7 @@ fn results_replace_the_conversation_and_open_their_room() {
     h.get_by_label("bo@example.org in general: kickoff moved to Tuesday").click();
     h.run();
     assert_eq!(h.state().search_results(), None, "opening a result closes the results");
-    assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::Sync { room: "general".into() })]);
+    assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::Read { room: "general".into() })]);
 
     h.state_mut().apply(Update::SearchResults { query: "nothing".into(), results: Vec::new() });
     h.run();

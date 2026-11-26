@@ -78,6 +78,7 @@ pub fn error_code(error: ServerError) -> u16 {
 /// - `Sync`: the user must be a member (`RoomService::sync`); `Ok { cursor }` is the room's head. The events themselves
 ///   go out as separate frames, not in this response.
 /// - `MarkRead`: `Server::mark_read`; `Ok { cursor }` is the room's head, whether or not the marker moved.
+/// - `MarkUnread` (task T344): resolve a live target for this member; `Ok.cursor` is their final read position.
 /// - `Ping`: `Ok { cursor: 0 }`; it needs no room and never fails.
 /// - `ListRooms`: `Ok { cursor }` is how many rooms `listed_rooms` gives for `user`. The names themselves go out as
 ///   one room-list frame after this response (`request::encode_rooms`), as `Sync`'s events do. It never fails.
@@ -177,6 +178,7 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         Request::MarkRead { room, cursor } => backend
             .change(|s| s.mark_read(room, user, *cursor), |s| s.mark_read(room, user, *cursor))
             .and_then(|_| backend.server().room(room).map(|service| service.head()).map_err(|_| DurableError::Server(ServerError::NoSuchRoom))),
+        Request::MarkUnread { room, target } => backend.change(|s| s.mark_unread(room, user, *target), |s| s.mark_unread(room, user, *target)),
     };
     match result {
         Ok(cursor) => Ok(Response::Ok { cursor }),

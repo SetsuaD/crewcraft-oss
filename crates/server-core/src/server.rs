@@ -248,6 +248,16 @@ impl Server {
         service.mark_read(user, cursor).map_err(ServerError::Service)
     }
 
+    /// The asking member marks a live message as unread (task T344). Personal metadata accepts read-only members.
+    pub fn mark_unread(&mut self, slug: &str, user: &str, target: u64) -> Result<u64, ServerError> {
+        self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?.mark_unread(user, target).map_err(ServerError::Service)
+    }
+
+    /// The durable caller has resolved and checked this target using its complete current-message projection.
+    pub(crate) fn mark_unread_validated(&mut self, slug: &str, user: &str, target: u64) -> Result<bool, ServerError> {
+        self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?.mark_unread_validated(user, target).map_err(ServerError::Service)
+    }
+
     /// Record a heartbeat from `user` (as `Presence::heartbeat`). Presence is per server, not per room.
     pub fn heartbeat(&mut self, user: &str, now_ms: u64) {
         self.presence.heartbeat(user, now_ms);

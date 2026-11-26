@@ -120,7 +120,7 @@ fn chat_opens_the_first_room_shows_the_feed_and_sends() {
     h.get_by_label("3 unread");
     h.get_by_label("general  (3)").click();
     h.run();
-    assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::Sync { room: "general".to_owned() })]);
+    assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::Read { room: "general".to_owned() })]);
     assert!(h.query_by_label("3 unread").is_none());
 
     h.get_by_label("Sign out").click();
