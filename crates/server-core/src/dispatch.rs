@@ -146,6 +146,7 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         | Request::CallJoin { .. }
         | Request::CallHeartbeat { .. }
         | Request::CallLeave { .. }
+        | Request::ListFiles
         | Request::CallKey { .. }
         | Request::CallSeal { .. }
         | Request::PostFiles { .. }

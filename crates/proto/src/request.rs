@@ -24,6 +24,10 @@
 //! - tags 22 and 23, call keys (task T360d2), answered `Ok { cursor }` with the call's id: 22 `CallKey`: `str room | u64
 //!   call | 32 X25519 public key`, the sender's device's key for the call; 23 `CallSeal`: `str room | u64 call | str to
 //!   | u64 kid | u16 length | 1 to MAX_SEALED bytes`, a sender key sealed to one participant (`crewcraft_sframe::seal`)
+//! - tag 24 `ListFiles` (task T331a): no fields; announced by `FEATURE_FILE_LIST`. Answered `Ok { cursor: n }`, then
+//!   by one files frame (`encode_files`): `u8 tag (135) | u32 id | u16 n | n × (16 file id | str room | u64 message
+//!   cursor | str uploader (0 to MAX_AUTHOR) | str name (1 to MAX_FILE_NAME) | u64 size | u8 has image size | [u32
+//!   width | u32 height])`, n at most `MAX_LISTED_FILES`
 //! - tag 17 `React` (task T341a): `str room | u64 target | u8 reaction (1 to push::REACTIONS.len()) | u8 on (0 or 1)`,
 //!   answered `Ok { cursor }` of the reaction's event; announced by `FEATURE_REACTIONS`
 //!
@@ -81,6 +85,12 @@ pub const FEATURE_REACTIONS: u32 = 16;
 pub const FEATURE_ARCHIVE: u32 = 32;
 /// The handshake feature bit for calls: the call requests and the `CallLine` and `CallState` pushes (task T360a1).
 pub const FEATURE_CALLS: u32 = 64;
+/// The handshake feature bit for the file list: `ListFiles` and its files frame (task T331a).
+pub const FEATURE_FILE_LIST: u32 = 128;
+/// The first byte of a files frame (task T331a).
+pub const FILES_TAG: u8 = 135;
+/// The most files one files frame lists.
+pub const MAX_LISTED_FILES: usize = 500;
 /// The first byte of an id frame.
 pub const ID_TAG: u8 = 133;
 /// The first byte of a bytes frame (task T330d).
@@ -109,6 +119,7 @@ const CALL_HEARTBEAT: u8 = 20;
 const CALL_LEAVE: u8 = 21;
 const CALL_KEY: u8 = 22;
 const CALL_SEAL: u8 = 23;
+const LIST_FILES: u8 = 24;
 /// The largest sealed sender key a `CallSeal` carries.
 pub const MAX_SEALED: usize = 256;
 /// The most files one `PostFiles` attaches (task T330c).
@@ -215,6 +226,8 @@ pub enum Request {
         kid: u64,
         sealed: Vec<u8>,
     },
+    /// The files on messages in the signed-in person's rooms (task T331a).
+    ListFiles,
     /// Up to `length` bytes of file `file` from `offset` (task T330d).
     Download {
         file: [u8; 16],
@@ -425,6 +438,10 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.extend_from_slice(&(sealed.len() as u16).to_be_bytes());
             out.extend_from_slice(sealed);
         }
+        Request::ListFiles => {
+            out.push(LIST_FILES);
+            out.extend_from_slice(&id.to_be_bytes());
+        }
         Request::CallStart { room, video } => {
             out.push(CALL_START);
             out.extend_from_slice(&id.to_be_bytes());
@@ -466,7 +483,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
     if !(1..=6).contains(&tag)
         && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag)
         && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT)
-        && !(CALL_START..=CALL_SEAL).contains(&tag)
+        && !(CALL_START..=LIST_FILES).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -565,6 +582,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
             };
             Request::CallStart { room, video }
         }
+        LIST_FILES => Request::ListFiles,
         CALL_KEY => {
             let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
             let call = read_u64(bytes, &mut pos)?;
@@ -759,6 +777,88 @@ pub fn decode_hits(bytes: &[u8]) -> Result<(u32, Vec<SearchHit>), CodecError> {
         return Err(CodecError::TrailingBytes);
     }
     Ok((id, hits))
+}
+
+/// One file the files frame lists (task T331a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedFile {
+    pub file: [u8; 16],
+    pub room: String,
+    /// The cursor of the message that carries it.
+    pub cursor: u64,
+    /// Who uploaded it (an imported file names the archive owner); may be empty.
+    pub uploader: String,
+    pub name: String,
+    pub size: u64,
+    pub image: Option<(u32, u32)>,
+}
+
+/// Encode the files frame that follows the `Ok` answering `ListFiles` request `id` (task T331a).
+pub fn encode_files(id: u32, files: &[ListedFile]) -> Result<Vec<u8>, CodecError> {
+    if files.len() > MAX_LISTED_FILES {
+        return Err(CodecError::FieldLength);
+    }
+    let mut out = vec![FILES_TAG];
+    out.extend_from_slice(&id.to_be_bytes());
+    out.extend_from_slice(&(files.len() as u16).to_be_bytes());
+    for file in files {
+        out.extend_from_slice(&file.file);
+        write_str(&mut out, &file.room, 1, MAX_NAME)?;
+        out.extend_from_slice(&file.cursor.to_be_bytes());
+        write_str(&mut out, &file.uploader, 0, MAX_AUTHOR)?;
+        write_str(&mut out, &file.name, 1, MAX_FILE_NAME)?;
+        out.extend_from_slice(&file.size.to_be_bytes());
+        match file.image {
+            None => out.push(0),
+            Some((width, height)) => {
+                out.push(1);
+                out.extend_from_slice(&width.to_be_bytes());
+                out.extend_from_slice(&height.to_be_bytes());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Decode exactly one files frame: its request id and the files. Errors in the order the bytes are read, as
+/// `decode_hits`.
+pub fn decode_files(bytes: &[u8]) -> Result<(u32, Vec<ListedFile>), CodecError> {
+    let Some(&tag) = bytes.first() else {
+        return Err(CodecError::Truncated);
+    };
+    if tag != FILES_TAG {
+        return Err(CodecError::BadKind(tag));
+    }
+    let mut pos: usize = 1;
+    let id = read_u32(bytes, &mut pos)?;
+    let [high, low] = read_array::<2>(bytes, &mut pos)?;
+    let count = usize::from(u16::from_be_bytes([high, low]));
+    if count > MAX_LISTED_FILES {
+        return Err(CodecError::FieldLength);
+    }
+    let mut files = Vec::with_capacity(count);
+    for _ in 0..count {
+        let file = read_array::<16>(bytes, &mut pos)?;
+        let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+        let cursor = read_u64(bytes, &mut pos)?;
+        let uploader = read_string(bytes, &mut pos, 0, MAX_AUTHOR)?;
+        let name = read_string(bytes, &mut pos, 1, MAX_FILE_NAME)?;
+        let size = read_u64(bytes, &mut pos)?;
+        let image = match read_array::<1>(bytes, &mut pos)? {
+            [0] => None,
+            [1] => {
+                let width = read_u32(bytes, &mut pos)?;
+                let height = read_u32(bytes, &mut pos)?;
+                Some((width, height))
+            }
+            [other] => return Err(CodecError::BadKind(other)),
+        };
+        files.push(ListedFile { file, room, cursor, uploader, name, size, image });
+    }
+    if pos != bytes.len() {
+        return Err(CodecError::TrailingBytes);
+    }
+    Ok((id, files))
 }
 
 /// Encode the id frame that follows the `Ok` answering `UploadBegin` or `UploadFinish` request `id` (task T330b): the

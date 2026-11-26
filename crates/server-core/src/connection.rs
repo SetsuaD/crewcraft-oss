@@ -169,6 +169,10 @@ impl Connection {
             // (task T330d).
             match follow {
                 Some(Follow::Id(value)) => out.extend_from_slice(&encode(&encode_id(id, &value)).map_err(ConnError::Frame)?),
+                Some(Follow::Files(files)) => {
+                    let frame = crewcraft_proto::request::encode_files(id, &files).map_err(ConnError::Request)?;
+                    out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
+                }
                 Some(Follow::Bytes(data)) => {
                     out.extend_from_slice(&encode(&encode_bytes(id, &data).map_err(ConnError::Request)?).map_err(ConnError::Frame)?);
                 }
@@ -327,6 +331,10 @@ fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64
                 Err(crate::durable::ReplyError::Durable(error)) => Err(DurableConnError::Storage(error)),
             });
         }
+        Request::ListFiles => {
+            let files = server.listed_files(user);
+            return Some(Ok((Response::Ok { cursor: files.len() as u64 }, Some(Follow::Files(files)))));
+        }
         Request::Download { file, offset, length } => {
             return Some(Ok(match server.download(user, file, *offset, *length as usize) {
                 Ok(data) => (Response::Ok { cursor: data.len() as u64 }, Some(Follow::Bytes(data))),
@@ -349,6 +357,8 @@ fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64
 enum Follow {
     Id([u8; 16]),
     Bytes(Vec<u8>),
+    /// The files frame answering `ListFiles` (task T331a).
+    Files(Vec<crewcraft_proto::request::ListedFile>),
 }
 
 /// A request's answer, and what follows it.

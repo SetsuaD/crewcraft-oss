@@ -443,6 +443,52 @@ impl DurableServer {
             .collect()
     }
 
+    /// The files `user` can see (task T331a): every stored file on a live message in a room `user` is in now, imported
+    /// ones included (not those not archived), newest message first across rooms (equal cursors by room), at most
+    /// `request::MAX_LISTED_FILES`.
+    pub fn listed_files(&self, user: &str) -> Vec<crewcraft_proto::request::ListedFile> {
+        let member = |slug: &str| self.server.room(slug).is_ok_and(|room| room.role(user).is_some());
+        let mut listed: Vec<crewcraft_proto::request::ListedFile> = Vec::new();
+        for ((slug, cursor), ids) in &self.attachments {
+            if !member(slug) {
+                continue;
+            }
+            for id in ids {
+                let Some(file) = self.files.get(id).filter(|_| !self.detached.contains(id)) else { continue };
+                listed.push(crewcraft_proto::request::ListedFile {
+                    file: *id,
+                    room: slug.clone(),
+                    cursor: *cursor,
+                    uploader: file.uploader.clone(),
+                    name: file.name.clone(),
+                    size: file.size,
+                    image: file.image,
+                });
+            }
+        }
+        for (slug, cursor, files) in self.imported_file_lists() {
+            if !member(&slug) {
+                continue;
+            }
+            for (id, name, size) in files {
+                let Some(file) = self.files.get(&id) else { continue };
+                listed.push(crewcraft_proto::request::ListedFile {
+                    file: id,
+                    room: slug.clone(),
+                    cursor,
+                    uploader: file.uploader.clone(),
+                    name,
+                    size,
+                    image: file.image,
+                });
+            }
+        }
+        listed.retain(|file| !file.room.is_empty() && file.room.len() <= MAX_NAME && file.uploader.len() <= MAX_AUTHOR);
+        listed.sort_by(|a, b| b.cursor.cmp(&a.cursor).then(a.room.cmp(&b.room)).then(a.name.cmp(&b.name)));
+        listed.truncate(crewcraft_proto::request::MAX_LISTED_FILES);
+        listed
+    }
+
     /// The file store, when this server keeps files (task T350e).
     pub(crate) fn file_store(&self) -> Option<&FileStore> {
         self.store.as_ref()
