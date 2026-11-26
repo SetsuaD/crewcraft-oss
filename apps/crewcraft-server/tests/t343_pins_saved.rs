@@ -167,7 +167,7 @@ impl Person {
 
 struct Fixture {
     directory: Scratch,
-    fingerprint: RootFingerprint,
+    fingerprint: [u8; 32],
     root_der: Vec<u8>,
     room: String,
     private_room: String,
