@@ -15,6 +15,7 @@ pub mod ios_keys;
 pub mod key_vault;
 pub mod lab_client;
 pub mod lab_device;
+pub mod loopback;
 #[cfg(feature = "selftest")]
 pub mod selftest;
 pub mod server_endpoint;
