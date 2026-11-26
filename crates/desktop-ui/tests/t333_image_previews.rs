@@ -57,10 +57,7 @@ fn an_image_is_fetched_once_and_shown() {
     let asked: Vec<Action> = h.state_mut().take_actions().into_iter().filter(|a| matches!(a, Action::Room(Command::Preview { .. }))).collect();
     assert_eq!(
         asked,
-        vec![
-            Action::Room(Command::Preview { file: [1; 16], size: photo.len() as u64 }),
-            Action::Room(Command::Preview { file: [3; 16], size: 20 })
-        ],
+        vec![Action::Room(Command::Preview { file: [1; 16], size: photo.len() as u64 }), Action::Room(Command::Preview { file: [3; 16], size: 20 })],
         "the two images, not the text file"
     );
     h.state_mut().apply(Update::Preview { file: [1; 16], bytes: photo });

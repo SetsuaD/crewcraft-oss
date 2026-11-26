@@ -327,10 +327,8 @@ impl SignedInSession {
         let mut offset = 0u64;
         while offset < size {
             let length = u32::try_from((size - offset).min(MAX_CHUNK as u64)).unwrap_or(MAX_CHUNK as u32);
-            let data = self
-                .chat
-                .download(file, offset, length, 0, Instant::now() + OPERATION_TIMEOUT)
-                .map_err(|e| FileOpError::Lab(LabError::Chat(e)))?;
+            let data =
+                self.chat.download(file, offset, length, 0, Instant::now() + OPERATION_TIMEOUT).map_err(|e| FileOpError::Lab(LabError::Chat(e)))?;
             if data.is_empty() {
                 return Err(FileOpError::Lab(LabError::Chat(ChatError::UnexpectedResponse)));
             }
