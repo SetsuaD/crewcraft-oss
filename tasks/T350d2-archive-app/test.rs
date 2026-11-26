@@ -28,7 +28,7 @@ use crewcraft_enroll::EnrollmentCode;
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_oidc::{Key, parse_jwks};
 use crewcraft_proto::handshake::ServerSide;
-use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_ARCHIVE, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS};
+use crewcraft_proto::request::{FEATURE_ARCHIVE, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS};
 use crewcraft_server::external_signin::{ExternalSignIn, Provider};
 use crewcraft_server::lab_bootstrap::bootstrap_handler_with;
 use crewcraft_server::lab_installation::LabInstallation;

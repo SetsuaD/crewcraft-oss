@@ -855,7 +855,10 @@ impl Window {
                             ui.add_space(10.0);
                             ui.strong("Archive");
                             for row in archive {
-                                if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, row.name.clone())).clicked() {
+                                if ui
+                                    .add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, row.name.clone()))
+                                    .clicked()
+                                {
                                     open = Some(row.name);
                                 }
                             }
