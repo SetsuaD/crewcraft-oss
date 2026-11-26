@@ -1,0 +1,20 @@
+[package]
+name = "crewcraft-oidc"
+description = "Sign-in through an external OpenID Connect provider: discovery, PKCE, JWKS and ID-token checks, without I/O"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+# Signature checks (RS256, ES256); already in the tree under rustls.
+ring = "0.17"
+# The provider's JSON documents (discovery, JWKS, ID-token header and claims).
+serde_json = "1"
+sha2.workspace = true
+subtle.workspace = true
+
+[lints]
+workspace = true
