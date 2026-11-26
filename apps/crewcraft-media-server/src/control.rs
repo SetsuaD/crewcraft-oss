@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crewcraft_media::config::{ControlSettings, read_file};
 use crewcraft_media::JoinError;
+use crewcraft_media::config::{ControlSettings, read_file};
 use crewcraft_media::intake::Handle;
 use crewcraft_proto::frame::{Decoder, encode};
 use crewcraft_proto::media_control::{

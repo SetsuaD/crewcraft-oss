@@ -5,10 +5,10 @@ use std::sync::Mutex;
 
 use crewcraft_proto::frame::{self, MAX_FRAME};
 use crewcraft_proto::handshake::ServerSide;
+use crewcraft_proto::request::{Response, encode_answer, encode_response};
 use crewcraft_proto::signin::{
     self, CODE_LEN, MAX_AUTH_CODE_BYTES, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, MAX_REDIRECT_BYTES, MAX_VERIFIER_LEN, Opening, SignIn,
 };
-use crewcraft_proto::request::{Response, encode_answer, encode_response};
 use crewcraft_server_core::connection::PendingOffer;
 use crewcraft_server_core::durable::DurableServer;
 use crewcraft_server_core::session::{DurableSessionError, Phase, Session};

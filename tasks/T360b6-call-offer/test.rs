@@ -122,7 +122,9 @@ impl Person {
     fn connect(address: SocketAddr, user: &str) -> Person {
         let mut stream = TcpStream::connect(address).unwrap();
         stream.set_read_timeout(Some(WAIT)).unwrap();
-        stream.write_all(&encode(&signin::encode_request(&SignIn { email: user, password: "fixture password", code: "123456" }).unwrap()).unwrap()).unwrap();
+        stream
+            .write_all(&encode(&signin::encode_request(&SignIn { email: user, password: "fixture password", code: "123456" }).unwrap()).unwrap())
+            .unwrap();
         read_frame(&mut stream, 4096).unwrap().unwrap();
         let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_CALLS | FEATURE_MEDIA, client: "test".into() };
         stream.write_all(&encode(&handshake::encode_hello(&hello).unwrap()).unwrap()).unwrap();
@@ -195,7 +197,9 @@ impl Peer {
         let mut buffer = [0u8; 2048];
         while let Ok((len, source)) = self.socket.recv_from(&mut buffer) {
             let contents = buffer[..len].try_into().unwrap();
-            self.rtc.handle_input(Input::Receive(Instant::now(), Receive { proto: Protocol::Udp, source, destination: self.address, contents })).unwrap();
+            self.rtc
+                .handle_input(Input::Receive(Instant::now(), Receive { proto: Protocol::Udp, source, destination: self.address, contents }))
+                .unwrap();
         }
         self.rtc.handle_input(Input::Timeout(Instant::now())).unwrap();
     }

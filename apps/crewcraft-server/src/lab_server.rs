@@ -126,7 +126,15 @@ impl LabServer {
         }
         let config = server_config(identity, device_roots, admission.clone()).map_err(io::Error::other)?;
         let listener = listen(options.address, options.capacity)?;
-        Ok(Self { listener, timeouts: options.timeouts, protocol: options.protocol, config, admission, rooms: Arc::new(Mutex::new(rooms)), relay: None })
+        Ok(Self {
+            listener,
+            timeouts: options.timeouts,
+            protocol: options.protocol,
+            config,
+            admission,
+            rooms: Arc::new(Mutex::new(rooms)),
+            relay: None,
+        })
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {

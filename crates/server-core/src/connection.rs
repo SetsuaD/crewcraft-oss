@@ -415,7 +415,9 @@ fn calls(
                 (Some(device), Request::CallStart { room, .. } | Request::CallJoin { room, .. }) => {
                     media_follow(server, room, user, call, device, now_ms)
                 }
-                (_, Request::CallOffer { credential, offer, .. }) => Some(Follow::Relay { call, credential: credential.clone(), offer: offer.clone() }),
+                (_, Request::CallOffer { credential, offer, .. }) => {
+                    Some(Follow::Relay { call, credential: credential.clone(), offer: offer.clone() })
+                }
                 _ => None,
             };
             Ok((Response::Ok { cursor: call }, follow))
