@@ -2,7 +2,8 @@
 # CrewCraft is written in Rust (docs/SPEC.md section 7). Fails on
 #   1. a tracked source file in a language other than Rust, outside the launcher and transitional tooling list, and
 #   2. a native build helper in Cargo.lock that docs/NON-RUST-DEPENDENCIES.md does not list, and
-#   3. native code in the dependency tree of a crate that must stay pure Rust (the media server and its crates).
+#   3. native code in the dependency tree of a crate that must stay pure Rust (the media server and its crates, the
+#      call audio crate and its Opus codec).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -34,7 +35,9 @@ done
 
 # 3. Crates that must stay free of native code whatever the rest of the workspace needs: nothing in their normal or
 #    build dependencies, on any target, may compile C or assembly or bring a native crypto library.
-pure_crates='crewcraft-media-crypto crewcraft-media-auth crewcraft-media'
+#    opus-pure is listed itself as well as through crewcraft-audio: it was chosen as the pure-Rust Opus (docs/CALLS.md),
+#    so any crate that uses it later keeps it that way, and a new version that brought C would fail here.
+pure_crates='crewcraft-media-crypto crewcraft-media-auth crewcraft-media crewcraft-audio opus-pure'
 native='^(cc|cmake|bindgen|pkg-config|vcpkg|nasm-rs|ring|aws-lc-rs|aws-lc-sys|aws-lc-fips-sys|openssl|openssl-sys|rcgen) v'
 for crate in $pure_crates; do
   # A tree that cannot be listed, or that does not even name the crate, fails rather than passing as clean.

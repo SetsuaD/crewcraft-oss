@@ -1,0 +1,18 @@
+[package]
+name = "crewcraft-audio"
+description = "CrewCraft's call audio: an Opus voice encoder and decoder and a jitter buffer, pure Rust, no device I/O"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Pure Rust only (docs/CALLS.md, "Opus: the crate, chosen by the conformance vectors"); tools/rust-only.sh keeps this
+# crate's tree free of C. No audio device library here: capture and playback are a separate decision.
+[dependencies]
+# Pinned exactly: it was chosen by passing the RFC 8251 conformance vectors, and a new version is re-run through
+# them (docs/probes/opus-conformance.md) before it replaces this one.
+opus-pure = "=0.2.5"
+
+[lints]
+workspace = true
