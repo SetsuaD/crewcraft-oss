@@ -183,8 +183,7 @@ impl std::fmt::Display for Problem {
             Self::Lost(_) => "The connection to the server was lost.",
             Self::Protocol => "The server's reply could not be understood.",
             Self::ExternalNotOffered => "This server does not offer sign-in with your organization.",
-            Self::ExternalRefused => "The server did not accept that sign-in. Check that you signed in as the person this device \
-                                      is enrolled for, and that you have access to this chat.",
+            Self::ExternalRefused => "The server did not accept that sign-in: another person's account, or no access to this chat.",
             Self::Browser => "The browser could not be opened for the sign-in.",
             Self::NoRedirect => "CrewCraft could not wait for the sign-in to come back from the browser.",
             Self::BrowserTimedOut => "The sign-in in the browser was not finished in time. Try again.",

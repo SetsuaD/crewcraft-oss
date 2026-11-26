@@ -366,7 +366,9 @@ fn each_failure_is_its_own_problem() {
     alice.sign_in_external(ALICE);
     expect(&events, "no browser", |event| *event == Event::Failed(Problem::Browser));
     assert!(script.finishes.lock().unwrap().is_empty());
-    for problem in [Problem::ExternalNotOffered, Problem::Browser, Problem::NoRedirect, Problem::BrowserTimedOut, Problem::ProviderRefused, Problem::Cancelled] {
+    for problem in
+        [Problem::ExternalNotOffered, Problem::Browser, Problem::NoRedirect, Problem::BrowserTimedOut, Problem::ProviderRefused, Problem::Cancelled]
+    {
         assert!(!problem.to_string().is_empty());
     }
 }
