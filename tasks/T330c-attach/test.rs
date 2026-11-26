@@ -104,7 +104,7 @@ fn only_the_posters_unattached_uploads_in_that_room_attach_and_a_deletion_detach
     let cursor = ds.post_files(&room, "bob", "", &[notes, plan], T0 + 1).unwrap();
     assert_eq!(ds.attachments(&room, cursor), vec![attached(notes, "notes.txt", 10), attached(plan, "plan.txt", 8)]);
     // An empty text reads as the files' names, so a client that does not show attachments still says what it is.
-    assert_eq!(ds.found("alice", "notes")[0].snippet, "\u{1F4CE} notes.txt, plan.txt");
+    assert_eq!(ds.found("alice", "notes")[0].snippet, "Files: notes.txt, plan.txt");
 
     for (files, why) in [
         (vec![notes], "already attached"),

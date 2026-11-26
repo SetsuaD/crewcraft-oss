@@ -30,6 +30,13 @@ pub enum Command {
     Delete { room: String, target: u64 },
     /// Find messages in every room the person is in (task T320c). `query` is trimmed, 1 to 200 bytes.
     Search { query: String },
+    /// Upload the file at `path` to `room`, to attach to the next post there (task T330e).
+    Attach { room: String, path: std::path::PathBuf },
+    /// Post `text` (may be empty) with `files`, uploads made with `Attach` (task T330e).
+    PostFiles { room: String, text: String, files: Vec<[u8; 16]> },
+    /// Save file `file` (`size` bytes, named `name`) to `to`, or, with `None`, to a new file in the person's
+    /// Downloads folder (task T330e).
+    Save { file: [u8; 16], size: u64, name: String, to: Option<std::path::PathBuf> },
 }
 
 /// Why the composer did not submit. The draft is kept unchanged in every case.

@@ -5,7 +5,7 @@
 use crewcraft_proto::frame::{Decoder, FrameError};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{Push, decode_push};
-use crewcraft_proto::request::{HITS_TAG, ROOMS_TAG, Request, SearchHit, decode_hits, decode_rooms};
+use crewcraft_proto::request::{BYTES_TAG, HITS_TAG, ID_TAG, ROOMS_TAG, Request, SearchHit, decode_bytes, decode_hits, decode_id, decode_rooms};
 
 use crate::inbox::Inbox;
 use crate::notify::{Notify, Settings};
@@ -24,6 +24,10 @@ pub enum ClientEvent {
     Rooms { id: u32, rooms: Vec<String> },
     /// The hits that follow the `Ok` answering `Search` request `id` (task T320c).
     Hits { id: u32, hits: Vec<SearchHit> },
+    /// The upload or file id that follows the `Ok` answering an upload request `id` (task T330e).
+    Id { id: u32, value: [u8; 16] },
+    /// The bytes that follow the `Ok` answering `Download` request `id` (task T330e).
+    Bytes { id: u32, data: Vec<u8> },
 }
 
 /// A fatal error: the connection must be closed.
@@ -107,6 +111,12 @@ impl Client {
             } else if first == HITS_TAG {
                 let (id, hits) = decode_hits(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Hits { id, hits });
+            } else if first == ID_TAG {
+                let (id, value) = decode_id(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Id { id, value });
+            } else if first == BYTES_TAG {
+                let (id, data) = decode_bytes(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Bytes { id, data });
             } else {
                 return Err(ClientError::Malformed(CodecError::BadKind(first)));
             }

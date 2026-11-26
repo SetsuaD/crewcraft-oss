@@ -91,6 +91,12 @@ pub enum Event {
     Changed { room: String, cursor: u64 },
     /// What a search for `query` found, newest first (task T320c).
     SearchResults { query: String, hits: Vec<Found> },
+    /// A file uploaded to `room`, ready to attach to the next post there (task T330e).
+    Uploaded { room: String, file: [u8; 16], name: String, size: u64 },
+    /// The files each message of `room` carries, by cursor, whenever they change (task T330e).
+    Attachments { room: String, files: Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)> },
+    /// A file was saved at `path` (task T330e).
+    Saved { path: std::path::PathBuf },
     /// A post that was not acknowledged; `text` is returned so the window can restore the draft. After
     /// `Problem::Lost` the post may still have arrived: the room's next snapshot shows it if so.
     PostFailed { room: String, text: String, problem: Problem },
@@ -179,6 +185,10 @@ pub enum Problem {
     Cancelled,
     /// The server does not offer message search (task T320c).
     SearchNotOffered,
+    /// The server does not keep files (task T330e).
+    FilesNotOffered,
+    /// A file on this computer could not be read or written (task T330e).
+    LocalFile(io::ErrorKind),
 }
 
 /// A short sentence for the window, with no detail about which credential failed.
@@ -205,6 +215,8 @@ impl std::fmt::Display for Problem {
             Self::ProviderRefused => "The sign-in page did not sign you in. Try again.",
             Self::Cancelled => "Sign-in cancelled.",
             Self::SearchNotOffered => "This server does not offer message search.",
+            Self::FilesNotOffered => "This server does not keep files.",
+            Self::LocalFile(_) => "CrewCraft could not read or write that file on this computer.",
         })
     }
 }
@@ -226,6 +238,8 @@ impl Problem {
                 | Self::ProviderRefused
                 | Self::Cancelled
                 | Self::SearchNotOffered
+                | Self::FilesNotOffered
+                | Self::LocalFile(_)
         )
     }
 
@@ -376,6 +390,7 @@ impl Worker {
             shown: BTreeMap::new(),
             seen: BTreeMap::new(),
             unread: BTreeMap::new(),
+            files_sent: BTreeMap::new(),
             next_poll: Instant::now(),
             retry,
             keeper,
@@ -456,6 +471,8 @@ struct Run {
     seen: BTreeMap<String, u64>,
     /// The last unread count sent, per room.
     unread: BTreeMap<String, u32>,
+    /// The last attachments sent, per room (task T330e).
+    files_sent: BTreeMap<String, Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)>>,
     next_poll: Instant,
     retry: Option<Retry>,
     keeper: Box<dyn TicketKeeper>,
@@ -523,6 +540,9 @@ impl Run {
                 }
                 Some(Input::Command(Command::Delete { room, target })) => self.change(room, |session, room| session.delete(room, target)),
                 Some(Input::Command(Command::Search { query })) => self.search(query),
+                Some(Input::Command(Command::Attach { room, path })) => self.attach(room, path),
+                Some(Input::Command(Command::PostFiles { room, text, files })) => self.post_files(room, text, files),
+                Some(Input::Command(Command::Save { file, size, name, to })) => self.save(file, size, &name, to),
                 Some(Input::SignOut) => {
                     self.retry = None;
                     let was_signed_in = self.session.is_some();
@@ -764,6 +784,61 @@ impl Run {
         }
     }
 
+    /// Upload a file to attach (task T330e): `Uploaded`, or `Failed`.
+    fn attach(&mut self, room: String, path: std::path::PathBuf) {
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        match session.upload(&room, &path, &mut |_, _| {}) {
+            Ok(uploaded) => self.emit(Event::Uploaded { room, file: uploaded.file, name: uploaded.name, size: uploaded.size }),
+            Err(crate::signed_in::FileOpError::Local(kind)) => self.emit(Event::Failed(Problem::LocalFile(kind))),
+            Err(crate::signed_in::FileOpError::Lab(LabError::Chat(ChatError::Unsupported))) => self.emit(Event::Failed(Problem::FilesNotOffered)),
+            Err(crate::signed_in::FileOpError::Lab(error)) => {
+                self.request_failed(error);
+            }
+        }
+    }
+
+    /// A post with files (task T330e): as `post`.
+    fn post_files(&mut self, room: String, text: String, files: Vec<[u8; 16]>) {
+        if let Err(problem) = self.follow(&room) {
+            return self.emit(Event::PostFailed { room, text, problem });
+        }
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::PostFailed { room, text, problem: Problem::NotSignedIn });
+        };
+        match session.post_files(&room, &text, files) {
+            Ok(cursor) => {
+                self.emit(Event::Posted { room: room.clone(), cursor });
+                self.sync_room(&room, false);
+            }
+            Err(error) => {
+                let problem = problem(error);
+                self.emit(Event::PostFailed { room, text, problem });
+                if problem.ends_session() {
+                    self.fail_connection(problem, true);
+                }
+            }
+        }
+    }
+
+    /// Save a file (task T330e): `Saved`, or `Failed`. With no `to`, a new file in the Downloads folder.
+    fn save(&mut self, file: [u8; 16], size: u64, name: &str, to: Option<std::path::PathBuf>) {
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        let Some(path) = to.or_else(|| downloads_path(name)) else {
+            return self.emit(Event::Failed(Problem::LocalFile(io::ErrorKind::NotFound)));
+        };
+        match session.download_to(file, size, &path) {
+            Ok(()) => self.emit(Event::Saved { path }),
+            Err(crate::signed_in::FileOpError::Local(kind)) => self.emit(Event::Failed(Problem::LocalFile(kind))),
+            Err(crate::signed_in::FileOpError::Lab(error)) => {
+                self.request_failed(error);
+            }
+        }
+    }
+
     /// A message search (task T320c): `SearchResults`, or `Failed` (`SearchNotOffered` from a server without search).
     fn search(&mut self, query: String) {
         let Some(session) = self.session.as_mut() else {
@@ -845,6 +920,14 @@ impl Run {
             }
         };
         let is_open = self.open.as_deref() == Some(room);
+        // The files the room's messages carry, when they change (task T330e).
+        if let Some(session) = self.session.as_mut() {
+            let files: Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)> = session.attachments(room).into_iter().collect();
+            if !files.is_empty() && self.files_sent.get(room) != Some(&files) {
+                self.files_sent.insert(room.to_owned(), files.clone());
+                self.emit(Event::Attachments { room: room.to_owned(), files });
+            }
+        }
         if is_open {
             let newest = lines.iter().filter_map(|entry| if let Shown::Line(line) = entry { Some(line.cursor) } else { None }).max();
             let seen = self.seen.entry(room.to_owned()).or_insert(0);
@@ -869,4 +952,18 @@ impl Run {
             self.emit(Event::Unread { room: room.to_owned(), count });
         }
     }
+}
+
+/// A new file named `name` in the person's Downloads folder (task T330e): `name`, or `name (2)`, `name (3)`... when it
+/// is taken. `None` when the system names no home folder.
+pub fn downloads_path(name: &str) -> Option<std::path::PathBuf> {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|home| !home.is_empty())?;
+    let dir = std::path::PathBuf::from(home).join("Downloads");
+    let _ = std::fs::create_dir_all(&dir);
+    let safe: String = name.chars().map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c }).collect();
+    let (stem, extension) = match safe.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem.to_owned(), format!(".{extension}")),
+        _ => (safe.clone(), String::new()),
+    };
+    (1..1000).map(|n| if n == 1 { dir.join(&safe) } else { dir.join(format!("{stem} ({n}){extension}")) }).find(|path| !path.exists())
 }
