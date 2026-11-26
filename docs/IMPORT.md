@@ -9,7 +9,7 @@ The design splits an import in two. A **reader** turns one system's export into 
 **imports a bundle**. Only readers know any other system's format, so a new source needs a new reader and nothing
 else, and the server's rules (keys, re-runs, read-only rooms) are written and tested once.
 
-## The bundle (T350a)
+## The bundle (T350b)
 
 A bundle is a directory:
 
@@ -32,7 +32,11 @@ A bundle is a directory:
 The bundle is the contract between a reader and the server. It is plain, inspectable and editable by hand (workspace
 rule 22: a person can check or fix an import without a model), and a test fixture is just a small directory.
 
-## Importing a bundle (T350a)
+## Importing a bundle (engine T350a, command T350b, media T350e)
+
+The engine (T350a) lives in `server-core` and works on the bundle as typed values; the command (T350b) reads
+`bundle.json`, runs the engine and writes the report. Files are T350e: until then a bundle's files are counted in
+the report and not imported.
 
 `crewcraft-server import --data <dir> --bundle <dir> [--map-domain old.example=new.example]... [--dry-run]` runs on
 the server host as the administrator, with the server stopped or through the same journal lock it uses (one writer).
@@ -68,7 +72,7 @@ found, messages added, updated and unchanged, files stored and not archived, peo
 top-level, and every refusal with its bundle position. It exits non-zero when anything was refused (workspace rule
 29(ii)), and a dry run changes nothing.
 
-## Reading a Teams export (T350b)
+## Reading a Teams export (T350c)
 
 A reader, `crewcraft-import teams --export <dir> --out <bundle-dir>`, built only from Microsoft's public Graph API
 documentation of `chatMessage`, `chat` and `channel`. Its input is what the documented Graph calls return, saved as
@@ -86,7 +90,7 @@ addresses (a message names its sender by id and display name, not by email). It 
 
 The reader never talks to Microsoft: fetching an export is the administrator's job, with their own tenant's tools.
 
-## The app (T350c)
+## The app (T350d)
 
 An **Archive** section under the room list, for the archive rooms a person is in. An archive room shows its
 messages with their original authors and times, reads "Archive: read only" where the composer would be, and offers
