@@ -1,0 +1,23 @@
+{
+  "id": "T611b-external-binding",
+  "title": "Account store: binding to an external provider's subject, and durable authorization records",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/account_op.rs",
+    "crates/server-core/src/account_store.rs",
+    "crates/server-core/Cargo.toml",
+    "Cargo.toml",
+    "Cargo.lock"
+  ],
+  "test_path": "crates/server-core/tests/t611b_external_binding.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t611b_external_binding",
+  "depends_on": [
+    "T600-authorizer-rules"
+  ],
+  "spec": "Account records tag 11 ExternalBound (email, issuer, subject) and tag 12 AuthorizationRecorded (email and the whole crewcraft_authz::Record: optional grant with capability names, revision, confirmed_at and fresh_until; optional denied revision; highest revision; next check). bind_external requires a canonical email of an existing person and non-empty issuer and subject; a (issuer, subject) bound to another person is ExternalInUse; re-binding replaces the person's earlier binding and frees it; person_for_external and external_of read both ways; everything survives reopening. The store implements crewcraft_authz::Ledger: commit appends an AuthorizationRecorded record (only for an existing person) and applies it; read_back returns the applied record and refuses while the store is poisoned; so commit_decision grants nothing for an unknown person, and a stored denial still refuses after a restart. Both records round-trip, every prefix fails to decode, and an unknown capability name in a stored record is FieldLength. Debug shows the email and whether there is a grant or denial, not the capabilities or revisions.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md",
+    "crates/authz/src/lib.rs"
+  ]
+}

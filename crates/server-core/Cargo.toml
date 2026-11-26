@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 crewcraft-accounts.workspace = true
+# Authorization records from an external authorizer (T611b).
+crewcraft-authz.workspace = true
 crewcraft-proto.workspace = true
 crewcraft-totp.workspace = true
 chacha20poly1305.workspace = true
