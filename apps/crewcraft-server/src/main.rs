@@ -426,7 +426,12 @@ fn serve_lab(state: &Path, trusted_root: &Path, port: u16) -> io::Result<()> {
             signed_in_frame: Duration::from_secs(120),
             bootstrap: Duration::from_secs(120),
         },
-        protocol: ServerSide { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES, name: "CrewCraft Lab".into() },
+        protocol: ServerSide {
+            min_version: 1,
+            max_version: 1,
+            features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES,
+            name: "CrewCraft Lab".into(),
+        },
     };
     let runtime = LabRuntime::bind(installation, options, now_ms)?;
     println!("CrewCraft lab listening on {}", runtime.local_addr()?);

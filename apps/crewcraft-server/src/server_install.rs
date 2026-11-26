@@ -98,7 +98,12 @@ impl ServerConfig {
                 signed_in_frame: Duration::from_secs(120),
                 bootstrap: Duration::from_secs(120),
             },
-            protocol: ServerSide { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES, name: "CrewCraft".into() },
+            protocol: ServerSide {
+                min_version: 1,
+                max_version: 1,
+                features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES,
+                name: "CrewCraft".into(),
+            },
         }
     }
 }

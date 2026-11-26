@@ -106,11 +106,22 @@ pub enum Request {
         query: String,
     },
     /// Start uploading a file of `size` bytes whose SHA-256 is `sha256` to `room` (task T330b).
-    UploadBegin { room: String, name: String, size: u64, sha256: [u8; 32] },
+    UploadBegin {
+        room: String,
+        name: String,
+        size: u64,
+        sha256: [u8; 32],
+    },
     /// Part of an upload, at `offset`.
-    UploadChunk { upload: [u8; 16], offset: u64, bytes: Vec<u8> },
+    UploadChunk {
+        upload: [u8; 16],
+        offset: u64,
+        bytes: Vec<u8>,
+    },
     /// Finish an upload: the file is recorded once its bytes check out.
-    UploadFinish { upload: [u8; 16] },
+    UploadFinish {
+        upload: [u8; 16],
+    },
 }
 
 /// One message a search found (task T320b).

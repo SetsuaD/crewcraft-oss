@@ -106,7 +106,10 @@ fn an_upload_in_any_order_becomes_a_recorded_file_that_survives_a_restart() {
     assert_eq!(ds.upload_chunk("bob", &upload, 0, &png[..60_000], T0 + 2).unwrap(), png.len() as u64);
     let file = ds.finish_upload("bob", &upload, T0 + 3).unwrap();
     let stored = ds.file(&file).unwrap().clone();
-    assert_eq!((stored.room.as_str(), stored.uploader.as_str(), stored.size, stored.name.as_str()), (room.as_str(), "bob", png.len() as u64, "picture.png"));
+    assert_eq!(
+        (stored.room.as_str(), stored.uploader.as_str(), stored.size, stored.name.as_str()),
+        (room.as_str(), "bob", png.len() as u64, "picture.png")
+    );
     assert_eq!(stored.image, Some((64, 32)), "the image size comes from the bytes");
     assert_eq!(ds.uploads_in_progress(), 0);
     assert_eq!(ds.upload_chunk("bob", &upload, 0, &png[..1], T0 + 4), Err(UploadError::NoSuchUpload), "a finished upload is gone");
@@ -178,7 +181,13 @@ fn the_connection_answers_with_ids_and_codes() {
     let mut bob = Connection::new("bob");
     let bytes = b"hello, file".to_vec();
 
-    let out = bob.receive_durable(&mut ds, &framed(1, &Request::UploadBegin { room: room.clone(), name: "hello.txt".into(), size: bytes.len() as u64, sha256: sha(&bytes) }), T0).unwrap();
+    let out = bob
+        .receive_durable(
+            &mut ds,
+            &framed(1, &Request::UploadBegin { room: room.clone(), name: "hello.txt".into(), size: bytes.len() as u64, sha256: sha(&bytes) }),
+            T0,
+        )
+        .unwrap();
     let answer = ok(1, 0);
     assert_eq!(&out[..answer.len()], answer.as_slice());
     let id_frame = &out[answer.len()..];
@@ -187,7 +196,10 @@ fn the_connection_answers_with_ids_and_codes() {
     assert_eq!(answered, 1);
     assert_eq!(id_frame, encode(&encode_id(1, &upload)).unwrap().as_slice());
 
-    assert_eq!(bob.receive_durable(&mut ds, &framed(2, &Request::UploadChunk { upload, offset: 0, bytes: bytes.clone() }), T0).unwrap(), ok(2, bytes.len() as u64));
+    assert_eq!(
+        bob.receive_durable(&mut ds, &framed(2, &Request::UploadChunk { upload, offset: 0, bytes: bytes.clone() }), T0).unwrap(),
+        ok(2, bytes.len() as u64)
+    );
     let out = bob.receive_durable(&mut ds, &framed(3, &Request::UploadFinish { upload }), T0).unwrap();
     let answer = ok(3, 0);
     assert_eq!(&out[..answer.len()], answer.as_slice());
