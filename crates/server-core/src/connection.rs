@@ -112,7 +112,7 @@ impl Connection {
         server: &mut S,
         bytes: &[u8],
         now_ms: u64,
-        mut dispatch: impl FnMut(&mut S, &str, &Request, u64) -> Result<(Response, Option<[u8; 16]>), E>,
+        mut dispatch: impl FnMut(&mut S, &str, &Request, u64) -> Result<Answered, E>,
         read: impl Fn(&S) -> &Server,
         found: impl Fn(&S, &str, &str) -> Vec<SearchHit>,
     ) -> Result<Vec<u8>, E> {
@@ -164,7 +164,7 @@ impl Connection {
 
 /// Answer an upload request over a durable server (task T330b): `None` for any other request. A refusal is an `Error`
 /// with `dispatch::upload_error_code`; a storage failure (the journal, or a poisoned server) is fatal.
-fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64) -> Option<Result<(Response, Option<[u8; 16]>), DurableConnError>> {
+fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64) -> Option<Result<Answered, DurableConnError>> {
     use crate::durable::UploadError;
     let answer = match request {
         Request::UploadBegin { room, name, size, sha256 } => server.begin_upload(user, room, name, *size, *sha256, now_ms).map(|id| (0, Some(id))),
@@ -178,3 +178,6 @@ fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64
         Err(error) => Ok((Response::Error { code: crate::dispatch::upload_error_code(error), detail: String::new() }, None)),
     })
 }
+
+/// A request's answer, and the id frame that follows it when there is one (an upload's id or a file's, task T330b).
+type Answered = (Response, Option<[u8; 16]>);

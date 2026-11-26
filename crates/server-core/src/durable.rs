@@ -224,7 +224,7 @@ impl DurableServer {
         if self.store.is_none() {
             return Err(UploadError::NoStorage);
         }
-        if !self.uploads.get(upload).is_some_and(|entry| entry.user == user) {
+        if self.uploads.get(upload).is_none_or(|entry| entry.user != user) {
             return Err(UploadError::NoSuchUpload);
         }
         let Some(entry) = self.uploads.remove(upload) else { return Err(UploadError::NoSuchUpload) };
