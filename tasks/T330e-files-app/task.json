@@ -10,14 +10,17 @@
     "apps/crewcraft/src/app.rs",
     "crates/ui-model/src/lib.rs",
     "crates/desktop-ui/src/lib.rs",
-    "crates/desktop-ui/tests/t330e_files_window.rs"
+    "crates/desktop-ui/tests/t330e_files_window.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/tests/t330c_attach.rs",
+    "tasks/T330c-attach/test.rs"
   ],
   "test_path": "apps/crewcraft-server/tests/t330e_files.rs",
   "test_cmd": "cargo test -p crewcraft-server --test t330e_files",
   "depends_on": [
     "T330c-attach"
   ],
-  "spec": "The client offers FEATURE_FILES and decodes the id and bytes frames. ChatSession has upload_begin/upload_chunk/upload_finish, post_files and download (Unsupported without the feature; the bytes must match the announced count). SignedInSession::upload hashes a local file, sends it in MAX_CHUNK chunks and returns the file; download_to writes a new file (never overwriting) and removes it on failure; attachments(room) gives each message's files. Commands Attach { room, path }, PostFiles { room, text, files } and Save { file, size, name, to } make the worker report Uploaded, Posted (then a sync) and Saved (to the Downloads folder when to is None), and Attachments for a room whenever its messages' files change; failures name the local file or the server. The window turns a dropped file into Attach for the open room, shows uploaded files on the composer with Remove, sends them with Send even without text (PostFiles), and shows a message's files under it with Save. End to end against a running server: Alice attaches an 800 KB file and posts it; Bob sees it under her message and saves it byte for byte; saving again to the same path is refused.",
+  "spec": "The client offers FEATURE_FILES and decodes the id and bytes frames. ChatSession has upload_begin/upload_chunk/upload_finish, post_files and download (Unsupported without the feature; the bytes must match the announced count). SignedInSession::upload hashes a local file, sends it in MAX_CHUNK chunks and returns the file; download_to writes a new file (never overwriting) and removes it on failure; attachments(room) gives each message's files. Commands Attach { room, path }, PostFiles { room, text, files } and Save { file, size, name, to } make the worker report Uploaded, Posted (then a sync) and Saved (to the Downloads folder when to is None), and Attachments for a room whenever its messages' files change; failures name the local file or the server. The window turns a dropped file into Attach for the open room, shows uploaded files on the composer with Remove, sends them with Send even without text (PostFiles), and shows a message's files under it with Save. End to end against a running server: Alice attaches an 800 KB file and posts it; Bob sees it under her message and saves it byte for byte; saving again to the same path is refused. A post with files and no text reads 'Files: <names>' (words: the bundled font has no emoji glyph, so the T330c body changes from a paperclip emoji).",
   "status": "done",
   "context": [
     "docs/FILES.md"
