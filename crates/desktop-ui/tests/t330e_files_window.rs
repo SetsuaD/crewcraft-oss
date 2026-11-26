@@ -3,6 +3,9 @@
 //! files show under it with Save.
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use crewcraft_desktop_ui::{Action, FileChip, Update, Window, fonts, short_size};
 use crewcraft_ui_model::Command;
 use egui_kittest::Harness;
@@ -25,12 +28,31 @@ fn chip(n: u8, name: &str, size: u64) -> FileChip {
     FileChip { file: [n; 16], name: name.into(), size }
 }
 
+/// A file the test drops onto the window.
+#[derive(Debug)]
+struct Dropped(PathBuf);
+
+impl egui::DroppedFile for Dropped {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        Ok(Vec::new())
+    }
+}
+
 #[test]
 fn a_dropped_file_asks_to_be_uploaded_to_the_open_room() {
     let mut h = chat();
-    h.input_mut().dropped_files.push(egui::DroppedFile { path: Some("/tmp/report.pdf".into()), ..Default::default() });
+    let path = std::env::temp_dir().join("report.pdf");
+    h.input_mut().dropped_files.push(Arc::new(Dropped(path.clone())));
     h.run();
-    assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::Attach { room: ROOM.into(), path: "/tmp/report.pdf".into() })]);
+    assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::Attach { room: ROOM.into(), path })]);
+    // A dropped file with no real path (as on the web) is not uploaded.
+    h.input_mut().dropped_files.push(Arc::new(Dropped(PathBuf::from("report.pdf"))));
+    h.run();
+    assert!(h.state_mut().take_actions().is_empty());
 }
 
 #[test]

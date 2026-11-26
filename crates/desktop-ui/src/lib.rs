@@ -639,7 +639,9 @@ impl Window {
     fn take_dropped_files(&mut self, ui: &Ui, room: &str) {
         let dropped = ui.ctx().input(|input| input.raw.dropped_files.clone());
         for file in dropped {
-            if let Some(path) = file.path {
+            let path = file.path().to_path_buf();
+            // A file dropped on the web has only its name; the desktop app uploads from a real path.
+            if path.is_absolute() {
                 self.actions.push(Action::Room(Command::Attach { room: room.to_owned(), path }));
             }
         }
