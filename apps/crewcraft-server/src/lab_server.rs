@@ -233,6 +233,33 @@ impl<A: DeviceAuth> DeviceAuth for BeforeSignIn<A> {
         self.inner.end(token, now_ms)
     }
 
+    // The external sign-in (task T611e) must be forwarded like the others: the trait's defaults refuse, so without
+    // these a server with an identity provider would never offer it (found by the T611i end-to-end test).
+    fn begin_external(&self, now_ms: u64) -> Result<Option<crate::external_signin::Start>, AuthError> {
+        if Instant::now() >= self.deadline {
+            return Err(AuthError::Unavailable);
+        }
+        self.inner.begin_external(now_ms)
+    }
+
+    fn finish_external(
+        &self,
+        code: &str,
+        verifier: &str,
+        redirect_uri: &str,
+        now_ms: u64,
+    ) -> Result<Option<CommittedSignIn<Self::Session>>, AuthError> {
+        if Instant::now() >= self.deadline {
+            return Err(AuthError::Unavailable);
+        }
+        let result = self.inner.finish_external(code, verifier, redirect_uri, now_ms)?;
+        if Instant::now() >= self.deadline {
+            return Err(AuthError::Unavailable);
+        }
+        self.signed_in.set(result.is_some());
+        Ok(result)
+    }
+
     fn with_live_session<T>(&self, session: &Self::Session, now_ms: u64, action: impl FnOnce() -> T) -> Result<Option<T>, AuthError> {
         self.inner.with_live_session(session, now_ms, action)
     }
