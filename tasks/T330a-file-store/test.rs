@@ -191,7 +191,7 @@ fn file_records_are_checked_kept_and_replayed() {
     // The record's encoding round-trips, and refuses truncation and a bad image flag.
     let op = Op::FileStored { slug: room, uploader: "bob".into(), file: [1; 16], sha256: hash, size: 6, name: "r.pdf".into(), image: Some((1, 2)) };
     let bytes = encode_op(&op).unwrap();
-    assert_eq!((bytes[0], decode_op(&bytes).unwrap()), (8, op));
+    assert_eq!((bytes[0], decode_op(&bytes).unwrap()), (16, op));
     for cut in 1..bytes.len() {
         assert!(decode_op(&bytes[..cut]).is_err(), "cut at {cut}");
     }

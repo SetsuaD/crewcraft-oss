@@ -28,7 +28,7 @@ pub enum Op {
     Delete { slug: String, actor: String, target: u64 },
     MarkRead { slug: String, user: String, cursor: u64 },
     /// A finished upload's record (docs/FILES.md, task T330a): who uploaded which bytes to which room, under which name.
-    /// Tag 8: `str slug | str uploader | 16 file id | 32 SHA-256 | u64 size | str name | u8 has image size |
+    /// Tag 16 (8 to 15 stay unassigned): `str slug | str uploader | 16 file id | 32 SHA-256 | u64 size | str name | u8 has image size |
     /// [u32 width | u32 height]`.
     FileStored { slug: String, uploader: String, file: [u8; 16], sha256: [u8; 32], size: u64, name: String, image: Option<(u32, u32)> },
 }
@@ -90,7 +90,7 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             out.extend_from_slice(&cursor.to_be_bytes());
         }
         Op::FileStored { slug, uploader, file, sha256, size, name, image } => {
-            out.push(8);
+            out.push(FILE_STORED);
             encode_str(&mut out, slug)?;
             encode_str(&mut out, uploader)?;
             out.extend_from_slice(file);
@@ -201,7 +201,7 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::MarkRead { slug, user, cursor })
         }
-        8 => {
+        FILE_STORED => {
             let slug = decode_str(bytes, &mut pos)?;
             let uploader = decode_str(bytes, &mut pos)?;
             let file = decode_array::<16>(bytes, &mut pos)?;
@@ -226,6 +226,9 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
         _ => Err(CodecError::BadKind(tag)),
     }
 }
+
+/// The tag of `Op::FileStored` (task T330a).
+const FILE_STORED: u8 = 16;
 
 fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;
