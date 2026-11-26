@@ -71,14 +71,23 @@ SFU can read the RTP headers and feedback it needs but not the media.
 A group key agreement (MLS) can replace the sender keys later without touching SFrame: RFC 9605 keeps key management
 apart from media encryption.
 
+## The media server's crypto (decided 2026-11-26)
+
+str0m's crypto is pluggable, but none of its ready-made backends is free of C today: even its `rust-crypto` backend
+compiles AWS-LC, because the DTLS library it uses (`dimpl`) makes its certificates through `rcgen` with AWS-LC. So
+CrewCraft writes **its own str0m crypto provider in pure Rust**: str0m without a default backend, `dimpl` in its
+RustCrypto mode for DTLS, RustCrypto for SRTP (AES-GCM, AES-CTR with HMAC-SHA1) and the hashes, and the DTLS
+certificate made with RustCrypto (P-256 and `x509-cert`) instead of `rcgen`. A probe build of that combination has no
+AWS-LC, `cc`, `cmake` or `ring` in its tree. The provider is a crate of its own (`crates/media-crypto`), tested against
+str0m's interface in memory (two peers completing DTLS and exchanging SRTP) before the media server uses it.
+
 ## Audio (T360e) and video (T360f): decisions first
 
 These need native code or young crates; each is decided when its task starts and recorded in NON-RUST-DEPENDENCIES.md.
 
-- **Opus audio.** Pure-Rust Opus encoders and decoders now exist (`opus-rs`, a port of libopus 1.6; `ruopus` and
-  `opus1`, implementations of RFC 6716), all young community crates. The proposal: pick the one that passes the
-  official Opus conformance vectors and holds real-time encode on the smallest target (a phone), proved in T360e's
-  test; the fallback is libopus through `cc` with a row in the table.
+- **Opus audio (decided 2026-11-26).** A pure-Rust Opus crate (`opus-rs`, a port of libopus 1.6; `ruopus` and `opus1`,
+  implementations of RFC 6716): the one that passes the official Opus conformance vectors and encodes in real time on
+  the smallest target (a phone), proved in T360e's test. libopus through `cc` is only the fallback.
 - **Audio input and output.** `cpal` is the usual Rust audio library; on Linux it needs the ALSA development files at
   build time (`alsa-sys` through `pkg-config`), even with PipeWire or PulseAudio. Windows (WASAPI), macOS and iOS
   (CoreAudio) and Android (AAudio) are reached through system bindings. The Linux row is the decision.
