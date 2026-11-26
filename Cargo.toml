@@ -61,3 +61,12 @@ panic = "warn"
 todo = "warn"
 unimplemented = "warn"
 unreachable = "warn"
+
+# Debug and test builds keep line tables (backtraces still name files and lines) but no full debug info, and
+# dependencies carry none. Full debug info made a workspace test build over 20 GB, more than a bounded CI workspace
+# holds (the linker died with SIGBUS when the disk filled).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
