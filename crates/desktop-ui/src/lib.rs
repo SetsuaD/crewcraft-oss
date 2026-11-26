@@ -144,6 +144,11 @@ pub enum Update {
     Files {
         files: Vec<crewcraft_proto::request::ListedFile>,
     },
+    /// The bytes the person's files take, and their quota (task T332b).
+    Storage {
+        used: u64,
+        quota: u64,
+    },
     /// `room`'s open call (or none) and its call history lines by cursor (task T360a2).
     Calls {
         room: String,
@@ -201,6 +206,7 @@ impl fmt::Debug for Update {
             Self::Attachments { room, files } => f.debug_struct("Attachments").field("room", room).field("messages", &files.len()).finish(),
             Self::Threads { room, parents } => f.debug_struct("Threads").field("room", room).field("replies", &parents.len()).finish(),
             Self::Files { files } => f.debug_struct("Files").field("files", &files.len()).finish(),
+            Self::Storage { used, quota } => f.debug_struct("Storage").field("used", used).field("quota", quota).finish(),
             Self::Calls { room, open, lines } => {
                 f.debug_struct("Calls").field("room", room).field("open", &open.as_ref().map(|c| c.call)).field("lines", &lines.len()).finish()
             }
@@ -239,7 +245,8 @@ pub fn short_size(bytes: u64) -> String {
     match bytes {
         0..1024 => format!("{bytes} B"),
         1024..1_048_576 => format!("{:.1} KB", bytes as f64 / 1024.0),
-        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
+        1_048_576..1_073_741_824 => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
+        _ => format!("{:.1} GB", bytes as f64 / 1_073_741_824.0),
     }
 }
 
@@ -321,6 +328,8 @@ pub struct Window {
     reactions: HashMap<String, std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>>,
     /// The Files area (T331b): `Some` while it is open, with the list once it arrived.
     files_view: Option<Option<Vec<crewcraft_proto::request::ListedFile>>>,
+    /// The bytes the person's files take, and their quota (T332b).
+    storage: Option<(u64, u64)>,
     /// Each room's open call (T360a2).
     open_calls: HashMap<String, crewcraft_client_core::room_view::OpenCall>,
     /// Each room's call history lines by cursor (T360a2).
@@ -489,6 +498,7 @@ impl Window {
             Update::Threads { room, parents } => {
                 self.threads.insert(room, parents.into_iter().collect());
             }
+            Update::Storage { used, quota } => self.storage = Some((used, quota)),
             Update::Files { files } => {
                 if self.files_view.is_some() {
                     self.files_view = Some(Some(files));
@@ -555,6 +565,7 @@ impl Window {
                 self.sent_times.clear();
                 self.open_calls.clear();
                 self.files_view = None;
+                self.storage = None;
                 self.call_lines.clear();
                 self.in_call = None;
                 self.open_thread = None;
@@ -1079,6 +1090,10 @@ impl Window {
                 ui.heading("Files");
                 if ui.button("Refresh files").clicked() {
                     refresh = true;
+                }
+                // Storage use against the quota (T332b).
+                if let Some((used, quota)) = self.storage {
+                    ui.weak(format!("Storage: {} of {}", short_size(used), short_size(quota)));
                 }
             });
         });

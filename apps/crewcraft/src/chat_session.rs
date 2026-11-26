@@ -363,6 +363,13 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         self.request(Request::Reply { room: room.to_owned(), parent, text: text.to_owned() }, now_ms, 0, deadline)
     }
 
+    /// The bytes the signed-in person's files take and their quota (task T332b). `Unsupported` without files.
+    pub fn storage_use(&mut self, now_ms: u64, deadline: Instant) -> Result<(u64, u64), ChatError> {
+        self.files_only()?;
+        let frame = self.exchange_with_id(Request::StorageUse, now_ms, deadline)?;
+        Ok(crewcraft_proto::request::storage_of(&frame))
+    }
+
     fn files_only(&self) -> Result<(), ChatError> {
         if self.files() { Ok(()) } else { Err(ChatError::Unsupported) }
     }

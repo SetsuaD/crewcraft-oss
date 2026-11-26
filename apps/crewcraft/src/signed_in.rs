@@ -425,6 +425,14 @@ impl SignedInSession {
 
     /// The messages the person can read that match `query`, newest first (task T320c). `None` when the server did not
     /// agree to `FEATURE_SEARCH` (nothing is sent then). `query` must be 1 to `request::MAX_QUERY` bytes.
+    /// The bytes the person's files take and their quota (task T332b); `None` when the server keeps no files.
+    pub fn storage_use(&mut self) -> Result<Option<(u64, u64)>, LabError> {
+        if !self.chat.files() {
+            return Ok(None);
+        }
+        self.chat.storage_use(0, Instant::now() + OPERATION_TIMEOUT).map(Some).map_err(LabError::Chat)
+    }
+
     /// The files in the person's rooms (task T331b); `None` when the server does not list files.
     pub fn list_files(&mut self) -> Result<Option<Vec<crewcraft_proto::request::ListedFile>>, LabError> {
         if !self.chat.lists_files() {
