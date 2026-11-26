@@ -6,7 +6,8 @@ use crewcraft_proto::frame::{Decoder, FrameError};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{Push, decode_push};
 use crewcraft_proto::request::{
-    BYTES_TAG, FILES_TAG, HITS_TAG, ID_TAG, ListedFile, ROOMS_TAG, Request, SearchHit, decode_bytes, decode_files, decode_hits, decode_id, decode_rooms,
+    BYTES_TAG, FILES_TAG, HITS_TAG, ID_TAG, ListedFile, ROOMS_TAG, Request, SearchHit, decode_bytes, decode_files, decode_hits, decode_id,
+    decode_rooms,
 };
 
 use crate::inbox::Inbox;

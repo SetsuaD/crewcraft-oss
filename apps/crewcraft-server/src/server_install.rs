@@ -103,7 +103,14 @@ impl ServerConfig {
             protocol: ServerSide {
                 min_version: 1,
                 max_version: 1,
-                features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS | FEATURE_FILE_LIST,
+                features: FEATURE_LIST_ROOMS
+                    | FEATURE_SEARCH
+                    | FEATURE_FILES
+                    | FEATURE_THREADS
+                    | FEATURE_REACTIONS
+                    | FEATURE_ARCHIVE
+                    | FEATURE_CALLS
+                    | FEATURE_FILE_LIST,
                 name: "CrewCraft".into(),
             },
         }
