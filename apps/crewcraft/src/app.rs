@@ -527,7 +527,10 @@ pub fn worker_update(event: Event) -> Vec<Update> {
             files: files
                 .into_iter()
                 .map(|(cursor, files)| {
-                    (cursor, files.into_iter().map(|file| crewcraft_desktop_ui::FileChip { file: file.file, name: file.name, size: file.size }).collect())
+                    (
+                        cursor,
+                        files.into_iter().map(|file| crewcraft_desktop_ui::FileChip { file: file.file, name: file.name, size: file.size }).collect(),
+                    )
                 })
                 .collect(),
         }],

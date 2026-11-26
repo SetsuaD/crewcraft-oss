@@ -233,7 +233,15 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
     }
 
     /// Start an upload (task T330e) and return its id: `UploadBegin`, then the id frame.
-    pub fn upload_begin(&mut self, room: &str, name: &str, size: u64, sha256: [u8; 32], now_ms: u64, deadline: Instant) -> Result<[u8; 16], ChatError> {
+    pub fn upload_begin(
+        &mut self,
+        room: &str,
+        name: &str,
+        size: u64,
+        sha256: [u8; 32],
+        now_ms: u64,
+        deadline: Instant,
+    ) -> Result<[u8; 16], ChatError> {
         self.files_only()?;
         let request = Request::UploadBegin { room: room.to_owned(), name: name.to_owned(), size, sha256 };
         self.exchange_with_id(request, now_ms, deadline)

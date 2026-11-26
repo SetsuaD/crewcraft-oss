@@ -16,9 +16,9 @@ use crewcraft_client_core::notify::Settings;
 use crewcraft_client_core::room_view::Shown;
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
+use crewcraft_proto::push::AttachedFile;
 use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_SEARCH, MAX_CHUNK, SearchHit};
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
-use crewcraft_proto::push::AttachedFile;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -261,7 +261,10 @@ impl SignedInSession {
             let mut offset = 0u64;
             while offset < size {
                 let length = u32::try_from((size - offset).min(MAX_CHUNK as u64)).unwrap_or(MAX_CHUNK as u32);
-                let data = self.chat.download(file, offset, length, 0, Instant::now() + OPERATION_TIMEOUT).map_err(|e| FileOpError::Lab(LabError::Chat(e)))?;
+                let data = self
+                    .chat
+                    .download(file, offset, length, 0, Instant::now() + OPERATION_TIMEOUT)
+                    .map_err(|e| FileOpError::Lab(LabError::Chat(e)))?;
                 if data.is_empty() {
                     return Err(FileOpError::Lab(LabError::Chat(ChatError::UnexpectedResponse)));
                 }

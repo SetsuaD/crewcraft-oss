@@ -182,7 +182,12 @@ fn start(state: LabInstallation, clock: &Arc<AtomicU64>, secrets: Vec<[u8; 20]>,
         address: "127.0.0.1:0".parse().unwrap(),
         capacity: NonZeroUsize::new(8).unwrap(),
         timeouts: Timeouts { handshake: WAIT, sign_in: WAIT, signed_in_frame: WAIT, bootstrap: WAIT },
-        protocol: ServerSide { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES, name: "search test server".into() },
+        protocol: ServerSide {
+            min_version: 1,
+            max_version: 1,
+            features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES,
+            name: "search test server".into(),
+        },
     };
     let server_clock = clock.clone();
     let name = ServerName::parse(SERVER_NAME).unwrap();
@@ -291,9 +296,11 @@ fn a_file_goes_from_one_person_to_another() {
 
     // Bob sees the file under Alice's message, and saves it.
     assert!(bob.act(Action::Room(Command::Sync { room: room.clone() })).is_empty());
-    let updates = poll_until(&mut bob, "the attachment", |update| {
-        matches!(update, Update::Attachments { files, .. } if files.iter().any(|(_, chips)| chips.iter().any(|c| c.file == chip.file)))
-    });
+    let updates = poll_until(
+        &mut bob,
+        "the attachment",
+        |update| matches!(update, Update::Attachments { files, .. } if files.iter().any(|(_, chips)| chips.iter().any(|c| c.file == chip.file))),
+    );
     let shown: Vec<FileChip> = updates
         .iter()
         .rev()
