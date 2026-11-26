@@ -39,6 +39,7 @@
 //!    `Services::activate` commits the activation with the binding (`ActivationRecord::external`) and only then is the
 //!    leaf sent. A refused check closes with `ERR_EXTERNAL_REFUSED` and nothing durable; the nonce was used, so the person
 //!    starts again on a new connection.
+//!
 //! Both provider calls may reach the network: the connection stops at them (`take_external_job`) so that
 //! `receive_shared` makes them with no lock held, exactly as it does the password hash.
 
@@ -54,10 +55,10 @@ use std::sync::{Arc, Mutex};
 
 use zeroize::{Zeroize, Zeroizing};
 
+use crewcraft_accounts::identity::normalize_email;
 use crewcraft_accounts::password;
 use crewcraft_pki::{Authority, Claims, csr_key_id};
 use crewcraft_proto::bootstrap::{BootstrapRequest, BootstrapResponse, decode_bootstrap_request, encode_bootstrap_response};
-use crewcraft_accounts::identity::normalize_email;
 use crewcraft_proto::frame::{Decoder, encode};
 use crewcraft_server_core::devices::MAX_NAME_CHARS;
 use rand_core::{OsRng, RngCore};
