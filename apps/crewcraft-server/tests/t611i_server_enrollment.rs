@@ -12,7 +12,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use crewcraft_authz::{Answer, Capabilities};
 use crewcraft_bootstrap::ExternalEnrollment;
 use crewcraft_oidc::{Identity, Key, parse_jwks};
-use crewcraft_server::external_signin::{Authorizer, ExternalSignIn, PENDING_MS, Provider, Refusal};
+use crewcraft_server::external_signin::{Authorizer, ExternalSignIn, PENDING_MS, Provider, Redirect, Refusal};
 use crewcraft_server_core::account_store::AccountStore;
 use crewcraft_server_core::seal::ServiceKey;
 use ring::rand::SystemRandom;
@@ -116,7 +116,15 @@ fn an_enrollment_is_verified_once_and_apart_from_device_sign_ins() {
     let mut device_bytes = [0; 32];
     device_bytes[0] = 77;
     assert_eq!(
-        ext.finish(&mut store, "new@example.org", 1, "good-code", VERIFIER, REDIRECT, device_bytes, T0 + 1000).unwrap_err(),
+        ext.finish(
+            &mut store,
+            "new@example.org",
+            1,
+            Redirect { code: "good-code", verifier: VERIFIER, redirect_uri: REDIRECT },
+            device_bytes,
+            T0 + 1000
+        )
+        .unwrap_err(),
         Refusal::NoPendingSignIn
     );
     assert!(verify(&ext, INVITATION, REDIRECT, T0 + 1000).is_ok(), "the enrollment's nonce was still there");

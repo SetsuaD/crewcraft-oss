@@ -743,7 +743,8 @@ impl BootstrapConnection {
             _ => return Step::Close,
         };
         let binding = ExternalBinding { issuer: identity.issuer, subject: identity.subject };
-        match self.commit(e, id, &email, next_device_id, &csr, &confirmed, None, Some(binding), now) {
+        let activation = Activation { email: &email, csr: &csr, confirmed: &confirmed, password_phc: None, external: Some(binding) };
+        match self.commit(e, id, next_device_id, activation, now) {
             Committed::Done(step) => step,
             Committed::NotWritten => error_close(id, ERR_UNAVAILABLE),
         }
@@ -798,7 +799,9 @@ impl BootstrapConnection {
             Err(StageError::RateLimited) => return error_close(id, ERR_RATE_LIMITED),
             _ => return Step::Close,
         };
-        match self.commit(e, id, &email, next_device_id, &staged.csr, &confirmed, Some(staged.password_phc.clone()), None, now) {
+        let activation =
+            Activation { email: &email, csr: &staged.csr, confirmed: &confirmed, password_phc: Some(staged.password_phc.clone()), external: None };
+        match self.commit(e, id, next_device_id, activation, now) {
             Committed::Done(step) => step,
             Committed::NotWritten => {
                 // The journal left the file exactly as before. The staged setup is untouched, so the client may send
@@ -811,19 +814,8 @@ impl BootstrapConnection {
 
     /// Build the leaf with the device id the store will allocate and commit once. If the id moved in between (nothing
     /// was written), build again with the new id; a second move is a refusal.
-    #[allow(clippy::too_many_arguments)]
-    fn commit<S: Services>(
-        &mut self,
-        e: &mut Enroller<S>,
-        id: u32,
-        email: &str,
-        mut next_device_id: u64,
-        csr: &[u8],
-        confirmed: &Confirmed,
-        password_phc: Option<String>,
-        external: Option<ExternalBinding>,
-        now: u64,
-    ) -> Committed {
+    fn commit<S: Services>(&mut self, e: &mut Enroller<S>, id: u32, mut next_device_id: u64, activation: Activation<'_>, now: u64) -> Committed {
+        let Activation { email, csr, confirmed, password_phc, external } = activation;
         for round in 0..2 {
             let device_id = next_device_id;
             let claims = Claims { person: email, device_id };
@@ -875,6 +867,16 @@ impl BootstrapConnection {
         }
         Committed::Done(error_close(id, ERR_UNAVAILABLE))
     }
+}
+
+/// What `commit` activates: the invitation's address, the device's certificate request and confirmed setup, and how the
+/// person signs in (a password hash, or a binding to the organization's identity provider).
+struct Activation<'a> {
+    email: &'a str,
+    csr: &'a [u8],
+    confirmed: &'a Confirmed,
+    password_phc: Option<String>,
+    external: Option<ExternalBinding>,
 }
 
 /// How `commit` ended: a reply (or close), or nothing written so the caller decides whether a retry is possible.

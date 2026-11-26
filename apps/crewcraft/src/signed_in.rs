@@ -25,7 +25,7 @@ use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, Sig
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::chat_session::{ChatError, ChatSession};
+use crate::chat_session::{ChatError, ChatSession, Negotiation};
 use crate::connect::Transport;
 use crate::lab_client::LabError;
 
@@ -170,8 +170,8 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
     let settings = Settings::new(ticket.email());
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
-    let chat = ChatSession::resume(stream, set_deadline, ticket.email(), ticket.token(), hello, settings, FRAME_TIMEOUT, deadline)
-        .map_err(LabError::Chat)?;
+    let negotiation = Negotiation { hello, settings, frame_timeout: FRAME_TIMEOUT, deadline };
+    let chat = ChatSession::resume(stream, set_deadline, ticket.email(), ticket.token(), negotiation).map_err(LabError::Chat)?;
     Ok(SignedInSession { chat, email: ticket.email().to_owned() })
 }
 
@@ -208,8 +208,8 @@ pub(crate) fn finish_external(
     let settings = Settings::new(email);
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
-    let chat = ChatSession::finish_external(stream, set_deadline, email, code, verifier, redirect_uri, hello, settings, FRAME_TIMEOUT, deadline)
-        .map_err(LabError::Chat)?;
+    let negotiation = Negotiation { hello, settings, frame_timeout: FRAME_TIMEOUT, deadline };
+    let chat = ChatSession::finish_external(stream, set_deadline, email, code, verifier, redirect_uri, negotiation).map_err(LabError::Chat)?;
     Ok(SignedInSession { chat, email: email.to_owned() })
 }
 
@@ -224,6 +224,11 @@ pub(crate) fn end(mut stream: Transport, ticket: &ResumeTicket) -> Result<(), La
     )
     .map_err(LabError::Chat)
 }
+
+/// Every participant's call key in one call, by person (task T360d3).
+pub type CallKeys = BTreeMap<String, [u8; 32]>;
+/// The sender keys sealed to this person in one call, by (sender, key id) (task T360d3).
+pub type SealedSenderKeys = BTreeMap<(String, u64), Vec<u8>>;
 
 /// An authenticated connection. Dropping it ends the local session. Commands use the same connection and the same
 /// room views until the connection closes.
@@ -387,8 +392,7 @@ impl SignedInSession {
 
     /// What the server last said about `call`'s keys (task T360d3): every participant's call key, and the sender keys
     /// sealed to this person by (sender, kid).
-    #[allow(clippy::type_complexity)]
-    pub fn call_inputs(&mut self, room: &str, call: u64) -> (BTreeMap<String, [u8; 32]>, BTreeMap<(String, u64), Vec<u8>>) {
+    pub fn call_inputs(&mut self, room: &str, call: u64) -> (CallKeys, SealedSenderKeys) {
         let Some(view) = self.chat.view(room) else { return (BTreeMap::new(), BTreeMap::new()) };
         (view.call_keys(call).cloned().unwrap_or_default(), view.sealed(call).cloned().unwrap_or_default())
     }

@@ -99,6 +99,15 @@ enum Pending {
     Enrollment([u8; 32]),
 }
 
+/// What the browser brought back from the provider for one sign-in: the authorization code, the PKCE verifier the
+/// device kept, and the loopback redirect URI the code was sent to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Redirect<'a> {
+    pub code: &'a str,
+    pub verifier: &'a str,
+    pub redirect_uri: &'a str,
+}
+
 /// External sign-in for one server: its provider, optional authorizer, rules, and the pending nonces.
 pub struct ExternalSignIn {
     provider: Arc<dyn Provider>,
@@ -205,18 +214,16 @@ impl ExternalSignIn {
     }
 
     /// Finish the sign-in begun on `device_id`, whose person is `user`, and return the new session token.
-    #[allow(clippy::too_many_arguments)]
     pub fn finish(
         &self,
         store: &mut AccountStore,
         user: &str,
         device_id: u64,
-        code: &str,
-        verifier: &str,
-        redirect_uri: &str,
+        redirect: Redirect<'_>,
         random: [u8; 32],
         now_ms: u64,
     ) -> Result<String, Refusal> {
+        let Redirect { code, verifier, redirect_uri } = redirect;
         // The nonce is taken out first, so it is used once whatever happens next.
         let nonce = self.take(Pending::Device(device_id), now_ms)?;
         let identity = self.identify(&nonce, code, verifier, redirect_uri, now_ms)?;
