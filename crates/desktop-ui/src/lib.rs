@@ -575,14 +575,23 @@ impl Window {
         ui.heading("Join a CrewCraft server");
         ui.label("Paste the invitation link your administrator sent you, and choose a password.");
         secret_field(ui, "Invitation link", &mut self.link, false);
-        secret_field(ui, "New password", &mut self.password, true);
-        let ready = !self.busy && !self.link.trim().is_empty() && !self.password.is_empty();
-        if ui.add_enabled(ready, egui::Button::new("Enroll this device")).clicked() {
-            let link = Zeroizing::new(self.link.trim().to_owned());
-            self.link = Zeroizing::default();
-            let password = std::mem::take(&mut self.password);
-            self.busy = true;
-            self.actions.push(Action::Enroll { link, password });
+        // A link that names the way in offers only that way (T611k); otherwise both are offered.
+        let way = crewcraft_enroll::InvitationLink::parse(self.link.trim()).ok().and_then(|link| link.signin());
+        if way != Some(crewcraft_enroll::SignInWay::Organization) {
+            secret_field(ui, "New password", &mut self.password, true);
+            let ready = !self.busy && !self.link.trim().is_empty() && !self.password.is_empty();
+            if ui.add_enabled(ready, egui::Button::new("Enroll this device")).clicked() {
+                let link = Zeroizing::new(self.link.trim().to_owned());
+                self.link = Zeroizing::default();
+                let password = std::mem::take(&mut self.password);
+                self.busy = true;
+                self.actions.push(Action::Enroll { link, password });
+            }
+        } else {
+            ui.label("Your organization signs you in: no password is needed here.");
+        }
+        if way == Some(crewcraft_enroll::SignInWay::Password) {
+            return;
         }
         // An organization whose server signs people in with its own accounts (T611i): only the link is needed; the
         // sign-in, and any second factor, happen on the organization's page in the browser.

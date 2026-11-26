@@ -7,8 +7,9 @@
 //!
 //! Rules:
 //! - The text starts with exactly `crewcraft://enroll?`: the scheme and path are compared byte for byte.
-//! - The query holds `server`, `code` and `root_sha256`, each exactly once, in any order, and nothing else: no other
-//!   key, no empty parameter, no fragment.
+//! - The query holds `server`, `code` and `root_sha256`, each exactly once, in any order, and optionally `signin`
+//!   once (`org` or `password`, task T611k: how the person signs in, so the app offers that way), and nothing else: no
+//!   other key, no empty parameter, no fragment. A link without `signin` leaves the choice to the person.
 //! - Values may hold unreserved characters (`A-Z a-z 0-9 - . _ ~`), `:` and percent escapes (`%5B`); anything else
 //!   is refused. Escapes are decoded once and the result must be UTF-8.
 //! - `server` is `host:port`: a DNS name (kept in lowercase), an IPv4 address, or an IPv6 address in brackets; the
@@ -78,6 +79,25 @@ enum Host {
     Ip(IpAddr),
 }
 
+/// How an invitation says the person signs in (task T611k).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignInWay {
+    /// Through the organization's identity provider, in the browser.
+    Organization,
+    /// With a CrewCraft password and an authenticator.
+    Password,
+}
+
+impl SignInWay {
+    /// The `signin` value in a link.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Organization => "org",
+            Self::Password => "password",
+        }
+    }
+}
+
 /// A parsed invitation: where the server is, the one-time code, and the root fingerprint to pin.
 #[derive(Clone, PartialEq, Eq)]
 pub struct InvitationLink {
@@ -85,6 +105,7 @@ pub struct InvitationLink {
     port: u16,
     code: EnrollmentCode,
     root: RootFingerprint,
+    signin: Option<SignInWay>,
 }
 
 impl fmt::Debug for InvitationLink {
@@ -97,7 +118,18 @@ impl InvitationLink {
     /// A link for `server` (`host:port`, as `parse` accepts it), `code` and `root`.
     pub fn new(server: &str, code: EnrollmentCode, root: RootFingerprint) -> Result<Self, LinkError> {
         let (host, port) = parse_server(server)?;
-        Ok(Self { host, port, code, root })
+        Ok(Self { host, port, code, root, signin: None })
+    }
+
+    /// The same link, naming how the person signs in (or not, with `None`).
+    pub fn with_signin(mut self, signin: Option<SignInWay>) -> Self {
+        self.signin = signin;
+        self
+    }
+
+    /// How the link says the person signs in, if it says.
+    pub fn signin(&self) -> Option<SignInWay> {
+        self.signin
     }
 
     /// Read a link. See the module documentation for what is accepted; anything else is refused.
@@ -109,13 +141,14 @@ impl InvitationLink {
         if query.contains('#') {
             return Err(LinkError::Prefix);
         }
-        let (mut server, mut code, mut root) = (None, None, None);
+        let (mut server, mut code, mut root, mut signin) = (None, None, None, None);
         for parameter in query.split('&') {
             let (key, value) = parameter.split_once('=').ok_or(LinkError::Parameter)?;
             let slot = match key {
                 "server" => &mut server,
                 "code" => &mut code,
                 "root_sha256" => &mut root,
+                "signin" => &mut signin,
                 _ => return Err(LinkError::Parameter),
             };
             if slot.is_some() || value.is_empty() {
@@ -132,7 +165,13 @@ impl InvitationLink {
         }
         let code = EnrollmentCode::parse(&code).map_err(|_| LinkError::Code)?;
         let root = RootFingerprint::parse(&root).ok_or(LinkError::Fingerprint)?;
-        Ok(Self { host, port, code, root })
+        let signin = match signin.as_deref().map(String::as_str) {
+            None => None,
+            Some("org") => Some(SignInWay::Organization),
+            Some("password") => Some(SignInWay::Password),
+            Some(_) => return Err(LinkError::Parameter),
+        };
+        Ok(Self { host, port, code, root, signin })
     }
 
     /// The server as the link writes it: `host:port`, or `[address]:port` for IPv6. A client connects here.
@@ -171,7 +210,11 @@ impl InvitationLink {
 impl fmt::Display for InvitationLink {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         let code = Zeroizing::new(self.code.to_display());
-        let link = Zeroizing::new(write_link(&self.server(), &code, self.root));
+        let mut link = Zeroizing::new(write_link(&self.server(), &code, self.root));
+        if let Some(signin) = self.signin {
+            link.push_str("&signin=");
+            link.push_str(signin.as_str());
+        }
         output.write_str(&link)
     }
 }

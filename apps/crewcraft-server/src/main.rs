@@ -296,7 +296,21 @@ fn link_display(data: &Path, out: InvitationOut) -> io::Result<LinkTerminal> {
     let config = server_install::read_config(data)?;
     let root_sha256 = server_install::root_sha256(data)?;
     let server = server_install::link_server(&config, server_install::read_public_port(data)?);
-    Ok(LinkTerminal { out, server, root_sha256 })
+    Ok(LinkTerminal { out, server, root_sha256, signin: invitation_signin(data)? })
+}
+
+/// How this installation's invitations say people sign in (T611k): through the organization when `identity.toml`
+/// configures a provider (a file that does not parse is an error, as it is for `serve`), else unsaid.
+fn invitation_signin(data: &Path) -> io::Result<Option<crewcraft_enroll::SignInWay>> {
+    let path = data.join(identity_config::IDENTITY_FILE);
+    match fs::read_to_string(&path) {
+        Ok(text) => {
+            identity_config::parse(&text).map_err(|error| usage_owned(format!("{}: {error}", path.display())))?;
+            Ok(Some(crewcraft_enroll::SignInWay::Organization))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn create_room(data: &Path, owner: &OsString, name: &OsString) -> io::Result<String> {
@@ -449,6 +463,8 @@ struct LinkTerminal {
     out: InvitationOut,
     server: String,
     root_sha256: [u8; 32],
+    /// How invitations say people sign in: through the organization when the server has an identity provider (T611k).
+    signin: Option<crewcraft_enroll::SignInWay>,
 }
 
 impl ProtectedDisplay for LinkTerminal {
@@ -461,7 +477,7 @@ impl LinkTerminal {
     /// Show `email`'s invitation with `code`, whether this command issued it or the running server did.
     fn show_text(&mut self, email: &str, code: &str) -> Result<(), DisplayFailed> {
         // Built the way a client reads it, so a link the client would refuse is never shown.
-        let link = server_install::invitation(&self.server, code, &self.root_sha256).map_err(|_| DisplayFailed)?;
+        let link = server_install::invitation(&self.server, code, &self.root_sha256).map_err(|_| DisplayFailed)?.with_signin(self.signin);
         let root = server_install::hex(&self.root_sha256);
         let server = &self.server;
         let text = format!("Private invitation for {email}\n{link}\nServer {server}\nCode {code}\nRoot SHA-256 {root}\n");
