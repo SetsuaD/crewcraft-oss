@@ -318,6 +318,28 @@ impl SignedInSession {
         result
     }
 
+    /// The bytes of `file` (`size` bytes, at most `cap`), in memory, for a preview (task T333).
+    pub fn download_bytes(&mut self, file: [u8; 16], size: u64, cap: u64) -> Result<Vec<u8>, FileOpError> {
+        if size == 0 || size > cap {
+            return Err(FileOpError::Lab(LabError::Usage));
+        }
+        let mut out = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+        let mut offset = 0u64;
+        while offset < size {
+            let length = u32::try_from((size - offset).min(MAX_CHUNK as u64)).unwrap_or(MAX_CHUNK as u32);
+            let data = self
+                .chat
+                .download(file, offset, length, 0, Instant::now() + OPERATION_TIMEOUT)
+                .map_err(|e| FileOpError::Lab(LabError::Chat(e)))?;
+            if data.is_empty() {
+                return Err(FileOpError::Lab(LabError::Chat(ChatError::UnexpectedResponse)));
+            }
+            out.extend_from_slice(&data);
+            offset += data.len() as u64;
+        }
+        Ok(out)
+    }
+
     /// Reply to the message at `parent` in `room`, in its thread (task T340b).
     pub fn reply(&mut self, room: &str, parent: u64, text: &str) -> Result<u64, LabError> {
         if !valid_room(room) || parent == 0 {
