@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod bootstrap_transport;
+pub mod call_crypto;
 pub mod chat_session;
 mod connect;
 pub mod device;

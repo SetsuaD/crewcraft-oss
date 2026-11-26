@@ -21,6 +21,8 @@ crewcraft-enroll.workspace = true
 # External sign-in (T611g): PKCE, state and the provider's authorization URL.
 crewcraft-oidc.workspace = true
 crewcraft-proto.workspace = true
+# Call keys: sealing sender keys and SFrame (T360d3).
+crewcraft-sframe = { path = "../../crates/sframe" }
 crewcraft-tls.workspace = true
 # Only for the self-test (feature `selftest`): it answers the authenticator step itself.
 crewcraft-totp = { workspace = true, optional = true }

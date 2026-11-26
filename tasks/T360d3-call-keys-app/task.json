@@ -1,0 +1,27 @@
+{
+  "id": "T360d3-call-keys-app",
+  "title": "Call keys in the app: publish, seal to everyone, rotate when someone leaves",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/src/call_crypto.rs",
+    "apps/crewcraft/src/lib.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/Cargo.toml",
+    "crates/desktop-ui/src/lib.rs",
+    "apps/crewcraft-server/tests/t360d3_call_keys_app.rs",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft/tests/t360d3_call_crypto.rs",
+  "test_cmd": "cargo test -p crewcraft --test t360d3_call_crypto",
+  "depends_on": [
+    "T360d2-call-keys",
+    "T360a2-calls-app"
+  ],
+  "spec": "call_crypto::CallCrypto (no I/O): per call, a fresh X25519 call key pair and a random sender key under key id 1. step(keys, boxes) returns what to send: Publish whenever the server's key list does not show this device's key; Seal the current sender key once to every other participant whose key is known (context 'crewcraft call <call> from <sender> kid <kid>'); when anyone in the last list is gone, rotate to the next key id with a new sender key and seal again to those still there; open each box sealed to this person once (failures are not retried). The worker runs a step after each sync of the room of the call it is in, sends CallKey/CallSeal (SignedInSession::call_send, call_inputs), forgets the keys on leaving, and emits Event::CallSecurity { room, call, kid, from } when it changes (Update::CallSecurity); the window shows 'End-to-end encrypted: keys from N of M' while in the call. Three people settle to everyone holding everyone else's key and decrypting their SFrame frames; after one leaves the others send under key id 2, sealed only to each other. End to end, two real apps each receive the other's key.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}

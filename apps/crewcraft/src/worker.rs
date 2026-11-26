@@ -111,6 +111,9 @@ pub enum Event {
     Calls { room: String, open: Option<crewcraft_client_core::room_view::OpenCall>, lines: Vec<(u64, String)> },
     /// This app is now in call `call` of `room` (task T360a2).
     InCall { room: String, call: u64 },
+    /// This app's call in `room` is end-to-end encrypted: it sends under key id `kid`, and the sender keys of `from` have
+    /// reached it (task T360d3).
+    CallSecurity { room: String, call: u64, kid: u64, from: Vec<String> },
     /// This app left its call in `room`; `reason` says why when it did not choose to (task T360a2).
     LeftCall { room: String, reason: Option<String> },
     /// Who reacted to each message in `room` with what, whenever it changes (task T341b).
@@ -414,6 +417,8 @@ impl Worker {
             archive_sent: BTreeMap::new(),
             in_call: None,
             next_heartbeat: Instant::now(),
+            crypto: None,
+            security_sent: None,
             calls_sent: BTreeMap::new(),
             next_poll: Instant::now(),
             retry,
@@ -502,6 +507,9 @@ struct Run {
     /// The call this app is in, `(room, call)`, and when its next heartbeat is due (task T360a2).
     in_call: Option<(String, u64)>,
     next_heartbeat: Instant,
+    /// This app's keys for the call it is in, and what was last said about them (task T360d3).
+    crypto: Option<crate::call_crypto::CallCrypto>,
+    security_sent: Option<(u64, u64, Vec<String>)>,
     /// The last calls state sent, per room (task T360a2).
     calls_sent: BTreeMap<String, RoomCalls>,
     /// The last archive times sent, per archive room (task T350d2).
@@ -875,9 +883,39 @@ impl Run {
         }
     }
 
+    /// One step of this app's call keys (task T360d3): publish and seal what the server's view asks for, open what was
+    /// sealed to this person, and say when the call's security changed.
+    fn step_call_keys(&mut self) {
+        let Some((room, call)) = self.in_call.clone() else { return };
+        let me = self.me.clone();
+        if self.crypto.as_ref().is_none_or(|crypto| crypto.call() != call) {
+            self.crypto = crate::call_crypto::CallCrypto::new(call, &me).ok();
+            self.security_sent = None;
+        }
+        let (Some(session), Some(crypto)) = (self.session.as_mut(), self.crypto.as_mut()) else { return };
+        let (keys, boxes) = session.call_inputs(&room, call);
+        let Ok(sends) = crypto.step(&keys, &boxes) else { return };
+        for send in sends {
+            let request = match send {
+                crate::call_crypto::Send::Publish(public) => crewcraft_proto::request::Request::CallKey { room: room.clone(), call, public },
+                crate::call_crypto::Send::Seal { to, kid, sealed } => {
+                    crewcraft_proto::request::Request::CallSeal { room: room.clone(), call, to, kid, sealed }
+                }
+            };
+            // A refusal (someone left meanwhile) is settled by the next step; a lost connection by the retry.
+            let _ = session.call_send(request);
+        }
+        let state = (call, crypto.sending_kid(), crypto.received_from());
+        if self.security_sent.as_ref() != Some(&state) {
+            self.security_sent = Some(state.clone());
+            self.emit(Event::CallSecurity { room, call: state.0, kid: state.1, from: state.2 });
+        }
+    }
+
     fn call_leave(&mut self, room: String, call: u64) {
         if self.in_call.as_ref() == Some(&(room.clone(), call)) {
             self.in_call = None;
+            self.crypto = None;
         }
         // A refusal means the call already ended or this person had left it: either way they are out.
         let result =
@@ -906,6 +944,7 @@ impl Run {
             Err(error) => match problem(error) {
                 Problem::Refused(code) => {
                     self.in_call = None;
+                    self.crypto = None;
                     let reason = if code == 1 { "You are no longer in this room, so you left the call." } else { "The call ended." };
                     self.emit(Event::LeftCall { room, reason: Some(reason.to_owned()) });
                 }
@@ -1082,6 +1121,10 @@ impl Run {
                 self.calls_sent.insert(room.to_owned(), calls.clone());
                 self.emit(Event::Calls { room: room.to_owned(), open: calls.0, lines: calls.1 });
             }
+        }
+        // The call's keys, for the call this app is in (task T360d3).
+        if self.in_call.as_ref().is_some_and(|(in_room, _)| in_room == room) {
+            self.step_call_keys();
         }
         // An archive room, and its original times when they change (task T350d2).
         if let Some(session) = self.session.as_mut()

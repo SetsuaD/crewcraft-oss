@@ -339,6 +339,19 @@ impl SignedInSession {
         self.chat.call_request(request(room.to_owned(), call), Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
     }
 
+    /// Send a call request as it is (task T360d3: `CallKey`, `CallSeal`).
+    pub fn call_send(&mut self, request: Request) -> Result<u64, LabError> {
+        self.chat.call_request(request, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// What the server last said about `call`'s keys (task T360d3): every participant's call key, and the sender keys
+    /// sealed to this person by (sender, kid).
+    #[allow(clippy::type_complexity)]
+    pub fn call_inputs(&mut self, room: &str, call: u64) -> (BTreeMap<String, [u8; 32]>, BTreeMap<(String, u64), Vec<u8>>) {
+        let Some(view) = self.chat.view(room) else { return (BTreeMap::new(), BTreeMap::new()) };
+        (view.call_keys(call).cloned().unwrap_or_default(), view.sealed(call).cloned().unwrap_or_default())
+    }
+
     /// The room's open call and its call history lines by cursor, as the server pushed them (task T360a2).
     pub fn calls(&mut self, room: &str) -> (Option<crewcraft_client_core::room_view::OpenCall>, Vec<(u64, String)>) {
         let Some(view) = self.chat.view(room) else { return (None, Vec::new()) };
