@@ -72,7 +72,8 @@ and mobile, and the same client in the browser. It is a community project, not p
   `apps/crewcraft` (desktop and iOS), `apps/crewcraft-android`, `xtask/` (`cargo xtask dist` builds release
   packages), `tasks/` (open work). Detail: [README.md](README.md), [docs/SPEC.md](docs/SPEC.md).
 - Checks: `bash ci/validate.sh` is the whole gate: `cargo fmt --check`, `cargo clippy --workspace --all-targets
-  -- -D warnings`, `cargo test --workspace`, the sanitize scan, `tools/rust-only.sh` and `cargo deny check`. There are
+  -- -D warnings`, `cargo test --workspace`, the sanitize scan, `tools/rust-only.sh`, `tools/agents-check.sh` (the
+  shared block above is intact and is the pinned copy) and `cargo deny check`. There are
   no hosted workflows, so rule 17 has no workflows to apply to: contributors run the gate before review and the
   maintainers run it on their own machines.
 - Work units: each task in `tasks/` is a written `spec`, a `test.rs` that defines done, and the list of files it may
