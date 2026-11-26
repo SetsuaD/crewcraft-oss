@@ -148,10 +148,9 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
             backend.change(|s| s.edit(room, user, *target, text, now_ms), |s| s.edit(room, user, *target, text, now_ms))
         }
         Request::Delete { room, target } => backend.change(|s| s.delete(room, user, *target), |s| s.delete(room, user, *target)),
-        Request::React { room, target, reaction, on } => backend.change(
-            |s| s.react(room, user, *target, *reaction, *on, now_ms),
-            |s| s.react(room, user, *target, *reaction, *on, now_ms),
-        ),
+        Request::React { room, target, reaction, on } => {
+            backend.change(|s| s.react(room, user, *target, *reaction, *on, now_ms), |s| s.react(room, user, *target, *reaction, *on, now_ms))
+        }
         Request::Sync { room, .. } => {
             return Ok(match backend.server().room(room) {
                 Ok(service) if service.role(user).is_some() => Response::Ok { cursor: service.head() },

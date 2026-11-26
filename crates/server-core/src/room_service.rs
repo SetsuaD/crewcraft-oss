@@ -15,13 +15,26 @@ pub const MAX_TEXT_CHARS: usize = 4000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventKind {
     Posted,
-    Edited { target: u64 },
-    Deleted { target: u64 },
-    Joined { user: String, role: Role },
-    Left { user: String },
+    Edited {
+        target: u64,
+    },
+    Deleted {
+        target: u64,
+    },
+    Joined {
+        user: String,
+        role: Role,
+    },
+    Left {
+        user: String,
+    },
     /// The actor added (`on`) or took back `reaction` (a code, see `push::REACTIONS`) on the message at `target`
     /// (task T341a).
-    Reacted { target: u64, reaction: u8, on: bool },
+    Reacted {
+        target: u64,
+        reaction: u8,
+        on: bool,
+    },
 }
 
 /// Who reacted to one message: by reaction code, the people, sorted (task T341a).
