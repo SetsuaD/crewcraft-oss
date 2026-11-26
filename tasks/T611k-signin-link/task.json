@@ -14,7 +14,7 @@
   "test_path": "apps/crewcraft-server/tests/t611k_signin_link.rs",
   "test_cmd": "cargo test -p crewcraft-server --test t611k_signin_link",
   "depends_on": [
-    "T611i-enroll-external"
+    "T611i-app"
   ],
   "spec": "The invitation link takes an optional signin parameter, once, with the value org or password (SignInWay::Organization / Password); any other value or a repeat is LinkError::Parameter; links without it parse as before and are written without it; InvitationLink::with_signin and signin. The server's invitations (invite, offline or through a running server) carry signin=org when the data directory has an identity.toml that parses, and nothing otherwise; an identity.toml that does not parse makes invite fail. The enrollment screen reads the pasted link: signin=org hides the password field and 'Enroll this device' and says the organization signs the person in; signin=password hides 'Enroll with your organization'; no signin offers both.",
   "status": "done",

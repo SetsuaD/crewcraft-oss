@@ -251,7 +251,8 @@ fn first_run(data: &Path, flags: &[OsString]) -> io::Result<()> {
     println!("Listening on {}", config.listen);
     println!("Trusted root {}", data.join(PUBLIC_ROOT).display());
     println!("Root SHA-256 {}", RootFingerprint::from_der(&root.certificate_der));
-    let mut display = LinkTerminal { out, server, root_sha256: root.sha256 };
+    // A new server has no identity provider yet: the administrator chooses the way in.
+    let mut display = LinkTerminal { out, server, root_sha256: root.sha256, signin: None };
     lab_admin::invite(&mut installation.accounts, &admin, None, now_ms(), &mut display).map_err(|error| {
         io::Error::other(format!("the server was created but the administrator was not invited ({error}); run invite to try again"))
     })?;
