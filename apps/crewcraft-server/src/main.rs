@@ -57,6 +57,12 @@ crewcraft-server import <data-directory> --bundle <bundle-directory> [--map-doma
     Import history from another system as read-only archive rooms (docs/IMPORT.md), with the server stopped. Safe to
     run again: a second run adds nothing, a later export adds what is new. Writes import-report.json into the bundle
     directory and exits non-zero when any part of the bundle was refused. --dry-run changes nothing.
+crewcraft-server export-teams --tenant <tenant> --client-id <application-id> --out <export-directory> [--chats-only]
+        [--max-file-mb <n>] [--login-url <https-url>] [--graph-url <https-url>] [--ca-file <pem>]
+    Export your own Microsoft Teams chats and channels through Microsoft Graph into the layout import-teams reads
+    (docs/IMPORT.md). Sign in with the code it shows; the token stays in memory. Read-only permissions only.
+    Running it again into the same directory resumes: what is already written is kept. Exits non-zero when a
+    conversation or an attachment could not be exported.
 crewcraft-server import-teams --export <teams-export-directory> --out <new-bundle-directory>
     Turn saved Microsoft Graph chat and channel pages into an import bundle (docs/IMPORT.md). Exits non-zero, after
     writing the bundle, when messages were left out because users.json does not name their sender.
@@ -99,6 +105,7 @@ fn run(args: &[OsString]) -> io::Result<()> {
             rebind(Path::new(data), &lab_email(email)?, text_arg(issuer)?, text_arg(subject)?)?
         }
         [command, data] if command == "audit" => show_audit(Path::new(data))?,
+        [command, rest @ ..] if command == "export-teams" => export_teams(rest)?,
         [command, f1, export, f2, out] if command == "import-teams" && f1 == "--export" && f2 == "--out" => {
             import_teams(Path::new(export), Path::new(out))?
         }
@@ -387,6 +394,98 @@ fn import_teams(export: &Path, out: &Path) -> io::Result<()> {
         println!("  sender {sender:?} is not in users.json: {count} messages left out");
     }
     Err(io::Error::other(format!("{left_out} messages were left out: add their senders to users.json and run it again into a new directory")))
+}
+
+/// `export-teams` (docs/IMPORT.md "Exporting from Teams", task T351): sign in with a device code and export the
+/// person's chats and channels through Microsoft Graph.
+fn export_teams(rest: &[OsString]) -> io::Result<()> {
+    use crewcraft_server::export_teams::{ExportOptions, Hooks, MAX_FILE_BYTES_LIMIT, sign_in};
+    let (mut tenant, mut client_id, mut out, mut ca_file) = (None, None, None::<PathBuf>, None::<PathBuf>);
+    let (mut login_url, mut graph_url, mut max_file_mb, mut chats_only) = (None, None, None, false);
+    let mut args = rest.iter();
+    while let Some(flag) = args.next() {
+        let flag = text_arg(flag)?;
+        if flag == "--chats-only" {
+            chats_only = true;
+            continue;
+        }
+        let value = args.next().ok_or_else(|| usage_owned(format!("{flag} takes a value")))?;
+        let slot = match flag {
+            "--tenant" => tenant.replace(text_arg(value)?.to_owned()).is_some(),
+            "--client-id" => client_id.replace(text_arg(value)?.to_owned()).is_some(),
+            "--login-url" => login_url.replace(text_arg(value)?.to_owned()).is_some(),
+            "--graph-url" => graph_url.replace(text_arg(value)?.to_owned()).is_some(),
+            "--out" => out.replace(PathBuf::from(value)).is_some(),
+            "--ca-file" => ca_file.replace(PathBuf::from(value)).is_some(),
+            "--max-file-mb" => {
+                let mb = text_arg(value)?.parse::<u64>().ok().filter(|mb| (1..=MAX_FILE_BYTES_LIMIT >> 20).contains(mb));
+                max_file_mb.replace(mb.ok_or_else(|| usage("--max-file-mb takes a number of MiB from 1 to 1024"))?).is_some()
+            }
+            other => return Err(usage_owned(format!("unknown export-teams option {other:?}"))),
+        };
+        if slot {
+            return Err(usage_owned(format!("{flag} is given twice")));
+        }
+    }
+    let tenant = tenant.ok_or_else(|| usage("export-teams needs --tenant <tenant id or domain>"))?;
+    let client_id = client_id.ok_or_else(|| usage("export-teams needs --client-id <application id of your app registration>"))?;
+    let out = out.ok_or_else(|| usage("export-teams needs --out <export directory>"))?;
+    let mut options = ExportOptions::new(&tenant, &client_id);
+    options.chats_only = chats_only;
+    if let Some(url) = login_url {
+        options.login_url = url;
+    }
+    if let Some(url) = graph_url {
+        options.graph_url = url;
+    }
+    if let Some(mb) = max_file_mb {
+        options.max_file_bytes = mb << 20;
+    }
+    if let Some(path) = ca_file {
+        options.roots = crewcraft_https::Roots::Pem(fs::read(path)?);
+    }
+    let hooks = Hooks {
+        show: Box::new(|code| {
+            println!("To sign in, open {} in a browser and enter the code {}", code.verification_uri, code.user_code);
+            println!("(the code expires in {} minutes)", code.expires_in.as_secs().div_ceil(60));
+        }),
+        pause: Box::new(std::thread::sleep),
+        progress: Box::new(|line| println!("  {line}")),
+    };
+    let failed = |error: crewcraft_server::export_teams::ExportError| io::Error::other(error.to_string());
+    let mut session = sign_in(options, hooks).map_err(failed)?;
+    println!("Signed in. Exporting to {}", out.display());
+    let report = session.export(&out).map_err(failed)?;
+    drop(session);
+    println!("Export written to {}", out.display());
+    println!(
+        "  {} conversations written, {} already there, {} messages",
+        report.conversations_written, report.conversations_skipped, report.messages
+    );
+    println!(
+        "  {} attachments downloaded, {} already there, {} not captured",
+        report.files_downloaded,
+        report.files_present,
+        report.files_not_captured.len()
+    );
+    for (message, name, reason) in &report.files_not_captured {
+        println!("  not captured: {name:?} (message {message}): {reason}");
+    }
+    if report.retries > 0 {
+        println!("  {} requests were tried again after throttling or a dropped connection", report.retries);
+    }
+    for (conversation, reason) in &report.conversations_failed {
+        println!("  failed: {conversation}: {reason}");
+    }
+    for (message, name, reason) in &report.files_failed {
+        println!("  failed: {name:?} (message {message}): {reason}");
+    }
+    if !report.ok() {
+        let count = report.conversations_failed.len() + report.files_failed.len();
+        return Err(io::Error::other(format!("{count} parts could not be exported; run the same command again to retry them")));
+    }
+    println!("Next: crewcraft-server import-teams --export {} --out <new-bundle-directory>", out.display());
+    Ok(())
 }
 
 /// `import` (docs/IMPORT.md, task T350b): read the bundle, import it offline, and write the report.

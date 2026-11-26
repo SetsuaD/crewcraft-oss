@@ -83,6 +83,9 @@ pub enum Roots {
 pub struct Response {
     pub status: u16,
     pub content_type: Option<String>,
+    /// A `Retry-After` header given as a number of seconds (a busy or throttling server says when to come back); an
+    /// HTTP date or anything else is `None`.
+    pub retry_after: Option<Duration>,
     pub body: Vec<u8>,
 }
 
@@ -145,7 +148,13 @@ impl Client {
     }
 
     pub fn get(&self, url: &str) -> Result<Response, Error> {
-        self.request("GET", url, None)
+        self.request("GET", url, &[], None)
+    }
+
+    /// GET with extra request headers (for example `Authorization: Bearer ...`). A caller's `Accept` replaces the
+    /// default one. Names must be HTTP tokens and values plain text: no line breaks, so a header cannot be smuggled.
+    pub fn get_with(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, Error> {
+        self.request("GET", url, headers, None)
     }
 
     /// POST `body` with `content_type` (for example `application/x-www-form-urlencoded` or `application/json`).
@@ -153,20 +162,33 @@ impl Client {
         if content_type.bytes().any(|b| b == b'\r' || b == b'\n') {
             return Err(Error::BadUrl("content type"));
         }
-        self.request("POST", url, Some((content_type, body)))
+        self.request("POST", url, &[], Some((content_type, body)))
     }
 
-    fn request(&self, method: &str, url: &str, body: Option<(&str, &[u8])>) -> Result<Response, Error> {
+    fn request(&self, method: &str, url: &str, headers: &[(&str, &str)], body: Option<(&str, &[u8])>) -> Result<Response, Error> {
         let target = Target::parse(url)?;
+        for (name, value) in headers {
+            let token = |b: u8| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b);
+            if name.is_empty() || !name.bytes().all(token) {
+                return Err(Error::BadUrl("header name"));
+            }
+            if value.bytes().any(|b| b.is_ascii_control() && b != b'\t') {
+                return Err(Error::BadUrl("header value"));
+            }
+        }
         let tcp = self.connect(&target)?;
         let name = ServerName::try_from(target.host.clone()).map_err(|_| Error::BadUrl("host"))?;
         let connection = ClientConnection::new(Arc::clone(&self.config), name).map_err(|e| Error::Tls(e.to_string()))?;
         let mut stream = StreamOwned::new(connection, tcp);
 
-        let mut head = format!(
-            "{method} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: CrewCraft\r\nAccept: application/json\r\nConnection: close\r\n",
-            target.path, target.authority
-        );
+        let mut head = format!("{method} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: CrewCraft\r\n", target.path, target.authority);
+        if !headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("accept")) {
+            head.push_str("Accept: application/json\r\n");
+        }
+        for (name, value) in headers {
+            head.push_str(&format!("{name}: {value}\r\n"));
+        }
+        head.push_str("Connection: close\r\n");
         if let Some((content_type, bytes)) = body {
             head.push_str(&format!("Content-Type: {content_type}\r\nContent-Length: {}\r\n", bytes.len()));
         }
@@ -284,7 +306,7 @@ fn read_response(stream: &mut impl Read, max_body: usize) -> Result<Response, Er
         return Err(Error::Malformed("status line"));
     }
     let status = parts.next().and_then(|s| (s.len() == 3).then(|| s.parse::<u16>().ok()).flatten()).ok_or(Error::Malformed("status"))?;
-    let (mut length, mut chunked, mut content_type) = (None::<usize>, false, None);
+    let (mut length, mut chunked, mut content_type, mut retry_after) = (None::<usize>, false, None, None);
     for line in lines {
         let (name, value) = line.split_once(':').ok_or(Error::Malformed("header line"))?;
         let value = value.trim();
@@ -303,6 +325,12 @@ fn read_response(stream: &mut impl Read, max_body: usize) -> Result<Response, Er
                 chunked = true;
             }
             "content-type" => content_type = Some(value.to_owned()),
+            "retry-after" => {
+                retry_after = (!value.is_empty() && value.len() <= 9 && value.bytes().all(|b| b.is_ascii_digit()))
+                    .then(|| value.parse::<u64>().ok())
+                    .flatten()
+                    .map(Duration::from_secs)
+            }
             _ => {}
         }
     }
@@ -338,7 +366,7 @@ fn read_response(stream: &mut impl Read, max_body: usize) -> Result<Response, Er
         }
         body
     };
-    Ok(Response { status, content_type, body })
+    Ok(Response { status, content_type, retry_after, body })
 }
 
 fn read_chunked(rest: &mut impl Read, max_body: usize) -> Result<Vec<u8>, Error> {
@@ -411,7 +439,17 @@ impl<R: Read> Read for Rest<'_, R> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, Target};
+    use super::{Client, Error, Roots, Target};
+
+    #[test]
+    fn extra_headers_are_checked_before_connecting() {
+        let client = Client::new(&Roots::Public, None).unwrap_or_else(|e| panic!("{e}"));
+        for name in ["X\r\nInjected", "", "Bad Name", "X:Y"] {
+            assert_eq!(client.get_with("https://127.0.0.1:9/", &[(name, "v")]).err(), Some(Error::BadUrl("header name")), "{name:?}");
+        }
+        let smuggled = client.get_with("https://127.0.0.1:9/", &[("Authorization", "Bearer a\r\nInjected: 1")]);
+        assert_eq!(smuggled.err(), Some(Error::BadUrl("header value")));
+    }
 
     #[test]
     fn urls_are_checked() {

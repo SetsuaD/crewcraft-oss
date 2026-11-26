@@ -10,6 +10,8 @@ publish.workspace = true
 [dependencies]
 # Stop serving cleanly on Ctrl+C and SIGTERM (`termination`).
 ctrlc = { version = "3.4", features = ["termination"] }
+# The Teams exporter (T351): the `/shares` id of a shared file is its address in unpadded base64url.
+base64.workspace = true
 crewcraft-accounts.workspace = true
 crewcraft-admission.workspace = true
 # External sign-in (T611e): the authorizer rules, the OIDC checks and the outgoing HTTPS client.
@@ -31,16 +33,16 @@ rustls.workspace = true
 serde_json = "1"
 sha2.workspace = true
 x509-parser.workspace = true
+# The Teams exporter's (T351) sign-in token and device code are cleared from memory when dropped.
+zeroize.workspace = true
 
 [dev-dependencies]
 crewcraft = { path = "../crewcraft" }
 crewcraft-desktop-ui.workspace = true
 crewcraft-ui-model.workspace = true
-zeroize.workspace = true
 crewcraft-client-core.workspace = true
 rcgen.workspace = true
 # T611e: ID tokens signed in the test (ES256) and their key set.
-base64.workspace = true
 ring = "0.17"
 
 [lints]

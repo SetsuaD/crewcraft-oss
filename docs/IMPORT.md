@@ -96,7 +96,80 @@ It maps:
 - `attachments` to `files`, marked captured only when the export folder holds the bytes;
 - system and event messages (`messageType` other than `message`) are left out and counted in the report.
 
-The reader never talks to Microsoft: fetching an export is the administrator's job, with their own tenant's tools.
+The reader never talks to Microsoft. The export it reads can be saved by any tool that calls the documented Graph
+API, or by CrewCraft's own exporter below.
+
+## Exporting from Teams (T351)
+
+`crewcraft-server export-teams` (`export_teams.rs`) lets a person export **their own** Teams history through
+Microsoft Graph v1.0 into exactly the layout above, so `import-teams` and then `import` take it as it is. It is built
+only from Microsoft's public documentation: the OAuth 2.0 device authorization grant (RFC 8628) on the Microsoft
+identity platform, and the Graph `chat`, `team`, `channel`, `conversationMember`, `user`, `chatMessage`,
+`chatMessageHostedContent`, `shares` and `driveItem` resources. It runs on any computer with a browser nearby; it does
+not need the CrewCraft server.
+
+**Before you start: an app registration.** In your organization's Microsoft Entra admin center, register an
+application (or ask an administrator to): a public client with "Allow public client flows" turned on, and these
+**delegated, read-only** Microsoft Graph permissions:
+
+| Permission | Why |
+|---|---|
+| `offline_access` | Renew the sign-in during a long export without asking again. |
+| `User.ReadBasic.All` | People's addresses (`GET /users`), so a message's sender becomes an email address. |
+| `Chat.Read` | Your chats, their members and messages, and images pasted into them. |
+| `Files.Read.All` | Files shared in chats and channels (they live in OneDrive and SharePoint). |
+| `Team.ReadBasic.All` | The teams you are in. |
+| `Channel.ReadBasic.All` | Their channels. |
+| `ChannelMember.Read.All` | A channel's members. |
+| `ChannelMessage.Read.All` | A channel's messages and replies. |
+
+The last two usually need an administrator's consent. Without it, `--chats-only` exports chats alone and asks for
+only the first four. Nothing here can change anything in Teams: there is no write permission in the list.
+
+**Running it.**
+
+```text
+crewcraft-server export-teams --tenant <tenant id or domain> --client-id <application id> --out <export directory>
+    [--chats-only] [--max-file-mb <n>] [--login-url <url>] [--graph-url <url>] [--ca-file <pem>]
+```
+
+It prints an address and a code: open the address in any browser, enter the code and sign in as yourself. The token
+stays in the exporter's memory, is never written or printed, and is sent only to the Graph address; it is cleared
+when the export ends. Then the exporter:
+
+- lists your chats (`/me/chats`) and, unless `--chats-only`, the channels of every team you are in
+  (`/me/joinedTeams`, `/teams/{id}/channels`), and for each conversation its members and all its messages, following
+  `@odata.nextLink` page by page (and a channel message's `replies` past their own next link). A next page that points
+  anywhere but the Graph address is refused, so the token never leaves it;
+- waits when Graph says to: a 429, 503 or 504 is tried again after its `Retry-After` (at most five minutes), or after
+  1, 2, 4... seconds without one, at most six times before it stops with an error;
+- downloads each named attachment to `files/<message id>/<name>`: a shared file through `/shares/{id}/driveItem` and
+  the short-lived download address Graph gives for it (the token is not sent there), a file Graph hosts from Graph.
+  A file over the cap (`--max-file-mb`, default 100), a name that is not a safe file name on every system (`:`, `?`,
+  `*` and the like, device names such as `CON`), or something that is not a file is left out and listed; the import
+  shows it as "not archived";
+- writes each conversation's file only after its attachments, and every file through a temporary name, so whatever
+  is in the directory is complete; and writes `users.json` from `GET /users` plus one page of conversation members that
+  list does not name (guests from other organizations).
+
+A conversation Graph refuses (403 or 404) and an attachment whose download fails are listed, the rest is exported, and
+the command exits non-zero. **Running the same command again resumes**: conversations already written are not fetched
+again and only missing attachments are downloaded, so an interrupted or partly refused export is finished by running
+it again. To pick up messages sent since, export into a new directory and import that too: imports are safe to repeat
+and add only what is new.
+
+Then, as above: `crewcraft-server import-teams --export <export directory> --out <new bundle directory>`, and
+`crewcraft-server import`. A sender `users.json` cannot name (an account deleted since) makes `import-teams` stop and
+say so; add that id with its address to `users.json` by hand and run it again.
+
+Not exported yet: images and files referenced only inside a message's text and not listed among its attachments,
+reactions, and meeting recordings and transcripts.
+
+**Help wanted: live verification.** The exporter is tested against a mock of the identity platform and Graph built
+from the documentation (`tasks/T351-teams-export/test.rs`); it has not yet been run against a real tenant by the
+project. If you run it on your own organization's Teams, please report (without ids, names or addresses) whether
+sign-in, paging, channel replies, shared files and pasted images exported, what permissions your administrator had to
+consent to, and any Graph error you saw. Open an issue named `T351 live verification`.
 
 ## The app (T350d)
 

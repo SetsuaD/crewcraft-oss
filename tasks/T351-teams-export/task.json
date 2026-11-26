@@ -1,0 +1,28 @@
+{
+  "id": "T351-teams-export",
+  "title": "Teams exporter: a person exports their own chats and channels through Microsoft Graph into the layout import-teams reads",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/export_teams.rs",
+    "apps/crewcraft-server/src/import_teams.rs",
+    "apps/crewcraft-server/src/lib.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/Cargo.toml",
+    "crates/https/src/lib.rs",
+    "Cargo.lock",
+    "docs/IMPORT.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t351_teams_export.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t351_teams_export",
+  "depends_on": [
+    "T350c-teams-reader",
+    "T611c-https-client"
+  ],
+  "spec": "docs/IMPORT.md 'Exporting from Teams', built only from Microsoft's public documentation of the device authorization grant (RFC 8628) on the Microsoft identity platform and of Graph v1.0. export_teams::sign_in(options, hooks) posts client_id and the read-only scopes (CHAT_SCOPES, plus CHANNEL_SCOPES unless chats_only) to <login>/<tenant>/oauth2/v2.0/devicecode, shows the user code and https verification address, then polls /token with the device_code grant after waiting the given interval (default 5 s, 1 to 60): authorization_pending waits again, slow_down adds 5 s, expired_token, authorization_declined/access_denied and any other error end in ExportError::SignIn with printable text; the code's expires_in bounds the total wait. The token is kept in memory only (zeroized, never in Debug output), sent only to URLs under the configured Graph base, renewed once with the refresh token on a 401. Session::export(out) lists /me/chats?$top=50 (members, messages?$top=50) and, unless chats_only, /me/joinedTeams, their channels (members, messages?$expand=replies, replies followed past their own next link), following @odata.nextLink only while it stays under the Graph base (otherwise ExportError::Graph, nothing sent); 429/503/504 and dropped connections are retried at most max_retries times, waiting Retry-After seconds (at most 300) or 1, 2, 4... s (at most 60); a conversation answered 403/404 is reported and skipped. It writes conversations/chat-<ids>-<hash>.json ({chat} or {team, channel}, members, pages) last, after downloading each named attachment to files/<safe message id>/<name>: shared files (contentType reference) through /shares/u!<base64url>/driveItem and its @microsoft.graph.downloadUrl (no token sent there), Graph-hosted ones from Graph; a file over max_file_bytes, a name that is not portable (portable_name), or one Graph does not serve is listed as not captured; a failed download fails the report (ok() false). users.json (all GET /users pages, plus one page of conversation members it does not list) is written when anything new was written or it is missing. Files are written via .partial and rename. A re-run into the same directory fetches no messages for conversations already written and downloads only missing attachments. `crewcraft-server export-teams --tenant --client-id --out [--chats-only] [--max-file-mb] [--login-url] [--graph-url] [--ca-file]` prints the code, progress and a summary, and exits non-zero when ok() is false or sign-in fails. crewcraft-https gains get_with (extra headers, checked; a caller's Accept replaces the default) and Response::retry_after (delta seconds).",
+  "status": "done",
+  "context": [
+    "docs/IMPORT.md",
+    "apps/crewcraft-server/src/import_teams.rs",
+    "crates/https/src/lib.rs"
+  ]
+}

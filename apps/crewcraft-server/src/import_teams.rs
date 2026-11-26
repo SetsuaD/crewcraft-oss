@@ -178,8 +178,9 @@ fn safe_name(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\']) && !name.chars().any(char::is_control)
 }
 
-/// A message id as one directory name (Graph ids are digits; anything else is replaced).
-fn safe_dir(id: &str) -> String {
+/// A message id as one directory name (Graph ids are digits; anything else is replaced). The exporter (T351) writes
+/// attachments under the same name.
+pub fn safe_dir(id: &str) -> String {
     id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
 }
 
