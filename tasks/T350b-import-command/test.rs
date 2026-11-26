@@ -30,7 +30,8 @@ fn path(p: &Path) -> &str {
 fn data_directory(dir: &Path) -> PathBuf {
     let data = dir.join("server");
     let invitation = dir.join("admin-invitation.txt");
-    let out = server(&["first-run", path(&data), "--name", "chat.example.org", "--admin", "admin@example.org", "--invitation-file", path(&invitation)]);
+    let out =
+        server(&["first-run", path(&data), "--name", "chat.example.org", "--admin", "admin@example.org", "--invitation-file", path(&invitation)]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     data
 }
