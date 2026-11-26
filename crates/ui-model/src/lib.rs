@@ -35,6 +35,8 @@ pub enum Command {
     Reply { room: String, parent: u64, text: String },
     /// List the files in the person's rooms (task T331b).
     ListFiles,
+    /// Fetch an image file's bytes to show it under its message (task T333); at most `MAX_PREVIEW_BYTES`.
+    Preview { file: [u8; 16], size: u64 },
     /// Start a call in `room` (with video or not), or join its open one (task T360a2).
     CallStart { room: String, video: bool },
     /// Join the open call `call` of `room` (task T360a2).
@@ -95,3 +97,6 @@ pub type MessageReactions = Vec<(u8, Vec<String>)>;
 
 /// Who reacted to the messages of a room (task T341b), by cursor.
 pub type RoomReactions = Vec<(u64, MessageReactions)>;
+
+/// The largest image file shown as a preview (task T333): 8 MiB. Larger images stay file chips.
+pub const MAX_PREVIEW_BYTES: u64 = 8 * 1024 * 1024;

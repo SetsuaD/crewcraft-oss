@@ -111,6 +111,8 @@ pub enum Event {
     Files { files: Vec<crewcraft_proto::request::ListedFile> },
     /// The bytes the person's files take, and their quota (task T332b).
     Storage { used: u64, quota: u64 },
+    /// An image file's bytes for its preview (task T333); empty when it could not be fetched.
+    Preview { file: [u8; 16], bytes: Vec<u8> },
     /// `room`'s open call (or none) and its call history lines by cursor, whenever they change (task T360a2).
     Calls { room: String, open: Option<crewcraft_client_core::room_view::OpenCall>, lines: Vec<(u64, String)> },
     /// This app is now in call `call` of `room` (task T360a2).
@@ -588,6 +590,15 @@ impl Run {
                 Some(Input::Command(Command::Delete { room, target })) => self.change(room, |session, room| session.delete(room, target)),
                 Some(Input::Command(Command::Search { query })) => self.search(query),
                 Some(Input::Command(Command::ListFiles)) => self.list_files(),
+                Some(Input::Command(Command::Preview { file, size })) => {
+                    // A preview that cannot be fetched is shown as the file chip it already is.
+                    let bytes = self
+                        .session
+                        .as_mut()
+                        .and_then(|session| session.download_bytes(file, size, crewcraft_ui_model::MAX_PREVIEW_BYTES).ok())
+                        .unwrap_or_default();
+                    self.emit(Event::Preview { file, bytes });
+                }
                 Some(Input::Command(Command::Attach { room, path })) => self.attach(room, path),
                 Some(Input::Command(Command::Reply { room, parent, text })) => self.reply(room, parent, text),
                 Some(Input::Command(Command::CallStart { room, video })) => self.call_start(room, video),

@@ -149,6 +149,11 @@ pub enum Update {
         used: u64,
         quota: u64,
     },
+    /// An image file's bytes for its preview; empty when they could not be fetched (task T333).
+    Preview {
+        file: [u8; 16],
+        bytes: Vec<u8>,
+    },
     /// `room`'s open call (or none) and its call history lines by cursor (task T360a2).
     Calls {
         room: String,
@@ -206,6 +211,7 @@ impl fmt::Debug for Update {
             Self::Attachments { room, files } => f.debug_struct("Attachments").field("room", room).field("messages", &files.len()).finish(),
             Self::Threads { room, parents } => f.debug_struct("Threads").field("room", room).field("replies", &parents.len()).finish(),
             Self::Files { files } => f.debug_struct("Files").field("files", &files.len()).finish(),
+            Self::Preview { file, bytes } => f.debug_struct("Preview").field("file", &file[0]).field("bytes", &bytes.len()).finish(),
             Self::Storage { used, quota } => f.debug_struct("Storage").field("used", used).field("quota", quota).finish(),
             Self::Calls { room, open, lines } => {
                 f.debug_struct("Calls").field("room", room).field("open", &open.as_ref().map(|c| c.call)).field("lines", &lines.len()).finish()
@@ -330,6 +336,8 @@ pub struct Window {
     files_view: Option<Option<Vec<crewcraft_proto::request::ListedFile>>>,
     /// The bytes the person's files take, and their quota (T332b).
     storage: Option<(u64, u64)>,
+    /// Image previews (T333): asked for, decoded and waiting for a texture, shown, or given up on.
+    previews: HashMap<[u8; 16], Preview>,
     /// Each room's open call (T360a2).
     open_calls: HashMap<String, crewcraft_client_core::room_view::OpenCall>,
     /// Each room's call history lines by cursor (T360a2).
@@ -352,6 +360,8 @@ struct Bubbles<'a> {
     selected: Option<u64>,
     confirming: bool,
     files: &'a std::collections::BTreeMap<u64, Vec<FileChip>>,
+    /// Image previews by file id (T333).
+    previews: &'a HashMap<[u8; 16], egui::TextureHandle>,
     replies: &'a std::collections::BTreeMap<u64, usize>,
     /// Who reacted to each message with what (T341b).
     reactions: &'a std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>,
@@ -499,6 +509,13 @@ impl Window {
                 self.threads.insert(room, parents.into_iter().collect());
             }
             Update::Storage { used, quota } => self.storage = Some((used, quota)),
+            Update::Preview { file, bytes } => {
+                let state = match decode_preview(&bytes) {
+                    Some(image) => Preview::Decoded(image),
+                    None => Preview::Failed,
+                };
+                self.previews.insert(file, state);
+            }
             Update::Files { files } => {
                 if self.files_view.is_some() {
                     self.files_view = Some(Some(files));
@@ -566,6 +583,7 @@ impl Window {
                 self.open_calls.clear();
                 self.files_view = None;
                 self.storage = None;
+                self.previews.clear();
                 self.call_lines.clear();
                 self.in_call = None;
                 self.open_thread = None;
@@ -582,6 +600,7 @@ impl Window {
     /// Draw the current screen. Call once per frame.
     /// The app hands over the whole window area; each screen paints its own panels.
     pub fn ui(&mut self, ui: &mut Ui) {
+        self.prepare_previews(ui.ctx());
         let screen = self.screen();
         if screen == Screen::Chat {
             if let Some(notice) = self.notice.clone() {
@@ -832,6 +851,7 @@ impl Window {
         let me = self.email.clone();
         let mut action = None;
         let files = self.message_files.get(&room).cloned().unwrap_or_default();
+        let previews = self.shown_previews();
         let replies = self.reply_counts(&room);
         let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
         let times = self.sent_times.get(&room).cloned().unwrap_or_default();
@@ -846,6 +866,7 @@ impl Window {
             selected: self.selected_message,
             confirming: self.confirm_delete,
             files: &files,
+            previews: &previews,
             replies: &replies,
             reactions: &reactions,
             read_only,
@@ -934,6 +955,7 @@ impl Window {
                 let me = self.email.clone();
                 let mut action = None;
                 let files = self.message_files.get(&room).cloned().unwrap_or_default();
+                let previews = self.shown_previews();
                 let replies = self.reply_counts(&room);
                 let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
                 let times = self.sent_times.get(&room).cloned().unwrap_or_default();
@@ -948,6 +970,7 @@ impl Window {
                     selected: self.selected_message,
                     confirming: self.confirm_delete,
                     files: &files,
+                    previews: &previews,
                     replies: &replies,
                     reactions: &reactions,
                     read_only,
@@ -1076,6 +1099,45 @@ impl Window {
         self.focus.as_ref().map(|(room, cursor)| (room.as_str(), *cursor))
     }
 
+    /// Ask for the previews of the open room's images, and turn decoded ones into textures (T333).
+    fn prepare_previews(&mut self, ctx: &egui::Context) {
+        for (file, state) in self.previews.iter_mut() {
+            if let Preview::Decoded(image) = state {
+                let texture = ctx.load_texture(format!("preview-{}", file[0]), std::mem::take(image), egui::TextureOptions::LINEAR);
+                *state = Preview::Shown(texture);
+            }
+        }
+        let Some(room) = self.rooms.selected().map(str::to_owned) else { return };
+        let wanted: Vec<FileChip> = self
+            .message_files
+            .get(&room)
+            .into_iter()
+            .flat_map(|files| files.values().flatten())
+            .filter(|chip| previewable(chip) && !self.previews.contains_key(&chip.file))
+            .cloned()
+            .collect();
+        for chip in wanted {
+            self.previews.insert(chip.file, Preview::Requested);
+            self.actions.push(Action::Room(Command::Preview { file: chip.file, size: chip.size }));
+        }
+    }
+
+    /// The previews ready to draw, by file id (T333).
+    fn shown_previews(&self) -> HashMap<[u8; 16], egui::TextureHandle> {
+        self.previews
+            .iter()
+            .filter_map(|(file, state)| match state {
+                Preview::Shown(texture) => Some((*file, texture.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether the image `file` is shown as a preview (T333).
+    pub fn previewed(&self, file: &[u8; 16]) -> bool {
+        matches!(self.previews.get(file), Some(Preview::Shown(_)))
+    }
+
     /// Whether the Files area is open (T331b).
     pub fn files_open(&self) -> bool {
         self.files_view.is_some()
@@ -1201,6 +1263,7 @@ impl Window {
         });
         let me = self.email.clone();
         let files = self.message_files.get(room).cloned().unwrap_or_default();
+        let previews = self.shown_previews();
         let replies = std::collections::BTreeMap::new();
         let reactions = self.reactions.get(room).cloned().unwrap_or_default();
         let times = self.sent_times.get(room).cloned().unwrap_or_default();
@@ -1211,6 +1274,7 @@ impl Window {
             selected: None,
             confirming: false,
             files: &files,
+            previews: &previews,
             replies: &replies,
             reactions: &reactions,
             read_only,
@@ -1495,9 +1559,14 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
         let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
         ui.with_layout(layout, |ui| ui.weak(utc_time(sent_ms)));
     }
-    // The message's files, each with Save (T330e).
+    // The message's files, each with Save (T330e); an image above its chip (T333).
     for chip in chips {
         let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
+        if let Some(texture) = look.previews.get(&chip.file) {
+            let size = texture.size_vec2();
+            let scale = (PREVIEW_WIDTH / size.x).min(1.0);
+            ui.with_layout(layout, |ui| ui.add(egui::Image::new((texture.id(), size * scale))));
+        }
         ui.with_layout(layout, |ui| {
             // A file an import could not capture has no bytes to save (T350e).
             if chip.file == [0; 16] {
@@ -1601,6 +1670,41 @@ fn call_lines_ui(ui: &mut Ui, lines: &std::collections::BTreeMap<u64, String>, f
         ui.vertical_centered(|ui| ui.weak(text));
     }
     upto
+}
+
+/// The widest a preview is drawn, in points (T333).
+const PREVIEW_WIDTH: f32 = 320.0;
+
+/// An image preview's state (T333).
+enum Preview {
+    Requested,
+    Decoded(egui::ColorImage),
+    Shown(egui::TextureHandle),
+    Failed,
+}
+
+/// Whether a file is an image worth a preview (T333): a PNG, JPEG, GIF or WebP name, not over `MAX_PREVIEW_BYTES`, and
+/// not a file an import could not capture.
+pub fn previewable(chip: &FileChip) -> bool {
+    let name = chip.name.to_ascii_lowercase();
+    let image = [".png", ".jpg", ".jpeg", ".gif", ".webp"].iter().any(|ext| name.ends_with(ext));
+    image && chip.size > 0 && chip.size <= crewcraft_ui_model::MAX_PREVIEW_BYTES && chip.file != [0; 16]
+}
+
+/// Decode an image for a preview (T333), within limits (8192 pixels a side, 256 MiB while decoding), scaled down to
+/// `PREVIEW_WIDTH` pixels wide. `None` for anything that is not such an image.
+pub fn decode_preview(bytes: &[u8]) -> Option<egui::ColorImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    let decoded = reader.decode().ok()?;
+    let width = PREVIEW_WIDTH as u32;
+    let small = if decoded.width() > width { decoded.thumbnail(width, u32::MAX) } else { decoded };
+    let rgba = small.to_rgba8();
+    Some(egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw()))
 }
 
 /// A time as `2024-03-05 14:07 UTC` (T350d2). Imported times are shown in UTC: the window has no time zone database.

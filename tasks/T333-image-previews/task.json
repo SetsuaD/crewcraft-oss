@@ -1,0 +1,24 @@
+{
+  "id": "T333-image-previews",
+  "title": "Image previews under messages",
+  "crate": "crewcraft-desktop-ui",
+  "files": [
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/Cargo.toml",
+    "crates/ui-model/src/lib.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "Cargo.lock"
+  ],
+  "test_path": "crates/desktop-ui/tests/t333_image_previews.rs",
+  "test_cmd": "cargo test -p crewcraft-desktop-ui --test t333_image_previews",
+  "depends_on": [
+    "T330e-files-app"
+  ],
+  "spec": "REQUIREMENTS 2.4 image previews (owner decision 2026-11-26: the image crate's pure-Rust PNG, JPEG, GIF and WebP decoders). previewable(chip): a .png/.jpg/.jpeg/.gif/.webp name, 1 byte to MAX_PREVIEW_BYTES (8 MiB), not the not-archived id. The window asks once per file (Command::Preview { file, size }) for the open room's previewable attachments; the worker fetches the bytes into memory (SignedInSession::download_bytes, capped) and emits Event::Preview (Update::Preview), empty on failure. decode_preview decodes within limits (8192 px a side, 256 MiB while decoding) and scales to at most 320 px wide; the window turns it into a texture and draws it above the file chip; bytes that do not decode leave the chip and are never asked for again.",
+  "status": "done",
+  "context": [
+    "docs/FILES.md"
+  ]
+}

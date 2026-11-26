@@ -21,6 +21,8 @@ crewcraft-ui-model.workspace = true
 # bundles its own OFL font (assets/fonts).
 egui = { version = "0.37", default-features = false }
 zeroize.workspace = true
+# Image previews (T333): pure-Rust decoders only, no native code.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 [dev-dependencies]
 egui_kittest = "0.37"
