@@ -1,0 +1,25 @@
+{
+  "id": "T350a-import-engine",
+  "title": "Import engine: bundles become read-only archive rooms, safely re-runnable",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/import.rs",
+    "crates/server-core/src/lib.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/server.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/dispatch.rs"
+  ],
+  "test_path": "crates/server-core/tests/t350a_import.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t350a_import",
+  "depends_on": [
+    "T341a-reactions",
+    "T340a-threads"
+  ],
+  "spec": "docs/IMPORT.md, the engine. import::Bundle { source, rooms, messages } as typed values; Bundle::map_domains. DurableServer::import(bundle, has_account, dry_run) -> Report. Each room becomes an archive room (Server::create_archive_room: owner ARCHIVE_OWNER, read-only; a direct conversation without a name is named after its two people), found again by external key source:key. Archive rooms refuse post, edit, delete, react, reply and uploads (NotAllowed / E_NOT_ALLOWED) for everyone and count nothing unread; search covers them. Members with accounts are added, others reported in people_skipped and added by a later run. Messages are imported oldest first with their original author (no account needed) and time (imported_sent_ms), keyed source:room:key; reply_to makes a thread reply only to a live top-level message of the same room, otherwise the message is top-level and listed in made_top_level; a deleted message is held redacted. A re-run adds nothing; a later run applies edits and deletions (counted as updated), adds new messages and never un-deletes. Files are counted (files_not_imported) until T350e. Records Op::ImportRoom/ImportMessage/ImportEdit/ImportDelete (tags 20-23), replayed at start-up. A dry run changes nothing and reports what a real run would. Every refusal (bad source, duplicate or bad keys, bad emails, a direct room without two members, unknown room, bad text) skips only its part and is reported with its bundle position.",
+  "status": "done",
+  "context": [
+    "docs/IMPORT.md"
+  ]
+}
