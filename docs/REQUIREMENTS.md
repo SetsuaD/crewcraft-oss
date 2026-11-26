@@ -696,7 +696,7 @@ CrewCraft runs on its own with no outside services. Each of these lets an organi
 | Integration point | What it is |
 |---|---|
 | Identity provider | A standard OpenID Connect relying party: issuer discovery, authorization code with PKCE, state and nonce, ID-token signature checks, configurable claim mapping. Built-in accounts are the default. |
-| Authorizer | An interface that takes an identity and returns capabilities, a revision and caching hints. A built-in authorizer (administrator, moderator and member roles) and an HTTP authorizer for an external service. |
+| Authorizer | An interface that takes an identity and returns capabilities, a revision and caching hints. A built-in authorizer (administrator, moderator and member roles) and an HTTP authorizer for an external service. The contract: [AUTHORIZER.md](AUTHORIZER.md). |
 | Device trust | Client-certificate checks at the server, and a device-enrollment provider that turns a one-time code into a certificate on a device-held key. |
 | Importer | An interface that reads an export from another chat system and produces rooms, messages and media with stable external keys, repeatable top-ups, deferred author linking and remapping of email domains. |
 | External records | Opaque references on rooms, plus a signed API to make sure a room exists for a record and to post a notice into it. |

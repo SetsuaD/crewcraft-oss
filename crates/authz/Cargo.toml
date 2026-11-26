@@ -1,0 +1,13 @@
+[package]
+name = "crewcraft-authz"
+description = "Authorization decisions from an external authorizer: capabilities, re-check and grace rules (docs/AUTHORIZER.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

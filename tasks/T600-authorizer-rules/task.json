@@ -1,0 +1,21 @@
+{
+  "id": "T600-authorizer-rules",
+  "title": "External authorizer: the contract and CrewCraft's decision rules",
+  "crate": "crewcraft-authz",
+  "files": [
+    "crates/authz/Cargo.toml",
+    "crates/authz/src/lib.rs",
+    "docs/AUTHORIZER.md",
+    "docs/REQUIREMENTS.md",
+    "Cargo.lock"
+  ],
+  "test_path": "crates/authz/tests/t600_authorizer_rules.rs",
+  "test_cmd": "cargo test -p crewcraft-authz --test t600_authorizer_rules",
+  "depends_on": [],
+  "spec": "docs/AUTHORIZER.md defines the HTTP contract (POST /v1/authorize with purpose and identity; allow with capabilities, a per-person increasing revision and an optional recheck_after_seconds, or deny with a revision; anything else is no answer). crewcraft-authz applies it: capabilities use, moderate, respond and dispatch, unknown names ignored, nothing counts without use; sign-in needs a fresh allow with use and never uses grace; a good answer is re-checked after 600 s or sooner if asked (at least 1 s); a check with no answer is retried after 60 s; a grant past its fresh period stands only within 24 h of its last confirmation, for staff, and never in the visitor area, however often retries move the next check; a deny takes effect at once, removes the grant and is lifted only by an allow with a higher revision; an allow with a revision below the highest seen, or at or below the denial, is stale and changes nothing; commit_decision refuses access when the record cannot be committed and read back unchanged.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md",
+    "docs/SECURITY-DESIGN.md"
+  ]
+}
