@@ -1,0 +1,25 @@
+{
+  "id": "T350d1-archive-protocol",
+  "title": "Archive rooms on the wire: the Archived and Sent pushes",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/proto/src/push.rs",
+    "crates/proto/src/request.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/inbox.rs",
+    "crates/client-core/src/room_view.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs"
+  ],
+  "test_path": "crates/server-core/tests/t350d1_archive_push.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t350d1_archive_push",
+  "depends_on": [
+    "T350a-import-engine"
+  ],
+  "spec": "FEATURE_ARCHIVE (32). Push 73 Archived { room, cursor 0 } and push 74 Sent { room, cursor, sent_ms }; neither advances the cursor. After a successful Sync of an archive room, a connection that agreed to FEATURE_ARCHIVE sends Archived before the room's events, and Sent after the Posted push of each imported message (DurableServer::imported_sent_ms); a connection without the feature, and every ordinary room, gets neither. The client inbox keeps the flag (RoomView::archived) and the times (RoomView::sent_times). The network server advertises FEATURE_ARCHIVE.",
+  "status": "done",
+  "context": [
+    "docs/IMPORT.md"
+  ]
+}

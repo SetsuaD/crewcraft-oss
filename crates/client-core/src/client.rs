@@ -96,6 +96,8 @@ impl Client {
                 || first == crewcraft_proto::push::ATTACHED
                 || first == crewcraft_proto::push::THREADED
                 || first == crewcraft_proto::push::REACTED
+                || first == crewcraft_proto::push::ARCHIVED
+                || first == crewcraft_proto::push::SENT
             {
                 let push = decode_push(&payload).map_err(ClientError::Malformed)?;
                 let room = match &push {
@@ -104,6 +106,7 @@ impl Client {
                     Push::Deleted { room, .. } => room.clone(),
                     Push::Other { room, .. } => room.clone(),
                     Push::Attached { room, .. } | Push::Threaded { room, .. } | Push::Reacted { room, .. } => room.clone(),
+                    Push::Archived { room, .. } | Push::Sent { room, .. } => room.clone(),
                 };
                 match self.inbox.on_push(push, now_ms, local_minute) {
                     Some((apply, notify)) => events.push(ClientEvent::Pushed { room, apply, notify }),

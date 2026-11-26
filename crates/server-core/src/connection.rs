@@ -104,6 +104,7 @@ impl Connection {
             |_, _, _| Vec::new(),
             |_, _, _| Vec::new(),
             |_, _, _| None,
+            |_, _, _| None,
         )
     }
 
@@ -125,6 +126,7 @@ impl Connection {
             DurableServer::found,
             DurableServer::attachments,
             DurableServer::parent_of,
+            DurableServer::imported_sent_ms,
         )
     }
 
@@ -139,6 +141,7 @@ impl Connection {
         found: impl Fn(&S, &str, &str) -> Vec<SearchHit>,
         attachments: impl Fn(&S, &str, u64) -> Vec<crewcraft_proto::push::AttachedFile>,
         parent_of: impl Fn(&S, &str, u64) -> Option<u64>,
+        sent_of: impl Fn(&S, &str, u64) -> Option<u64>,
     ) -> Result<Vec<u8>, E> {
         self.decoder.push(bytes);
         let mut out = Vec::new();
@@ -165,6 +168,12 @@ impl Connection {
                 && let Ok(service) = read(server).room(room)
                 && let Ok(Since::Events(events)) = service.sync(&self.user, *cursor)
             {
+                let archive = self.features & crewcraft_proto::request::FEATURE_ARCHIVE != 0;
+                // An archive room says so before its events (task T350d1).
+                if archive && service.is_read_only() {
+                    let archived = encode_push(&Push::Archived { room: room.clone(), cursor: 0 }).map_err(ConnError::Request)?;
+                    out.extend_from_slice(&encode(&archived).map_err(ConnError::Frame)?);
+                }
                 for (ev_cursor, ev) in events {
                     let mut push = to_push(room, ev_cursor, &ev);
                     // A client that did not agree to reactions only advances past them (task T341a).
@@ -175,6 +184,14 @@ impl Connection {
                     let push_bytes = encode_push(&push).map_err(ConnError::Request)?;
                     let framed_push = encode(&push_bytes).map_err(ConnError::Frame)?;
                     out.extend_from_slice(&framed_push);
+                    // An imported message's original time follows its push (task T350d1).
+                    if posted
+                        && archive
+                        && let Some(sent_ms) = sent_of(server, room, ev_cursor)
+                    {
+                        let sent = encode_push(&Push::Sent { room: room.clone(), cursor: ev_cursor, sent_ms }).map_err(ConnError::Request)?;
+                        out.extend_from_slice(&encode(&sent).map_err(ConnError::Frame)?);
+                    }
                     // A reply's thread follows its push, for a client that agreed to threads (task T340a).
                     if posted
                         && self.features & crewcraft_proto::request::FEATURE_THREADS != 0

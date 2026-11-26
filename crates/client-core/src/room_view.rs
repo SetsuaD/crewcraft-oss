@@ -29,6 +29,10 @@ pub struct RoomView {
     parents: BTreeMap<u64, u64>,
     /// Who reacted to each message, by its cursor, then by reaction code (task T341a).
     reactions: BTreeMap<u64, BTreeMap<u8, BTreeSet<String>>>,
+    /// An archive room: read-only, imported (task T350d1).
+    archived: bool,
+    /// Imported messages' original times, by cursor (task T350d1).
+    sent: BTreeMap<u64, u64>,
 }
 
 impl Default for RoomView {
@@ -49,6 +53,8 @@ impl RoomView {
             attachments: BTreeMap::new(),
             parents: BTreeMap::new(),
             reactions: BTreeMap::new(),
+            archived: false,
+            sent: BTreeMap::new(),
         }
     }
 
@@ -129,6 +135,26 @@ impl RoomView {
         if people.is_empty() {
             self.reactions.remove(&target);
         }
+    }
+
+    /// Keep that this is an archive room (task T350d1).
+    pub fn set_archived(&mut self) {
+        self.archived = true;
+    }
+
+    /// Whether this is an archive room (task T350d1).
+    pub fn archived(&self) -> bool {
+        self.archived
+    }
+
+    /// Keep the original time of the imported message at `cursor` (task T350d1).
+    pub fn sent(&mut self, cursor: u64, sent_ms: u64) {
+        self.sent.insert(cursor, sent_ms);
+    }
+
+    /// Imported messages' original times, by cursor (task T350d1).
+    pub fn sent_times(&self) -> &BTreeMap<u64, u64> {
+        &self.sent
     }
 
     /// Who reacted to each message that has reactions, by cursor, then by reaction code (task T341a).
