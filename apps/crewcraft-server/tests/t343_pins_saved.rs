@@ -246,9 +246,7 @@ impl Write for PinScript {
 fn a_second_sync_at_the_same_head_consumes_its_own_pin_snapshot() {
     let room = "project";
     let token = "A".repeat(signin::TOKEN_LEN);
-    let pinned = |html: &str| Push::Pinned {
-        room: room.into(), cursor: 1, target: 1, author: ALICE.into(), html: html.into(), edited: false,
-    };
+    let pinned = |html: &str| Push::Pinned { room: room.into(), cursor: 1, target: 1, author: ALICE.into(), html: html.into(), edited: false };
     // The fake peer deliberately distinguishes same-head snapshots. The test observes each one immediately on
     // returning from sync, without allowing a later request to drain an unread trailing frame and mask the bug.
     let replies = [
