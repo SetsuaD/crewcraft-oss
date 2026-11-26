@@ -255,6 +255,9 @@ fn room_name(room: &BundleRoom) -> String {
     name.chars().take(64).collect()
 }
 
+/// An imported message's stored files: `(room, cursor, [(file id, name, size)])` (task T331a).
+pub(crate) type ImportedFileList = (String, u64, Vec<([u8; 16], String, u64)>);
+
 /// A new message's place in a thread, decided before it is written.
 enum Parent {
     None,
@@ -516,7 +519,7 @@ impl DurableServer {
     }
 
     /// Every live imported message's stored files, as `(room, cursor, [(file id, name, size)])` (task T331a).
-    pub(crate) fn imported_file_lists(&self) -> Vec<(String, u64, Vec<([u8; 16], String, u64)>)> {
+    pub(crate) fn imported_file_lists(&self) -> Vec<ImportedFileList> {
         self.imports
             .messages
             .values()
