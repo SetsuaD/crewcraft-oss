@@ -295,7 +295,11 @@ fn the_files_area_tells_the_storage_used() {
 
     // Once the post has reached the server, Alice's Files area shows what her files take of her quota.
     assert!(bob.act(Action::Room(Command::Sync { room: room.clone() })).is_empty());
-    poll_until(&mut bob, "the post", |update| matches!(update, Update::Attachments { files, .. } if files.iter().any(|(_, chips)| chips.iter().any(|c| c.file == chip.file))));
+    poll_until(
+        &mut bob,
+        "the post",
+        |update| matches!(update, Update::Attachments { files, .. } if files.iter().any(|(_, chips)| chips.iter().any(|c| c.file == chip.file))),
+    );
     assert!(alice.act(Action::Room(Command::ListFiles)).is_empty());
     let expected = (bytes.len() as u64, crewcraft_server_core::durable::DEFAULT_QUOTA);
     poll_until(&mut alice, "the storage", |update| matches!(update, Update::Storage { used, quota } if (*used, *quota) == expected));
