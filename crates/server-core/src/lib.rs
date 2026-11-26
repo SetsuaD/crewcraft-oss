@@ -18,6 +18,7 @@ pub mod devices;
 pub mod dispatch;
 pub mod durable;
 pub mod enrollment;
+pub mod file_store;
 pub mod html_text;
 pub mod invites;
 pub mod journal;

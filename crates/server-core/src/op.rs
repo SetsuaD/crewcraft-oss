@@ -20,13 +20,56 @@ pub const MAX_STR: usize = 1 << 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
-    CreateRoom { owner: String, name: String },
-    AddMember { slug: String, actor: String, user: String, role: Role },
-    RemoveMember { slug: String, actor: String, user: String },
-    Post { slug: String, author: String, text: String, now_ms: u64 },
-    Edit { slug: String, actor: String, target: u64, text: String, now_ms: u64 },
-    Delete { slug: String, actor: String, target: u64 },
-    MarkRead { slug: String, user: String, cursor: u64 },
+    CreateRoom {
+        owner: String,
+        name: String,
+    },
+    AddMember {
+        slug: String,
+        actor: String,
+        user: String,
+        role: Role,
+    },
+    RemoveMember {
+        slug: String,
+        actor: String,
+        user: String,
+    },
+    Post {
+        slug: String,
+        author: String,
+        text: String,
+        now_ms: u64,
+    },
+    Edit {
+        slug: String,
+        actor: String,
+        target: u64,
+        text: String,
+        now_ms: u64,
+    },
+    Delete {
+        slug: String,
+        actor: String,
+        target: u64,
+    },
+    MarkRead {
+        slug: String,
+        user: String,
+        cursor: u64,
+    },
+    /// A finished upload's record (docs/FILES.md, task T330a): who uploaded which bytes to which room, under which name.
+    /// Tag 16 (8 to 15 stay unassigned): `str slug | str uploader | 16 file id | 32 SHA-256 | u64 size | str name | u8 has image size |
+    /// [u32 width | u32 height]`.
+    FileStored {
+        slug: String,
+        uploader: String,
+        file: [u8; 16],
+        sha256: [u8; 32],
+        size: u64,
+        name: String,
+        image: Option<(u32, u32)>,
+    },
 }
 
 /// `FieldLength` if a string is longer than `MAX_STR` bytes. (Strings may be empty here: `Server` decides what is
@@ -84,6 +127,23 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             encode_str(&mut out, slug)?;
             encode_str(&mut out, user)?;
             out.extend_from_slice(&cursor.to_be_bytes());
+        }
+        Op::FileStored { slug, uploader, file, sha256, size, name, image } => {
+            out.push(FILE_STORED);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, uploader)?;
+            out.extend_from_slice(file);
+            out.extend_from_slice(sha256);
+            out.extend_from_slice(&size.to_be_bytes());
+            encode_str(&mut out, name)?;
+            match image {
+                None => out.push(0),
+                Some((width, height)) => {
+                    out.push(1);
+                    out.extend_from_slice(&width.to_be_bytes());
+                    out.extend_from_slice(&height.to_be_bytes());
+                }
+            }
         }
     }
     Ok(out)
@@ -180,8 +240,40 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::MarkRead { slug, user, cursor })
         }
+        FILE_STORED => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let uploader = decode_str(bytes, &mut pos)?;
+            let file = decode_array::<16>(bytes, &mut pos)?;
+            let sha256 = decode_array::<32>(bytes, &mut pos)?;
+            let size = decode_u64(bytes, &mut pos)?;
+            let name = decode_str(bytes, &mut pos)?;
+            let [has_image] = decode_array::<1>(bytes, &mut pos)?;
+            let image = match has_image {
+                0 => None,
+                1 => {
+                    let [w0, w1, w2, w3] = decode_array::<4>(bytes, &mut pos)?;
+                    let [h0, h1, h2, h3] = decode_array::<4>(bytes, &mut pos)?;
+                    Some((u32::from_be_bytes([w0, w1, w2, w3]), u32::from_be_bytes([h0, h1, h2, h3])))
+                }
+                other => return Err(CodecError::BadKind(other)),
+            };
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::FileStored { slug, uploader, file, sha256, size, name, image })
+        }
         _ => Err(CodecError::BadKind(tag)),
     }
+}
+
+/// The tag of `Op::FileStored` (task T330a).
+const FILE_STORED: u8 = 16;
+
+fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
+    let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;
+    let array: [u8; N] = bytes.get(*pos..end).ok_or(CodecError::Truncated)?.try_into().map_err(|_| CodecError::Truncated)?;
+    *pos = end;
+    Ok(array)
 }
 
 fn encode_str(out: &mut Vec<u8>, s: &str) -> Result<(), CodecError> {

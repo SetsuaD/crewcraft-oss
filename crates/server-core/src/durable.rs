@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::request::{MAX_AUTHOR, MAX_HITS, MAX_SNIPPET, SearchHit};
@@ -43,6 +43,43 @@ pub struct DurableServer {
     search: RoomSearch,
     /// Every live message's author and current plain text, by room and cursor, for search results (task T320b).
     previews: HashMap<String, HashMap<u64, (String, String)>>,
+    /// Every finished upload's record, by file id (docs/FILES.md, task T330a).
+    files: HashMap<[u8; 16], StoredFile>,
+}
+
+/// A finished upload (task T330a): its room, uploader, bytes (by SHA-256), size, name and, for an image, its size.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredFile {
+    pub room: String,
+    pub uploader: String,
+    pub sha256: [u8; 32],
+    pub size: u64,
+    pub name: String,
+    pub image: Option<(u32, u32)>,
+}
+
+/// Why a file record was refused (task T330a). Nothing is recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileError {
+    /// The uploader is not a member of the room, or the room does not exist.
+    NotMember,
+    /// The name is empty, longer than `MAX_FILE_NAME` bytes, `.` or `..`, or holds a path separator or a control
+    /// character.
+    BadName,
+    /// The size is 0.
+    Empty,
+    /// A file with this id is already recorded.
+    DuplicateId,
+    /// The journal refused it, or the server is poisoned.
+    Durable(DurableError),
+}
+
+/// The longest file name, in bytes.
+pub const MAX_FILE_NAME: usize = 255;
+
+/// Whether `name` can name a file: 1 to `MAX_FILE_NAME` bytes, not `.` or `..`, no `/`, `\\` or control character.
+pub fn valid_file_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= MAX_FILE_NAME && name != "." && name != ".." && !name.chars().any(|c| c == '/' || c == '\\' || c.is_control())
 }
 
 /// The most hits one search returns (task T320a).
@@ -58,15 +95,52 @@ impl DurableServer {
         let mut server = Server::new();
         let mut search = RoomSearch::new();
         let mut previews = HashMap::new();
+        let mut files = HashMap::new();
         for (index, record) in records.iter().enumerate() {
             let op = decode_op(record).map_err(|_| DurableError::Corrupt { index })?;
+            if let Op::FileStored { slug, uploader, file, sha256, size, name, image } = op {
+                check_file(&server, &files, &slug, &uploader, &file, size, &name).map_err(|_| DurableError::Corrupt { index })?;
+                files.insert(file, StoredFile { room: slug, uploader, sha256, size, name, image });
+                continue;
+            }
             let indexed = searchable(&op);
             let cursor = replay(&mut server, op).map_err(|_| DurableError::Corrupt { index })?;
             if let Some((slug, actor)) = indexed {
                 index_event(&server, &mut search, &mut previews, &slug, &actor, cursor);
             }
         }
-        Ok(Self { server, journal, poisoned: false, search, previews })
+        Ok(Self { server, journal, poisoned: false, search, previews, files })
+    }
+
+    /// Record a finished upload (task T330a). Call it only after `file_store::FileStore::finish` returned `Ok` for these
+    /// bytes: the record is the file's existence. The uploader must be a member of `slug` now.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_file(
+        &mut self,
+        slug: &str,
+        uploader: &str,
+        file: [u8; 16],
+        sha256: [u8; 32],
+        size: u64,
+        name: &str,
+        image: Option<(u32, u32)>,
+    ) -> Result<(), FileError> {
+        self.check_alive().map_err(FileError::Durable)?;
+        check_file(&self.server, &self.files, slug, uploader, &file, size, name)?;
+        let op = Op::FileStored { slug: slug.to_owned(), uploader: uploader.to_owned(), file, sha256, size, name: name.to_owned(), image };
+        self.record(&op).map_err(FileError::Durable)?;
+        self.files.insert(file, StoredFile { room: slug.to_owned(), uploader: uploader.to_owned(), sha256, size, name: name.to_owned(), image });
+        Ok(())
+    }
+
+    /// The record of file `file`, if there is one. Whether someone may read it is the caller's to decide.
+    pub fn file(&self, file: &[u8; 16]) -> Option<&StoredFile> {
+        self.files.get(file)
+    }
+
+    /// The SHA-256 of every recorded file's bytes: what `FileStore::sweep` must keep.
+    pub fn referenced_hashes(&self) -> HashSet<[u8; 32]> {
+        self.files.values().map(|file| file.sha256).collect()
     }
 
     /// `search`, with each hit's author and the start of its current plain text (task T320b): what a hits frame
@@ -183,7 +257,34 @@ fn replay(server: &mut Server, op: Op) -> Result<u64, ServerError> {
         Op::Edit { slug, actor, target, text, now_ms } => server.edit(&slug, &actor, target, &text, now_ms),
         Op::Delete { slug, actor, target } => server.delete(&slug, &actor, target),
         Op::MarkRead { slug, user, cursor } => server.mark_read(&slug, &user, cursor).map(|_| 0),
+        // Handled before `replay` is called: a file record changes no room.
+        Op::FileStored { .. } => Ok(0),
     }
+}
+
+/// The checks a file record must pass, when it is made and when it is replayed.
+fn check_file(
+    server: &Server,
+    files: &HashMap<[u8; 16], StoredFile>,
+    slug: &str,
+    uploader: &str,
+    file: &[u8; 16],
+    size: u64,
+    name: &str,
+) -> Result<(), FileError> {
+    if !server.room(slug).is_ok_and(|room| room.role(uploader).is_some()) {
+        return Err(FileError::NotMember);
+    }
+    if !valid_file_name(name) {
+        return Err(FileError::BadName);
+    }
+    if size == 0 {
+        return Err(FileError::Empty);
+    }
+    if files.contains_key(file) {
+        return Err(FileError::DuplicateId);
+    }
+    Ok(())
 }
 
 /// The room and the person of a change that search indexes: a post, an edit or a deletion.
