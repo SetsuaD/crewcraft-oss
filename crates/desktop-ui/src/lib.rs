@@ -498,7 +498,7 @@ impl Window {
                 ui.add_space(16.0);
                 // Message search (T320c): Enter or the button sends it; the main pane then shows what it found.
                 let label = ui.label("Search messages");
-                let search = ui.add(TextEdit::singleline(&mut self.message_query).hint_text("Find a message").desired_width(220.0)).labelled_by(label.id);
+                let search = ui.add(TextEdit::singleline(&mut self.message_query).hint_text("Find a message").desired_width(180.0)).labelled_by(label.id);
                 let enter = search.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
                 if ui.button("Search").clicked() || enter {
                     let query = self.message_query.trim();
