@@ -378,6 +378,35 @@ mode is redeemed by an external sign-in instead of choosing a password and setti
 sign-in is stored on the account. After that, only that subject signs in to it; an ID token for another subject with
 the same email is refused. An administrator can re-bind an account (audited).
 
+**Enrolling through the provider (task T611i).** On a server whose `identity.toml` sets `source = "oidc"`, the
+bootstrap connection (section 3) takes a third pair of calls in place of the password and the authenticator:
+
+1. `RedeemExternal { device_name, csr }`: the same checks as `Redeem` up to staging (invitation live, CSR, limits), but no
+   password. The server answers `ExternalStart { issuer, client_id, authorization_endpoint, nonce }` with a fresh
+   nonce bound to **this bootstrap key**, valid for 10 minutes and usable once. Nothing durable changes.
+2. The app runs steps 2 and 3 of the flow above (PKCE, state, loopback, system browser) while the bootstrap connection
+   stays open, as it does today while the person reads the authenticator code. The connection's confirmation window is
+   at least the browser timeout.
+3. `ConfirmExternal { code, verifier, redirect_uri }` on the same connection and the same staged attempt. The server
+   exchanges the code, verifies the ID token with the nonce it issued for this bootstrap key and `require-mfa`, and then
+   checks, in this order, refusing with a generic error and nothing durable changed:
+   - the token's `email` equals the invitation's address (case-insensitive), so a colleague who obtains the link cannot
+     bind their own provider account to someone else's invitation (the subject, not the email, is what is stored);
+   - no account is bound to that `(issuer, subject)` already;
+   - with an authorizer configured, a fresh `allow` with `use` (`purpose: sign-in`), and the decision is stored.
+   One `activate` then commits the invitation, the person (no password, no TOTP secret), the device and its exact leaf,
+   **and the binding** together (`AccountOp::ActivatedExternal`, one journal record, so an account never exists
+   unbound). Only after it returns `Ok` is the leaf sent as `Activated`.
+
+On an `oidc` server, `Redeem` (password and authenticator) is refused, and on any other server `RedeemExternal` is
+refused, so a server has exactly one way in. The invitation link carries the mode (`&signin=org`) so the app shows the
+right form; the server, not the link, decides. Signing in afterwards is the flow above. An account enrolled this way
+has no CrewCraft password or code, so it cannot be signed in to any other way.
+
+The sub-tasks, each test-defined: the bootstrap wire messages (`crewcraft-proto`), the account store's
+`ActivatedExternal`, the bootstrap state machine's external path, the app's enrollment through the browser and the
+link's mode, and an end-to-end test that enrolls, signs in and chats against a running server with a fake provider.
+
 **While signed in.** The session layer re-checks the authorizer by the T600 rules (10 minutes, 60-second retry, at most
 24 hours of grace from the last confirmation, none for the visitor module). A `deny` ends the person's sessions at the
 next check; signing out and device revocation work as before.

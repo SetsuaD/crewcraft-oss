@@ -1,0 +1,22 @@
+{
+  "id": "T611i-enroll-wire",
+  "title": "The bootstrap messages for enrolling through an identity provider",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/bootstrap.rs",
+    "crates/proto/src/signin.rs",
+    "apps/crewcraft/src/enroll_client.rs",
+    "docs/SECURITY-DESIGN.md"
+  ],
+  "test_path": "crates/proto/tests/t611i_enroll_wire.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t611i_enroll_wire",
+  "depends_on": [
+    "T204-bootstrap-codec",
+    "T611a-external-signin-wire"
+  ],
+  "spec": "Bootstrap request tag 39 RedeemExternal { device_name (1 to MAX_DEVICE_NAME), csr (1 to MAX_CSR) } and tag 40 ConfirmExternal { code (1 to MAX_AUTH_CODE_BYTES), verifier (MIN_VERIFIER_LEN to MAX_VERIFIER_LEN), redirect_uri (1 to MAX_REDIRECT_BYTES), each printable ASCII }; response tag 167 ExternalStart { issuer, client_id, authorization_endpoint, nonce (a 32-byte base64url token) }. Encoder and decoder enforce the same limits (FieldLength), Truncated and TrailingBytes as for the other bootstrap messages. Debug hides the code, the verifier and the nonce. The sign-in tags (34 to 38, 163 to 166) stay BadKind for the bootstrap decoders, and the new tags are refused by the ordinary request decoder and the sign-in decoders.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}
