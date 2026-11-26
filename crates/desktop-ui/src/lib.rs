@@ -17,6 +17,7 @@ pub mod text;
 use std::collections::HashMap;
 use std::fmt;
 
+use chrono::{DateTime, Datelike};
 use crewcraft_client_core::room_view::Shown;
 use crewcraft_ui_model::composer::Composer;
 use crewcraft_ui_model::feed::feed_rows;
@@ -1898,19 +1899,16 @@ pub fn decode_preview(bytes: &[u8]) -> Option<egui::ColorImage> {
 
 /// A time as `2024-03-05 14:07 UTC` (T350d2). Imported times are shown in UTC: the window has no time zone database.
 pub fn utc_time(ms: u64) -> String {
+    /// Days in 400 Gregorian years, after which the calendar repeats.
+    const CYCLE_DAYS: u64 = 146_097;
     let seconds = ms / 1000;
-    let (days, of_day) = ((seconds / 86_400) as i64, seconds % 86_400);
-    // Howard Hinnant's civil_from_days.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02} {:02}:{:02} UTC", of_day / 3600, of_day % 3600 / 60)
+    let (days, of_day) = (seconds / 86_400, seconds % 86_400);
+    // chrono gives the date (Craft standard time.md). A time past chrono's range is first moved back by whole 400-year
+    // cycles, which keeps the month and day, and the cycles go back on the year.
+    let (cycles, rest) = (days / CYCLE_DAYS, days % CYCLE_DAYS);
+    let Some(date) = i64::try_from(rest * 86_400).ok().and_then(|at| DateTime::from_timestamp(at, 0)) else { return String::new() };
+    let year = u64::from(date.year().unsigned_abs()) + 400 * cycles;
+    format!("{year:04}-{:02}-{:02} {:02}:{:02} UTC", date.month(), date.day(), of_day / 3600, of_day % 3600 / 60)
 }
 
 /// A labelled one-line field whose text is zeroed when dropped. `hidden` draws it as a password field.
@@ -1923,4 +1921,17 @@ fn secret_field(ui: &mut Ui, label: &str, value: &mut Zeroizing<String>, hidden:
 fn is_code(code: &str) -> bool {
     let code = code.trim();
     (6..=8).contains(&code.len()) && code.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::utc_time;
+
+    #[test]
+    fn utc_times_past_one_400_year_cycle_keep_the_calendar() {
+        // 2400-02-29 12:34 UTC: past 2370, so the date comes back from one 400-year cycle, on a century leap day.
+        assert_eq!(utc_time(13_574_608_440_000), "2400-02-29 12:34 UTC");
+        // Far past chrono's range: a date, not a panic.
+        assert!(utc_time(u64::MAX).ends_with(" UTC"));
+    }
 }
