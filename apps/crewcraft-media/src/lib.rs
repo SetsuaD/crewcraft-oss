@@ -15,9 +15,14 @@
 //! the earliest joiner first, so forwarding a new participant never needs a new offer. Who is in which section
 //! is not announced yet; each frame's SFrame key id already says who sent it.
 //!
-//! Seams for later tasks: the chat server's control connection (mutual TLS) calls [`MediaServer::drop_person`] and
-//! [`MediaServer::end_call`]; the signalling intake that carries an offer and a credential to [`MediaServer::join`],
-//! the socket loop and the configuration file come with the binary.
+//! Around this core (T363b): [`config`] reads `media.toml` and the chat server's key, [`serve`] drives the core from a
+//! UDP socket until told to stop, and [`intake`] is the seam requests come in through (joins, drops, ended calls). The
+//! chat server's control connection (mutual TLS) implements [`intake::Intake`] in a later task; until then the binary
+//! admits no one.
+
+pub mod config;
+pub mod intake;
+pub mod serve;
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -83,8 +88,11 @@ pub enum JoinError {
     Credential(CredentialError),
     /// A good credential, but for another call than the one asked for. It is used up.
     WrongCall,
-    /// The call already has `MAX_CALL_SIZE` participants. The credential is used up.
+    /// The call already has as many participants as the server allows (at most `MAX_CALL_SIZE`). The credential is
+    /// used up.
     CallFull,
+    /// The server is not running (an intake answer when the serving loop has stopped).
+    Stopped,
 }
 
 /// A media section the server sends on: it carries one other participant's section, or nothing yet.
@@ -154,12 +162,25 @@ pub struct MediaServer {
     next_id: u64,
     /// Goodbyes (DTLS close_notify) of removed participants, sent on the next `poll`.
     outbox: Vec<Datagram>,
+    max_call_size: usize,
 }
 
 impl MediaServer {
     pub fn new(config: Config) -> Self {
         let verifier = Verifier::new(config.trusted_key, &config.server_name);
-        Self { config, verifier, crypto: Arc::new(crewcraft_media_crypto::provider()), participants: BTreeMap::new(), next_id: 1, outbox: Vec::new() }
+        let crypto = Arc::new(crewcraft_media_crypto::provider());
+        Self { config, verifier, crypto, participants: BTreeMap::new(), next_id: 1, outbox: Vec::new(), max_call_size: MAX_CALL_SIZE }
+    }
+
+    /// Allow at most `size` participants per call, between 1 and `MAX_CALL_SIZE` (the default). Calls already larger
+    /// keep who they have; only new joins are refused.
+    pub fn set_max_call_size(&mut self, size: usize) {
+        self.max_call_size = size.clamp(1, MAX_CALL_SIZE);
+    }
+
+    /// The address the server gives participants as its ICE candidate.
+    pub fn address(&self) -> SocketAddr {
+        self.config.address
     }
 
     /// Admit a participant to `call` with its WebRTC `offer` (SDP) and the chat server's `credential`, at `now` and
@@ -180,7 +201,7 @@ impl MediaServer {
         let replaced =
             self.participants.iter().find(|(_, p)| p.call == call && p.person == grant.person && p.device == grant.device).map(|(id, _)| *id);
         let others = self.participants.values().filter(|p| p.call == call).count() - usize::from(replaced.is_some());
-        if others >= MAX_CALL_SIZE {
+        if others >= self.max_call_size {
             return Err(JoinError::CallFull);
         }
 
@@ -290,6 +311,13 @@ impl MediaServer {
     /// Drop everyone in `call` (the call ended). Returns how many were dropped.
     pub fn end_call(&mut self, call: u64) -> usize {
         let ids: Vec<ParticipantId> = self.participants.iter().filter(|(_, p)| p.call == call).map(|(id, _)| *id).collect();
+        ids.into_iter().filter(|id| self.remove(*id)).count()
+    }
+
+    /// Drop everyone on the server (it is shutting down). Their goodbyes go out on the next `poll`. Returns how many
+    /// were dropped.
+    pub fn close_all(&mut self) -> usize {
+        let ids: Vec<ParticipantId> = self.participants.keys().copied().collect();
         ids.into_iter().filter(|id| self.remove(*id)).count()
     }
 

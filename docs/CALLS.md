@@ -102,6 +102,14 @@ clients against the server in memory. Still to come: the binary (socket loop, co
 that brings offers and credentials), the chat server's control connection that calls `drop_person` and `end_call`,
 `CallJoin` issuing credentials (T360b2), video and keyframe requests, and telling clients who is in which section.
 
+**Built (T363b).** The binary: `crewcraft-media <media.toml>` reads its settings in the strict TOML subset (server
+name, listen address, public address for the ICE candidate, the chat server's key file and a call size cap) and the
+key, a file next to it that must be owner-only like the server's other keys. One UDP socket drives the core: requests
+in, datagrams in, str0m's timeouts, datagrams out. Ctrl+C or SIGTERM closes every session, sends the goodbyes and
+exits. Requests come through `crewcraft_media::intake`: an in-process seam (`Intake`, with a channel `Handle`) that
+the chat server's control connection will implement; until it does, the binary admits no one. The test runs the loop
+on loopback UDP with two str0m clients.
+
 ## Audio (T360e) and video (T360f): decisions first
 
 These need native code or young crates; each is decided when its task starts and recorded in NON-RUST-DEPENDENCIES.md.
