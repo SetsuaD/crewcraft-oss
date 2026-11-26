@@ -153,6 +153,14 @@ pub enum Update {
         call: Option<u64>,
         reason: Option<String>,
     },
+    /// This app's call in `room` is end-to-end encrypted under key id `kid`, with the sender keys of `from` received
+    /// (task T360d3).
+    CallSecurity {
+        room: String,
+        call: u64,
+        kid: u64,
+        from: Vec<String>,
+    },
     /// `room` is an archive room (task T350d2): read-only, with its imported messages' original times by cursor.
     Archive {
         room: String,
@@ -190,6 +198,9 @@ impl fmt::Debug for Update {
             Self::Threads { room, parents } => f.debug_struct("Threads").field("room", room).field("replies", &parents.len()).finish(),
             Self::Calls { room, open, lines } => {
                 f.debug_struct("Calls").field("room", room).field("open", &open.as_ref().map(|c| c.call)).field("lines", &lines.len()).finish()
+            }
+            Self::CallSecurity { room, call, kid, from } => {
+                f.debug_struct("CallSecurity").field("room", room).field("call", call).field("kid", kid).field("from", &from.len()).finish()
             }
             Self::InCall { room, call, .. } => f.debug_struct("InCall").field("room", room).field("call", call).finish(),
             Self::Archive { room, times } => f.debug_struct("Archive").field("room", room).field("times", &times.len()).finish(),
@@ -306,6 +317,8 @@ pub struct Window {
     call_lines: HashMap<String, std::collections::BTreeMap<u64, String>>,
     /// The call this app is in: `(room, call)` (T360a2).
     in_call: Option<(String, u64)>,
+    /// Whose sender keys reached this app in the call it is in (T360d3).
+    call_security: Option<(u64, Vec<String>)>,
     /// Archive rooms (T350d2): listed under Archive, read-only.
     archived: std::collections::HashSet<String>,
     /// Imported messages' original times, per archive room and cursor (T350d2).
@@ -482,7 +495,15 @@ impl Window {
                 }
                 self.call_lines.insert(room, lines.into_iter().collect());
             }
+            Update::CallSecurity { room, call, from, .. } => {
+                if self.in_call.as_ref().is_some_and(|(r, c)| *r == room && *c == call) {
+                    self.call_security = Some((call, from));
+                }
+            }
             Update::InCall { room, call, reason } => {
+                if call.is_none() {
+                    self.call_security = None;
+                }
                 self.in_call = call.map(|call| (room, call));
                 if let Some(reason) = reason {
                     self.notice = Some(reason);
@@ -997,6 +1018,11 @@ impl Window {
                     self.actions.push(Action::Room(Command::CallLeave { room: room.to_owned(), call: open.call }));
                 }
                 ui.label(format!("In call ({})", open.participants.len()));
+                // End-to-end encryption (T360d3): whose keys have arrived, of the others in the call.
+                if let Some((_, from)) = self.call_security.as_ref().filter(|(c, _)| *c == open.call) {
+                    let others = open.participants.len().saturating_sub(1);
+                    ui.weak(format!("End-to-end encrypted: keys from {} of {others}", from.len().min(others)));
+                }
             }
             Some(open) => {
                 if ui.button("Join call").clicked() {

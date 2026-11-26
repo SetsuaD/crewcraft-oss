@@ -950,6 +950,7 @@ dependencies = [
  "crewcraft-pki",
  "crewcraft-proto",
  "crewcraft-server-core",
+ "crewcraft-sframe",
  "crewcraft-theme",
  "crewcraft-tls",
  "crewcraft-totp",
