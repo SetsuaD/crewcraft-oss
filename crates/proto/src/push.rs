@@ -22,6 +22,10 @@
 //! - tag 76 `CallState` (task T360a1): `u64 call | u8 video | str started_by | u64 started_ms | u8 count | count × str
 //!   participant`. The room's open call, sent after a `Sync` before the room's events (cursor 0, advances nothing),
 //!   only with `FEATURE_CALLS`.
+//! - tag 77 `CallKeys` (task T360d2): `u64 call | u8 count | count × (str person | 32 X25519 public key)`, the call
+//!   keys of the open call's participants; and tag 78 `CallSealed`: `u64 call | str from | u64 kid | u16 length | bytes`,
+//!   a sender key sealed to the person syncing. Both follow `CallState` (cursor 0, advance nothing), only with
+//!   `request::FEATURE_CALLS`.
 //! - tag 72 `Reacted` (task T341a): `u64 target | str author | u8 reaction (1 to REACTIONS.len()) | u8 on (0 or 1)`.
 //!   An event of its own: it advances the cursor like `Other`. A client that did not agree to
 //!   `request::FEATURE_REACTIONS` is sent `Other` in its place.
@@ -45,6 +49,9 @@ pub const SENT: u8 = 74;
 /// The tags of `Push::CallLine` and `Push::CallState` (task T360a1).
 pub const CALL_LINE: u8 = 75;
 pub const CALL_STATE: u8 = 76;
+/// The tags of `Push::CallKeys` and `Push::CallSealed` (task T360d2).
+pub const CALL_KEYS: u8 = 77;
+pub const CALL_SEALED: u8 = 78;
 /// The most participants a `CallState` lists.
 pub const MAX_PARTICIPANTS: usize = 255;
 /// The tag of `Push::Reacted` (task T341a).
@@ -150,6 +157,22 @@ pub enum Push {
         started_by: String,
         started_ms: u64,
         participants: Vec<String>,
+    },
+    /// The call keys of the open call's participants (task T360d2). `cursor` is 0.
+    CallKeys {
+        room: String,
+        cursor: u64,
+        call: u64,
+        keys: Vec<(String, [u8; 32])>,
+    },
+    /// `from`'s key `kid` for the call, sealed to the person syncing (task T360d2). `cursor` is 0.
+    CallSealed {
+        room: String,
+        cursor: u64,
+        call: u64,
+        from: String,
+        kid: u64,
+        sealed: Vec<u8>,
     },
 }
 
@@ -276,6 +299,33 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
             write_str(&mut out, author, 1, MAX_NAME)?;
             write_str(&mut out, text, 0, MAX_HTML)?;
         }
+        Push::CallKeys { room, cursor, call, keys } => {
+            if keys.len() > MAX_PARTICIPANTS {
+                return Err(CodecError::FieldLength);
+            }
+            out.push(CALL_KEYS);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&call.to_be_bytes());
+            out.push(keys.len() as u8);
+            for (person, key) in keys {
+                write_str(&mut out, person, 1, MAX_NAME)?;
+                out.extend_from_slice(key);
+            }
+        }
+        Push::CallSealed { room, cursor, call, from, kid, sealed } => {
+            if sealed.is_empty() || sealed.len() > crate::request::MAX_SEALED {
+                return Err(CodecError::FieldLength);
+            }
+            out.push(CALL_SEALED);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&call.to_be_bytes());
+            write_str(&mut out, from, 1, MAX_NAME)?;
+            out.extend_from_slice(&kid.to_be_bytes());
+            out.extend_from_slice(&(sealed.len() as u16).to_be_bytes());
+            out.extend_from_slice(sealed);
+        }
         Push::CallState { room, cursor, call, video, started_by, started_ms, participants } => {
             if participants.len() > MAX_PARTICIPANTS {
                 return Err(CodecError::FieldLength);
@@ -346,6 +396,8 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         && tag != SENT
         && tag != CALL_LINE
         && tag != CALL_STATE
+        && tag != CALL_KEYS
+        && tag != CALL_SEALED
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -398,6 +450,33 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
             let author = read_string(bytes, &mut pos, 1, MAX_NAME)?;
             let text = read_string(bytes, &mut pos, 0, MAX_HTML)?;
             Push::CallLine { room, cursor, call, ended, author, text }
+        }
+        CALL_KEYS => {
+            let call = read_u64(bytes, &mut pos)?;
+            let count = usize::from(read_u8(bytes, &mut pos)?);
+            let mut keys = Vec::with_capacity(count);
+            for _ in 0..count {
+                let person = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+                let end = pos.checked_add(32).filter(|end| *end <= bytes.len()).ok_or(CodecError::Truncated)?;
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&bytes[pos..end]);
+                pos = end;
+                keys.push((person, key));
+            }
+            Push::CallKeys { room, cursor, call, keys }
+        }
+        CALL_SEALED => {
+            let call = read_u64(bytes, &mut pos)?;
+            let from = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let kid = read_u64(bytes, &mut pos)?;
+            let len = (usize::from(read_u8(bytes, &mut pos)?) << 8) | usize::from(read_u8(bytes, &mut pos)?);
+            if len == 0 || len > crate::request::MAX_SEALED {
+                return Err(CodecError::FieldLength);
+            }
+            let end = pos.checked_add(len).filter(|end| *end <= bytes.len()).ok_or(CodecError::Truncated)?;
+            let sealed = bytes[pos..end].to_vec();
+            pos = end;
+            Push::CallSealed { room, cursor, call, from, kid, sealed }
         }
         CALL_STATE => {
             let call = read_u64(bytes, &mut pos)?;

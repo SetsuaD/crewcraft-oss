@@ -113,7 +113,7 @@ impl Connection {
             |_, _, _| Vec::new(),
             |_, _, _| None,
             |_, _, _| None,
-            |_, _| None,
+            |_, _, _| Vec::new(),
         )
     }
 
@@ -154,7 +154,7 @@ impl Connection {
         attachments: impl Fn(&S, &str, u64) -> Vec<crewcraft_proto::push::AttachedFile>,
         parent_of: impl Fn(&S, &str, u64) -> Option<u64>,
         sent_of: impl Fn(&S, &str, u64) -> Option<u64>,
-        call_state: impl Fn(&S, &str) -> Option<Push>,
+        call_state: impl Fn(&S, &str, &str) -> Vec<Push>,
     ) -> Result<Vec<u8>, E> {
         self.decoder.push(bytes);
         let mut out = Vec::new();
@@ -184,8 +184,10 @@ impl Connection {
                 let archive = self.features & crewcraft_proto::request::FEATURE_ARCHIVE != 0;
                 let calls_on = self.features & crewcraft_proto::request::FEATURE_CALLS != 0;
                 // The room's open call, before its events (task T360a1).
-                if calls_on && let Some(state) = call_state(server, room) {
-                    out.extend_from_slice(&encode(&encode_push(&state).map_err(ConnError::Request)?).map_err(ConnError::Frame)?);
+                if calls_on {
+                    for state in call_state(server, room, &self.user) {
+                        out.extend_from_slice(&encode(&encode_push(&state).map_err(ConnError::Request)?).map_err(ConnError::Frame)?);
+                    }
                 }
                 // An archive room says so before its events (task T350d1).
                 if archive && service.is_read_only() {
@@ -261,6 +263,8 @@ fn calls(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64)
         Request::CallJoin { room, call } => server.call_join(room, user, *call, now_ms).map(|()| *call),
         Request::CallHeartbeat { room, call } => server.call_heartbeat(room, user, *call, now_ms).map(|()| *call),
         Request::CallLeave { room, call } => server.call_leave(room, user, *call, now_ms).map(|()| *call),
+        Request::CallKey { room, call, public } => server.call_key(room, user, *call, *public, now_ms).map(|()| *call),
+        Request::CallSeal { room, call, to, kid, sealed } => server.call_seal(room, user, *call, to, *kid, sealed.clone(), now_ms).map(|()| *call),
         _ => return None,
     };
     Some(match answer {
@@ -272,10 +276,11 @@ fn calls(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64)
     })
 }
 
-/// The open call of `room` as a `CallState` push (task T360a1).
-fn call_state(server: &DurableServer, room: &str) -> Option<Push> {
-    let call = server.open_call(room)?;
-    Some(Push::CallState {
+/// The open call of `room` for `user`: its `CallState`, the participants' call keys, and the sender keys sealed to
+/// `user` (tasks T360a1, T360d2).
+fn call_state(server: &DurableServer, room: &str, user: &str) -> Vec<Push> {
+    let Some(call) = server.open_call(room) else { return Vec::new() };
+    let mut pushes = vec![Push::CallState {
         room: room.to_owned(),
         cursor: 0,
         call: call.id,
@@ -283,7 +288,17 @@ fn call_state(server: &DurableServer, room: &str) -> Option<Push> {
         started_by: call.started_by.clone(),
         started_ms: call.started_ms,
         participants: call.present.keys().take(crewcraft_proto::push::MAX_PARTICIPANTS).cloned().collect(),
-    })
+    }];
+    if !call.keys.is_empty() {
+        let keys = call.keys.iter().take(crewcraft_proto::push::MAX_PARTICIPANTS).map(|(person, key)| (person.clone(), *key)).collect();
+        pushes.push(Push::CallKeys { room: room.to_owned(), cursor: 0, call: call.id, keys });
+    }
+    for ((to, from, kid), sealed) in &call.sealed {
+        if to == user {
+            pushes.push(Push::CallSealed { room: room.to_owned(), cursor: 0, call: call.id, from: from.clone(), kid: *kid, sealed: sealed.clone() });
+        }
+    }
+    pushes
 }
 
 /// Answer an upload request over a durable server (task T330b): `None` for any other request. A refusal is an `Error`

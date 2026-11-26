@@ -1,0 +1,28 @@
+{
+  "id": "T360d2-call-keys",
+  "title": "Call keys through the chat server: published keys and sealed sender keys",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/proto/src/push.rs",
+    "crates/server-core/src/calls.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/server-core/Cargo.toml",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/inbox.rs",
+    "crates/client-core/src/room_view.rs",
+    "Cargo.lock"
+  ],
+  "test_path": "crates/server-core/tests/t360d2_call_keys.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t360d2_call_keys",
+  "depends_on": [
+    "T360a1-call-records",
+    "T360d1-sealed-keys"
+  ],
+  "spec": "Requests 22 CallKey { room, call, public } and 23 CallSeal { room, call, to, kid, sealed (1 to MAX_SEALED = 256 bytes) }, answered Ok with the call id, behind FEATURE_CALLS. Only someone in the call publishes a key (it counts as a heartbeat); a sealed key goes only to someone else in the call; a sender keeps at most MAX_KIDS_PER_PAIR (8) kids per recipient, the oldest dropped. Leaving forgets the person's key and every box to or from them; an ended call keeps none. Keys and boxes are not journaled. After Sync, with FEATURE_CALLS, CallState is followed by push 77 CallKeys (every participant's key) and push 78 CallSealed for each box sealed to the person syncing, and to no one else; none advance the cursor. The client inbox keeps RoomView::call_keys(call) and sealed(call), cleared when the call ends. End to end with crewcraft_sframe::seal: the recipient opens the box and decrypts the sender's SFrame frame; another participant cannot open it.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}

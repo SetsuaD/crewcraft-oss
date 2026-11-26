@@ -21,6 +21,9 @@
 //! - tags 18 to 21 (task T360a1, docs/CALLS.md), announced by `FEATURE_CALLS`, each answered `Ok { cursor }` with the
 //!   call's id: 18 `CallStart`: `str room | u8 video (0 or 1)` (joins the room's open call if it has one); 19
 //!   `CallJoin`, 20 `CallHeartbeat` and 21 `CallLeave`: `str room | u64 call`
+//! - tags 22 and 23, call keys (task T360d2), answered `Ok { cursor }` with the call's id: 22 `CallKey`: `str room | u64
+//!   call | 32 X25519 public key`, the sender's device's key for the call; 23 `CallSeal`: `str room | u64 call | str to
+//!   | u64 kid | u16 length | 1 to MAX_SEALED bytes`, a sender key sealed to one participant (`crewcraft_sframe::seal`)
 //! - tag 17 `React` (task T341a): `str room | u64 target | u8 reaction (1 to push::REACTIONS.len()) | u8 on (0 or 1)`,
 //!   answered `Ok { cursor }` of the reaction's event; announced by `FEATURE_REACTIONS`
 //!
@@ -104,6 +107,10 @@ const CALL_START: u8 = 18;
 const CALL_JOIN: u8 = 19;
 const CALL_HEARTBEAT: u8 = 20;
 const CALL_LEAVE: u8 = 21;
+const CALL_KEY: u8 = 22;
+const CALL_SEAL: u8 = 23;
+/// The largest sealed sender key a `CallSeal` carries.
+pub const MAX_SEALED: usize = 256;
 /// The most files one `PostFiles` attaches (task T330c).
 pub const MAX_POST_FILES: usize = 10;
 
@@ -193,6 +200,20 @@ pub enum Request {
     CallLeave {
         room: String,
         call: u64,
+    },
+    /// This device's X25519 public key for call `call` of `room`, for others to seal their keys to (task T360d2).
+    CallKey {
+        room: String,
+        call: u64,
+        public: [u8; 32],
+    },
+    /// The sender's key `kid` for call `call`, sealed to participant `to` (task T360d2).
+    CallSeal {
+        room: String,
+        call: u64,
+        to: String,
+        kid: u64,
+        sealed: Vec<u8>,
     },
     /// Up to `length` bytes of file `file` from `offset` (task T330d).
     Download {
@@ -384,6 +405,26 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.push(*reaction);
             out.push(u8::from(*on));
         }
+        Request::CallKey { room, call, public } => {
+            out.push(CALL_KEY);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&call.to_be_bytes());
+            out.extend_from_slice(public);
+        }
+        Request::CallSeal { room, call, to, kid, sealed } => {
+            if sealed.is_empty() || sealed.len() > MAX_SEALED {
+                return Err(CodecError::FieldLength);
+            }
+            out.push(CALL_SEAL);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&call.to_be_bytes());
+            write_str(&mut out, to, 1, MAX_NAME)?;
+            out.extend_from_slice(&kid.to_be_bytes());
+            out.extend_from_slice(&(sealed.len() as u16).to_be_bytes());
+            out.extend_from_slice(sealed);
+        }
         Request::CallStart { room, video } => {
             out.push(CALL_START);
             out.extend_from_slice(&id.to_be_bytes());
@@ -425,7 +466,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
     if !(1..=6).contains(&tag)
         && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag)
         && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT)
-        && !(CALL_START..=CALL_LEAVE).contains(&tag)
+        && !(CALL_START..=CALL_SEAL).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -523,6 +564,27 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
                 [other] => return Err(CodecError::BadKind(other)),
             };
             Request::CallStart { room, video }
+        }
+        CALL_KEY => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let call = read_u64(bytes, &mut pos)?;
+            let public = read_array::<32>(bytes, &mut pos)?;
+            Request::CallKey { room, call, public }
+        }
+        CALL_SEAL => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let call = read_u64(bytes, &mut pos)?;
+            let to = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let kid = read_u64(bytes, &mut pos)?;
+            let [high, low] = read_array::<2>(bytes, &mut pos)?;
+            let len = usize::from(u16::from_be_bytes([high, low]));
+            if len == 0 || len > MAX_SEALED {
+                return Err(CodecError::FieldLength);
+            }
+            let end = pos.checked_add(len).filter(|end| *end <= bytes.len()).ok_or(CodecError::Truncated)?;
+            let sealed = bytes[pos..end].to_vec();
+            pos = end;
+            Request::CallSeal { room, call, to, kid, sealed }
         }
         CALL_JOIN | CALL_HEARTBEAT | CALL_LEAVE => {
             let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;

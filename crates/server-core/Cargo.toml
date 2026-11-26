@@ -20,6 +20,8 @@ zeroize.workspace = true
 
 [dev-dependencies]
 crewcraft-client-core.workspace = true
+# The real seal and SFrame, to prove call keys end to end (T360d2).
+crewcraft-sframe = { path = "../sframe" }
 
 [lints]
 workspace = true
