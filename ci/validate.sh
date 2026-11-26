@@ -3,6 +3,8 @@
 #   ci/validate.sh            format, lint, tests, sanitize scan
 #   ci/validate.sh --tasks    also install every open task's test into a scratch copy and report which pass
 #                             (informational: open tasks are expected to fail; never changes the exit status)
+# CARGO_DENY_REQUIRED=1 turns a missing cargo-deny into a failure (set it wherever licences must be checked: CI and
+# release builds). Unset or empty, a missing cargo-deny is skipped and the run says so; any other value fails.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 step() { echo; echo "== $*"; }
@@ -13,10 +15,20 @@ step "tests";    cargo test --workspace --locked
 step "sanitize"; bash tools/sanitize-scan.sh
 step "rust-only"; bash tools/rust-only.sh
 step "cargo-deny"
+skipped=""
+case "${CARGO_DENY_REQUIRED:-}" in
+  ""|1) ;;
+  *) echo "cargo-deny: CARGO_DENY_REQUIRED must be unset, empty or 1, not '${CARGO_DENY_REQUIRED}'"; exit 1 ;;
+esac
 if command -v cargo-deny >/dev/null 2>&1; then
   cargo deny --locked check
+elif [ "${CARGO_DENY_REQUIRED:-}" = 1 ]; then
+  echo "cargo-deny: not installed here, and CARGO_DENY_REQUIRED=1: licenses, advisories, bans and sources must be checked"
+  exit 1
 else
-  echo "cargo-deny: not installed here, SKIPPED (licenses, advisories, bans and sources were not checked)"
+  echo "cargo-deny: not installed here, SKIPPED (licenses, advisories, bans and sources were not checked;"
+  echo "            CARGO_DENY_REQUIRED=1 makes this a failure)"
+  skipped=" (cargo-deny SKIPPED: licenses not checked)"
 fi
 
 if [ "${1:-}" = "--tasks" ]; then
@@ -38,4 +50,4 @@ if [ "${1:-}" = "--tasks" ]; then
     if (cd "$scratch" && export CARGO_TARGET_DIR="$repo/target/tasks" && eval "$cmd" >/dev/null 2>&1); then echo "pass  $id"; else echo "open  $id"; fi
   done
 fi
-echo; echo "validate: PASS"
+echo; echo "validate: PASS${skipped}"
