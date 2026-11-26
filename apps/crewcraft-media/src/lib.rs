@@ -159,14 +159,7 @@ pub struct MediaServer {
 impl MediaServer {
     pub fn new(config: Config) -> Self {
         let verifier = Verifier::new(config.trusted_key, &config.server_name);
-        Self {
-            config,
-            verifier,
-            crypto: Arc::new(crewcraft_media_crypto::provider()),
-            participants: BTreeMap::new(),
-            next_id: 1,
-            outbox: Vec::new(),
-        }
+        Self { config, verifier, crypto: Arc::new(crewcraft_media_crypto::provider()), participants: BTreeMap::new(), next_id: 1, outbox: Vec::new() }
     }
 
     /// Admit a participant to `call` with its WebRTC `offer` (SDP) and the chat server's `credential`, at `now` and
@@ -184,7 +177,8 @@ impl MediaServer {
         if grant.call != call {
             return Err(JoinError::WrongCall);
         }
-        let replaced = self.participants.iter().find(|(_, p)| p.call == call && p.person == grant.person && p.device == grant.device).map(|(id, _)| *id);
+        let replaced =
+            self.participants.iter().find(|(_, p)| p.call == call && p.person == grant.person && p.device == grant.device).map(|(id, _)| *id);
         let others = self.participants.values().filter(|p| p.call == call).count() - usize::from(replaced.is_some());
         if others >= MAX_CALL_SIZE {
             return Err(JoinError::CallFull);
@@ -202,8 +196,7 @@ impl MediaServer {
         }
         let id = ParticipantId(self.next_id);
         self.next_id += 1;
-        let participant =
-            Participant { call, person: grant.person, device: grant.device, rtc, inputs: Vec::new(), slots: Vec::new(), alive: true };
+        let participant = Participant { call, person: grant.person, device: grant.device, rtc, inputs: Vec::new(), slots: Vec::new(), alive: true };
         self.participants.insert(id, participant);
         Ok(Joined { id, answer: answer.to_sdp_string() })
     }
