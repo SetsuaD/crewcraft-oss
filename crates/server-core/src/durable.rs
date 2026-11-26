@@ -1,12 +1,18 @@
 //! A `server::Server` (T122) that survives a restart: every change it accepts is appended to a journal (`journal`, T140)
 //! as an `op::Op` (T143), and opening the journal replays them into a fresh server. Presence and rate-limit state are
 //! not stored (replaying the recorded times rebuilds the buckets). Task T144.
+//!
+//! Search (task T320a): the server keeps a `room_search::RoomSearch` up to date with every message it accepts and every
+//! message it replays. Each message is indexed when it is accepted or replayed, so the index keeps messages a room's
+//! in-memory log has since dropped. `search` answers only from rooms the asking person is a member of now.
 
 use std::path::Path;
 
 use crate::journal::{Journal, JournalError};
 use crate::op::{Op, decode_op, encode_op};
+use crate::cursor_log::Since;
 use crate::room::Role;
+use crate::room_search::{Hit, RoomSearch};
 use crate::server::{Server, ServerError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +32,12 @@ pub struct DurableServer {
     server: Server,
     journal: Journal,
     poisoned: bool,
+    /// Every message's searchable text, by room (task T320a).
+    search: RoomSearch,
 }
+
+/// The most hits one search returns (task T320a).
+pub const MAX_SEARCH_HITS: usize = 100;
 
 impl DurableServer {
     /// Open the journal at `path` (as `Journal::open`, creating it if missing) and replay its records in order into a
@@ -36,11 +47,23 @@ impl DurableServer {
     pub fn open(path: &Path) -> Result<Self, DurableError> {
         let (journal, records) = Journal::open(path).map_err(DurableError::Journal)?;
         let mut server = Server::new();
+        let mut search = RoomSearch::new();
         for (index, record) in records.iter().enumerate() {
             let op = decode_op(record).map_err(|_| DurableError::Corrupt { index })?;
-            replay(&mut server, op).map_err(|_| DurableError::Corrupt { index })?;
+            let indexed = searchable(&op);
+            let cursor = replay(&mut server, op).map_err(|_| DurableError::Corrupt { index })?;
+            if let Some((slug, actor)) = indexed {
+                index_event(&server, &mut search, &slug, &actor, cursor);
+            }
         }
-        Ok(Self { server, journal, poisoned: false })
+        Ok(Self { server, journal, poisoned: false, search })
+    }
+
+    /// Up to `limit` (at most `MAX_SEARCH_HITS`) messages matching `query` in the rooms `user` is a member of, newest
+    /// first (`room_search::RoomSearch::search`; every word of the query must start a word of the message). Edited
+    /// messages are found by their current text; deleted ones are not found.
+    pub fn search(&self, user: &str, query: &str, limit: usize) -> Vec<Hit> {
+        self.search.search(&self.server, user, query, limit.min(MAX_SEARCH_HITS))
     }
 
     /// The server, for reads (`room`, `rooms_of`, `online_in`).
@@ -77,6 +100,7 @@ impl DurableServer {
         self.check_alive()?;
         let cursor = self.server.post(slug, author, text, now_ms).map_err(DurableError::Server)?;
         self.record(&Op::Post { slug: slug.to_string(), author: author.to_string(), text: text.to_string(), now_ms })?;
+        index_event(&self.server, &mut self.search, slug, author, cursor);
         Ok(cursor)
     }
 
@@ -84,6 +108,7 @@ impl DurableServer {
         self.check_alive()?;
         let cursor = self.server.edit(slug, actor, target, text, now_ms).map_err(DurableError::Server)?;
         self.record(&Op::Edit { slug: slug.to_string(), actor: actor.to_string(), target, text: text.to_string(), now_ms })?;
+        index_event(&self.server, &mut self.search, slug, actor, cursor);
         Ok(cursor)
     }
 
@@ -91,6 +116,7 @@ impl DurableServer {
         self.check_alive()?;
         let cursor = self.server.delete(slug, actor, target).map_err(DurableError::Server)?;
         self.record(&Op::Delete { slug: slug.to_string(), actor: actor.to_string(), target })?;
+        index_event(&self.server, &mut self.search, slug, actor, cursor);
         Ok(cursor)
     }
 
@@ -123,15 +149,35 @@ impl DurableServer {
     }
 }
 
-/// Apply one recorded change to `server`, as the call that made it did.
-fn replay(server: &mut Server, op: Op) -> Result<(), ServerError> {
+/// Apply one recorded change to `server`, as the call that made it did, and return the cursor it made (0 for changes
+/// that make none).
+fn replay(server: &mut Server, op: Op) -> Result<u64, ServerError> {
     match op {
-        Op::CreateRoom { owner, name } => server.create_room(&owner, &name).map(|_| ()),
-        Op::AddMember { slug, actor, user, role } => server.add_member(&slug, &actor, &user, role).map(|_| ()),
-        Op::RemoveMember { slug, actor, user } => server.remove_member(&slug, &actor, &user).map(|_| ()),
-        Op::Post { slug, author, text, now_ms } => server.post(&slug, &author, &text, now_ms).map(|_| ()),
-        Op::Edit { slug, actor, target, text, now_ms } => server.edit(&slug, &actor, target, &text, now_ms).map(|_| ()),
-        Op::Delete { slug, actor, target } => server.delete(&slug, &actor, target).map(|_| ()),
-        Op::MarkRead { slug, user, cursor } => server.mark_read(&slug, &user, cursor).map(|_| ()),
+        Op::CreateRoom { owner, name } => server.create_room(&owner, &name).map(|_| 0),
+        Op::AddMember { slug, actor, user, role } => server.add_member(&slug, &actor, &user, role),
+        Op::RemoveMember { slug, actor, user } => server.remove_member(&slug, &actor, &user),
+        Op::Post { slug, author, text, now_ms } => server.post(&slug, &author, &text, now_ms),
+        Op::Edit { slug, actor, target, text, now_ms } => server.edit(&slug, &actor, target, &text, now_ms),
+        Op::Delete { slug, actor, target } => server.delete(&slug, &actor, target),
+        Op::MarkRead { slug, user, cursor } => server.mark_read(&slug, &user, cursor).map(|_| 0),
+    }
+}
+
+/// The room and the person of a change that search indexes: a post, an edit or a deletion.
+fn searchable(op: &Op) -> Option<(String, String)> {
+    match op {
+        Op::Post { slug, author, .. } => Some((slug.clone(), author.clone())),
+        Op::Edit { slug, actor, .. } | Op::Delete { slug, actor, .. } => Some((slug.clone(), actor.clone())),
+        _ => None,
+    }
+}
+
+/// Index the event the change by `actor` just made at `cursor` in room `slug`, read back from the room's log (the
+/// actor is a member: the change was accepted).
+fn index_event(server: &Server, search: &mut RoomSearch, slug: &str, actor: &str, cursor: u64) {
+    let Ok(room) = server.room(slug) else { return };
+    let Ok(Since::Events(events)) = room.sync(actor, cursor.saturating_sub(1)) else { return };
+    if let Some((at, event)) = events.iter().find(|(at, _)| *at == cursor) {
+        search.index(slug, *at, event);
     }
 }
