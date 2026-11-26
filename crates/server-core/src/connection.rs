@@ -76,17 +76,37 @@ pub struct Connection {
     features: u32,
     /// The signed-in device, when the transport knows it: media credentials name it (task T360b2).
     device: Option<u64>,
+    /// A `CallOffer` checked and waiting to be relayed to the media server (task T360b6).
+    offer: Option<PendingOffer>,
+}
+
+/// A participant's WebRTC offer the chat server must relay to the media server, then answer request `id` with what
+/// comes back (task T360b6). The connection checked that the person is in the call; the media server checks the
+/// credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingOffer {
+    pub id: u32,
+    pub call: u64,
+    pub credential: Vec<u8>,
+    pub offer: String,
 }
 
 impl Connection {
     /// A connection for `user` (already signed in), with nothing buffered.
     pub fn new(user: &str) -> Self {
-        Self { user: user.to_string(), decoder: Decoder::new(), features: 0, device: None }
+        Self { user: user.to_string(), decoder: Decoder::new(), features: 0, device: None, offer: None }
     }
 
     /// As `new`, for a session whose handshake agreed on `features` (task T330c).
     pub fn with_features(user: &str, features: u32) -> Self {
-        Self { user: user.to_string(), decoder: Decoder::new(), features, device: None }
+        Self { user: user.to_string(), decoder: Decoder::new(), features, device: None, offer: None }
+    }
+
+    /// The `CallOffer` the last `receive_durable` stopped at, if any (task T360b6). Its answer has not been written:
+    /// the caller relays it to the media server (with no lock held), writes the answer for its id, and only then feeds
+    /// the connection again, which goes on with any frames buffered after it.
+    pub fn take_offer(&mut self) -> Option<PendingOffer> {
+        self.offer.take()
     }
 
     /// The same connection, for the signed-in `device` (task T360b2): with `FEATURE_MEDIA` and a media server set, a
@@ -153,6 +173,12 @@ impl Connection {
             } else {
                 dispatch(server, &self.user, &request, now_ms)?
             };
+            // An offer to relay is answered by the caller, after the media server has answered (task T360b6). Nothing
+            // after it is read yet, so answers stay in request order.
+            if let Some(Follow::Relay { call, credential, offer }) = follow {
+                self.offer = Some(PendingOffer { id, call, credential, offer });
+                break;
+            }
             let resp_bytes = encode_response(id, &response).map_err(ConnError::Request)?;
             let framed_resp = encode(&resp_bytes).map_err(ConnError::Frame)?;
             out.extend_from_slice(&framed_resp);
@@ -175,7 +201,7 @@ impl Connection {
                     let frame = crewcraft_proto::request::encode_media(id, &address, &credential).map_err(ConnError::Request)?;
                     out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
                 }
-                None => {}
+                Some(Follow::Relay { .. }) | None => {}
             }
 
             // After a successful Sync, append the room's events as push frames.
@@ -378,6 +404,9 @@ fn calls(
         Request::CallSeal { room, call, to, kid, sealed } => {
             server.call_seal(room, user, *call, SealedKey { to, kid: *kid, sealed: sealed.clone() }, now_ms).map(|()| *call)
         }
+        // An offer needs media agreed and the device known; then only someone in the call may send one (task T360b6).
+        Request::CallOffer { .. } if media_device.is_none() => Err(CallError::NotAllowed),
+        Request::CallOffer { room, call, .. } => server.may_offer(room, user, *call).map(|()| *call),
         _ => return None,
     };
     Some(match answer {
@@ -385,6 +414,9 @@ fn calls(
             let follow = match (media_device, request) {
                 (Some(device), Request::CallStart { room, .. } | Request::CallJoin { room, .. }) => {
                     media_follow(server, room, user, call, device, now_ms)
+                }
+                (_, Request::CallOffer { credential, offer, .. }) => {
+                    Some(Follow::Relay { call, credential: credential.clone(), offer: offer.clone() })
                 }
                 _ => None,
             };
@@ -507,6 +539,12 @@ enum Follow {
     Media {
         address: String,
         credential: Vec<u8>,
+    },
+    /// An offer for the media server: the caller relays it and answers (task T360b6).
+    Relay {
+        call: u64,
+        credential: Vec<u8>,
+        offer: String,
     },
 }
 

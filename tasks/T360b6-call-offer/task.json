@@ -1,0 +1,34 @@
+{
+  "id": "T360b6-call-offer",
+  "title": "The join path: a participant's WebRTC offer through the chat server to the media server",
+  "crate": "crewcraft-media-server",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/proto/src/media_control.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/media.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/server-core/src/session.rs",
+    "crates/client-core/src/client.rs",
+    "apps/crewcraft-server/src/device_session.rs",
+    "apps/crewcraft-server/src/media_link.rs",
+    "apps/crewcraft-server/src/lab_server.rs",
+    "apps/crewcraft-server/src/lab_runtime.rs",
+    "apps/crewcraft-media-server/src/control.rs",
+    "apps/crewcraft-media-server/Cargo.toml",
+    "docs/CALLS.md",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft-media-server/tests/t360b6_call_offer.rs",
+  "test_cmd": "cargo test -p crewcraft-media-server --test t360b6_call_offer",
+  "depends_on": [
+    "T360b2-call-join-credential",
+    "T360b3-media-control",
+    "T360b5-media-link-certificates"
+  ],
+  "spec": "docs/CALLS.md 'Built (T360b6)'. Proto: request 31 CallOffer { room, call, credential (u16 length, 1 to MAX_CREDENTIAL), offer (u32 length, 1 to MAX_SDP = 64 KiB, UTF-8) }; the answer frame, tag 140: u32 id | u32 length | SDP answer (encode_answer, decode_answer); control messages Join (kind 3: seq, call, credential, offer), JoinAnswer (129: seq, answer) and JoinRefused (130: seq, reason REFUSED_OFFER, REFUSED_CREDENTIAL, REFUSED_WRONG_CALL, REFUSED_CALL_FULL or REFUSED_STOPPED). Server core: with FEATURE_MEDIA and a known device, CallOffer is checked (DurableServer::may_offer: a media server set, a member, in the open call) and, when it passes, the connection writes no answer and stops at it (Connection/Session::take_offer gives the PendingOffer); otherwise it is refused as other call requests are. device_session::serve_with_media relays a pending offer through a MediaRelay with no lock held and writes Ok with the call id and the answer frame, or Error E_NOT_ALLOWED with the media server's reason, or E_OTHER when the media server cannot be reached; serve keeps working without a relay. MediaLink::relay gives a MediaRelayHandle the link thread serves at once (not on its tick), sending each Join once; LabRuntime::with_media gives it to every device connection. The media server's control listener answers Join through its intake. client-core: ClientEvent::Media after CallStart/CallJoin and ClientEvent::Answer after CallOffer. Test: two people on device connections over loopback TCP (client-core on their side) start and join a call, send their offers with their credentials and get answers; both offers were relayed; their str0m clients connect to the media server over real UDP and A's frames reach B byte for byte; a used and a forged credential are refused by the media server; a non-member's offer is refused with E_NO_SUCH_ROOM and never reaches the relay.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}

@@ -69,6 +69,11 @@
 //! | n bytes`, the media credential (`crewcraft-media-auth`, 1 to `MAX_CREDENTIAL` bytes) for the signed-in device to
 //! join that call on that media server. A server with no media server configured does not announce the bit.
 //!
+//! Also with `FEATURE_MEDIA`, tag 31 `CallOffer` (task T360b6): `str room | u64 call | u16 n | n bytes credential (1 to
+//! MAX_CREDENTIAL) | u32 m | m bytes WebRTC offer (SDP, UTF-8, 1 to MAX_SDP)`, from someone in the call: the server relays
+//! it to the media server and answers `Ok { cursor }` with the call's id, followed by one answer frame (`encode_answer`):
+//! `u8 tag (140) | u32 id | u32 m | m bytes SDP answer`; or an `Error` when the media server refused or cannot be reached.
+//!
 //! `room` is 1 to `message::MAX_NAME` bytes, `text` 0 to `message::MAX_BODY` bytes, `detail` 0 to `MAX_DETAIL` bytes.
 //!
 //! `ListRooms` is an addition to protocol version 1, announced by the handshake feature bit `FEATURE_LIST_ROOMS`. A
@@ -126,6 +131,10 @@ pub const FEATURE_MEDIA: u32 = 512;
 pub const MEDIA_TAG: u8 = 137;
 /// The longest media server address in a media frame, in bytes.
 pub const MAX_MEDIA_ADDRESS: usize = 255;
+/// The first byte of an answer frame (task T360b6).
+pub const ANSWER_TAG: u8 = 140;
+/// The longest WebRTC offer or answer (SDP) a `CallOffer` or answer frame carries, in bytes.
+pub const MAX_SDP: usize = 64 * 1024;
 /// The longest media credential in a media frame, in bytes (a credential with three names of the longest is 1,071).
 pub const MAX_CREDENTIAL: usize = 1200;
 /// The longest file name, in bytes.
@@ -158,6 +167,7 @@ const PIN: u8 = 26;
 const SAVE_MESSAGE: u8 = 27;
 const LIST_SAVED: u8 = 28;
 const MARK_UNREAD: u8 = 29;
+const CALL_OFFER: u8 = 31;
 /// The largest sealed sender key a `CallSeal` carries.
 pub const MAX_SEALED: usize = 256;
 /// The most files one `PostFiles` attaches (task T330c).
@@ -295,6 +305,14 @@ pub enum Request {
         file: [u8; 16],
         offset: u64,
         length: u32,
+    },
+    /// This device's WebRTC `offer` for call `call` of `room`, with the media `credential` it was given, for the
+    /// media server (task T360b6).
+    CallOffer {
+        room: String,
+        call: u64,
+        credential: Vec<u8>,
+        offer: String,
     },
 }
 
@@ -526,6 +544,19 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.extend_from_slice(&call.to_be_bytes());
             out.extend_from_slice(public);
         }
+        Request::CallOffer { room, call, credential, offer } => {
+            if credential.is_empty() || credential.len() > MAX_CREDENTIAL || offer.is_empty() || offer.len() > MAX_SDP {
+                return Err(CodecError::FieldLength);
+            }
+            out.push(CALL_OFFER);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&call.to_be_bytes());
+            out.extend_from_slice(&(credential.len() as u16).to_be_bytes());
+            out.extend_from_slice(credential);
+            out.extend_from_slice(&(offer.len() as u32).to_be_bytes());
+            out.extend_from_slice(offer.as_bytes());
+        }
         Request::CallSeal { room, call, to, kid, sealed } => {
             if sealed.is_empty() || sealed.len() > MAX_SEALED {
                 return Err(CodecError::FieldLength);
@@ -587,7 +618,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
     let tag = bytes[0];
     if !(1..=6).contains(&tag)
         && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag)
-        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT | PIN | SAVE_MESSAGE | LIST_SAVED | MARK_UNREAD)
+        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT | PIN | SAVE_MESSAGE | LIST_SAVED | MARK_UNREAD | CALL_OFFER)
         && !(CALL_START..=STORAGE_USE).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));
@@ -732,6 +763,15 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
             let sealed = bytes[pos..end].to_vec();
             pos = end;
             Request::CallSeal { room, call, to, kid, sealed }
+        }
+        CALL_OFFER => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let call = read_u64(bytes, &mut pos)?;
+            let [high, low] = read_array::<2>(bytes, &mut pos)?;
+            let credential = read_counted(bytes, &mut pos, usize::from(u16::from_be_bytes([high, low])), MAX_CREDENTIAL)?;
+            let length = read_u32(bytes, &mut pos)? as usize;
+            let offer = String::from_utf8(read_counted(bytes, &mut pos, length, MAX_SDP)?).map_err(|_| CodecError::BadUtf8)?;
+            Request::CallOffer { room, call, credential, offer }
         }
         CALL_JOIN | CALL_HEARTBEAT | CALL_LEAVE => {
             let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
@@ -1068,6 +1108,49 @@ pub fn decode_bytes(bytes: &[u8]) -> Result<(u32, Vec<u8>), CodecError> {
         return Err(CodecError::TrailingBytes);
     }
     Ok((id, data))
+}
+
+/// `count` bytes (1 to `max`) at `pos`: `FieldLength` for a count out of range, `Truncated` when the bytes run out.
+fn read_counted(bytes: &[u8], pos: &mut usize, count: usize, max: usize) -> Result<Vec<u8>, CodecError> {
+    if count == 0 || count > max {
+        return Err(CodecError::FieldLength);
+    }
+    let end = pos.checked_add(count).filter(|end| *end <= bytes.len()).ok_or(CodecError::Truncated)?;
+    let out = bytes[*pos..end].to_vec();
+    *pos = end;
+    Ok(out)
+}
+
+/// Encode the answer frame that follows the `Ok` answering `CallOffer` request `id` (task T360b6): the media server's
+/// SDP answer. `FieldLength` when it is empty or longer than `MAX_SDP`.
+pub fn encode_answer(id: u32, answer: &str) -> Result<Vec<u8>, CodecError> {
+    if answer.is_empty() || answer.len() > MAX_SDP {
+        return Err(CodecError::FieldLength);
+    }
+    let mut out = vec![ANSWER_TAG];
+    out.extend_from_slice(&id.to_be_bytes());
+    out.extend_from_slice(&(answer.len() as u32).to_be_bytes());
+    out.extend_from_slice(answer.as_bytes());
+    Ok(out)
+}
+
+/// Decode exactly one answer frame: its request id and the SDP answer. `BadKind` for any tag but `ANSWER_TAG`,
+/// `FieldLength`, `Truncated`, `BadUtf8`, then `TrailingBytes`.
+pub fn decode_answer(bytes: &[u8]) -> Result<(u32, String), CodecError> {
+    let Some(&tag) = bytes.first() else {
+        return Err(CodecError::Truncated);
+    };
+    if tag != ANSWER_TAG {
+        return Err(CodecError::BadKind(tag));
+    }
+    let mut pos: usize = 1;
+    let id = read_u32(bytes, &mut pos)?;
+    let length = read_u32(bytes, &mut pos)? as usize;
+    let answer = String::from_utf8(read_counted(bytes, &mut pos, length, MAX_SDP)?).map_err(|_| CodecError::BadUtf8)?;
+    if pos != bytes.len() {
+        return Err(CodecError::TrailingBytes);
+    }
+    Ok((id, answer))
 }
 
 /// Encode the media frame that follows the `Ok` answering `CallStart` or `CallJoin` request `id` (task T360b2): the

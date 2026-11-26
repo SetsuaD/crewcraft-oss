@@ -32,6 +32,7 @@ use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -44,6 +45,7 @@ use crewcraft_strict_toml as toml;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
+use crate::device_session::{MediaRelay, RelayRefusal};
 use crate::server_install::{hex, read_file, write_new};
 
 /// The files `issue_link` writes into the chat server's data directory: the link CA, its client certificate and key.
@@ -164,7 +166,7 @@ pub fn load(dir: &Path) -> io::Result<Option<(MediaIssuer, MediaLink)>> {
     let tls = crewcraft_tls::client_config(crewcraft_tls::pem::roots(&ca)?, Some(identity)).map_err(|e| invalid(format!("{MEDIA_FILE}: {e}")))?;
     let name = ServerName::try_from(settings.server_name.clone()).map_err(|_| invalid(format!("{MEDIA_FILE}: server-name")))?;
     let issuer = MediaIssuer::new(issuer, &settings.server_name, &settings.address.to_string());
-    Ok(Some((issuer, MediaLink { control: settings.control, name, tls })))
+    Ok(Some((issuer, MediaLink::new(settings.control, name, tls))))
 }
 
 type Control = StreamOwned<ClientConnection, TcpStream>;
@@ -174,12 +176,81 @@ pub struct MediaLink {
     control: SocketAddr,
     name: ServerName<'static>,
     tls: Arc<ClientConfig>,
+    /// Participants' offers waiting to be relayed (task T360b6), and the handle that queues them.
+    joins: Mutex<Receiver<JoinRequest>>,
+    relay: MediaRelayHandle,
+}
+
+/// One offer to relay, and where its answer goes.
+struct JoinRequest {
+    call: u64,
+    credential: Vec<u8>,
+    offer: String,
+    reply: Sender<Result<String, RelayRefusal>>,
+}
+
+/// How many offers may wait for the link at once; more wait in their own device connection.
+const JOIN_QUEUE: usize = 64;
+
+/// A cloneable way for device connections to relay offers through the link (task T360b6).
+#[derive(Clone)]
+pub struct MediaRelayHandle {
+    joins: SyncSender<JoinRequest>,
+}
+
+impl MediaRelay for MediaRelayHandle {
+    fn join(&self, call: u64, credential: &[u8], offer: &str) -> Result<String, RelayRefusal> {
+        let (reply, answer) = mpsc::channel();
+        let request = JoinRequest { call, credential: credential.to_vec(), offer: offer.to_owned(), reply };
+        self.joins.send(request).map_err(|_| RelayRefusal::Unavailable)?;
+        // Connecting and the exchange each take at most PATIENCE; the link may be busy with one event first.
+        answer.recv_timeout(PATIENCE * 3).unwrap_or(Err(RelayRefusal::Unavailable))
+    }
 }
 
 impl MediaLink {
     /// A link to the control port `control`, whose certificate must be for `name` and chain to `tls`'s roots.
     pub fn new(control: SocketAddr, name: ServerName<'static>, tls: Arc<ClientConfig>) -> Self {
-        Self { control, name, tls }
+        let (joins, queued) = mpsc::sync_channel(JOIN_QUEUE);
+        Self { control, name, tls, joins: Mutex::new(queued), relay: MediaRelayHandle { joins } }
+    }
+
+    /// The handle device connections relay offers through (task T360b6).
+    pub fn relay(&self) -> MediaRelayHandle {
+        self.relay.clone()
+    }
+
+    /// Send `message` and read the one message that answers it.
+    fn exchange(control: &mut Control, message: &ControlMessage) -> io::Result<ControlMessage> {
+        let bytes = encode_control(message).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+        control.write_all(&encode(&bytes).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?)?;
+        control.flush()?;
+        let frame = read_frame(control, MAX_CONTROL_MESSAGE)?.ok_or(io::ErrorKind::UnexpectedEof)?;
+        decode_control(frame.payload()).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))
+    }
+
+    /// Relay `join` as message `seq` and send back the answer. A join is never sent twice (its credential admits once):
+    /// a broken connection is `Unavailable`, and the person sends a new offer with a new credential.
+    fn relay_join(&self, control: &mut Option<Control>, seq: u64, join: JoinRequest) {
+        if control.is_none() {
+            *control = self.connect().ok();
+        }
+        let answer = match control.as_mut() {
+            None => Err(RelayRefusal::Unavailable),
+            Some(connected) => {
+                let message = ControlMessage::Join { seq, call: join.call, credential: join.credential, offer: join.offer };
+                match Self::exchange(connected, &message) {
+                    Ok(ControlMessage::JoinAnswer { seq: answered, answer }) if answered == seq => Ok(answer),
+                    Ok(ControlMessage::JoinRefused { seq: answered, reason }) if answered == seq => Err(RelayRefusal::Refused(reason)),
+                    _ => {
+                        *control = None;
+                        Err(RelayRefusal::Unavailable)
+                    }
+                }
+            }
+        };
+        // The asker may have given up waiting.
+        let _ = join.reply.send(answer);
     }
 
     fn connect(&self) -> io::Result<Control> {
@@ -196,18 +267,16 @@ impl MediaLink {
             MediaEvent::DropPerson { call, person } => ControlMessage::DropPerson { seq, call: *call, person: person.clone() },
             MediaEvent::EndCall { call } => ControlMessage::EndCall { seq, call: *call },
         };
-        let bytes = encode_control(&message).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
-        control.write_all(&encode(&bytes).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?)?;
-        control.flush()?;
-        let frame = read_frame(control, MAX_CONTROL_MESSAGE)?.ok_or(io::ErrorKind::UnexpectedEof)?;
-        match decode_control(frame.payload()) {
-            Ok(ControlMessage::Ack { seq: acked }) if acked == seq => Ok(()),
+        match Self::exchange(control, &message)? {
+            ControlMessage::Ack { seq: acked } if acked == seq => Ok(()),
             _ => Err(io::ErrorKind::InvalidData.into()),
         }
     }
 
-    /// Run until `stopped`: sweep the calls of `rooms`, take their media events and deliver them, in order.
+    /// Run until `stopped`: sweep the calls of `rooms`, take their media events and deliver them, in order, and relay
+    /// participants' offers as they come (task T360b6).
     pub fn run(&self, stopped: &dyn Fn() -> bool, rooms: &Mutex<DurableServer>, now_ms: &dyn Fn() -> u64) {
+        let Ok(joins) = self.joins.lock() else { return };
         let mut waiting: VecDeque<(u64, MediaEvent)> = VecDeque::new();
         let mut next_seq: u64 = 1;
         let mut control: Option<Control> = None;
@@ -241,7 +310,14 @@ impl MediaLink {
                     waiting.pop_front();
                 }
             }
-            std::thread::sleep(TICK);
+            // Wait for an offer until the next tick: offers go out at once, not on the tick.
+            match joins.recv_timeout(TICK) {
+                Ok(join) => {
+                    self.relay_join(&mut control, next_seq, join);
+                    next_seq += 1;
+                }
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {}
+            }
         }
     }
 }

@@ -27,6 +27,8 @@ crewcraft-media-auth = { path = "../../crates/media-auth" }
 crewcraft-media-crypto = { path = "../../crates/media-crypto" }
 str0m = { version = "0.26", default-features = false }
 rcgen.workspace = true
+# T360b6: the client side of a device connection, to send offers and read answers.
+crewcraft-client-core.workspace = true
 # PEM for the test's certificates (rcgen is built without its PEM feature).
 base64.workspace = true
 

@@ -1,6 +1,7 @@
 //! The media server's end of the chat server's control connection (docs/CALLS.md "Admission", task T360b3): a TCP
 //! listener behind mutual TLS that accepts only a client certificate from the configured chat-server CA, reads
-//! `crewcraft_proto::media_control` messages, hands each to the serving loop through its intake and acknowledges it.
+//! `crewcraft_proto::media_control` messages, hands each to the serving loop through its intake and acknowledges it
+//! (a relayed participant offer is answered with the SDP answer or the reason it was refused, task T360b6).
 //!
 //! Owns: building the TLS configuration from `[control]` ([`tls_config`]) and the listener ([`ControlListener`]).
 //! Calls: `crewcraft-tls` (rustls with ring: the control channel's stack, decided 2026-11-26; the media path stays pure
@@ -14,10 +15,14 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crewcraft_media::JoinError;
 use crewcraft_media::config::{ControlSettings, read_file};
 use crewcraft_media::intake::Handle;
 use crewcraft_proto::frame::{Decoder, encode};
-use crewcraft_proto::media_control::{ControlMessage, MAX_CONTROL_MESSAGE, decode_control, encode_control};
+use crewcraft_proto::media_control::{
+    ControlMessage, MAX_CONTROL_MESSAGE, REFUSED_CALL_FULL, REFUSED_CREDENTIAL, REFUSED_OFFER, REFUSED_STOPPED, REFUSED_WRONG_CALL, decode_control,
+    encode_control,
+};
 use rustls::ServerConfig;
 
 /// The largest certificate or key file read.
@@ -112,18 +117,36 @@ fn serve_connection(tcp: TcpStream, config: Arc<ServerConfig>, handle: &Handle, 
                 return Err(io::ErrorKind::InvalidData.into());
             }
             let message = decode_control(&payload).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
-            let (seq, taken) = match message {
-                ControlMessage::DropPerson { seq, call, person } => (seq, handle.drop_person(call, &person)),
-                ControlMessage::EndCall { seq, call } => (seq, handle.end_call(call)),
-                ControlMessage::Ack { .. } => return Err(io::ErrorKind::InvalidData.into()),
+            let reply = match message {
+                ControlMessage::DropPerson { seq, call, person } => handle.drop_person(call, &person).then_some(ControlMessage::Ack { seq }),
+                ControlMessage::EndCall { seq, call } => handle.end_call(call).then_some(ControlMessage::Ack { seq }),
+                // A participant's offer, relayed by the chat server (task T360b6): the serving loop admits it or says why not.
+                ControlMessage::Join { seq, call, credential, offer } => Some(match handle.join(call, &credential, &offer) {
+                    Ok(joined) => ControlMessage::JoinAnswer { seq, answer: joined.answer },
+                    Err(error) => ControlMessage::JoinRefused { seq, reason: refusal(error) },
+                }),
+                ControlMessage::Ack { .. } | ControlMessage::JoinAnswer { .. } | ControlMessage::JoinRefused { .. } => {
+                    return Err(io::ErrorKind::InvalidData.into());
+                }
             };
-            if !taken {
+            let Some(reply) = reply else {
                 return Ok(()); // the serving loop stopped: no acknowledgement, the chat server sends it again later
-            }
-            let ack = encode_control(&ControlMessage::Ack { seq }).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
-            stream.write_all(&encode(&ack).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?)?;
+            };
+            let reply = encode_control(&reply).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+            stream.write_all(&encode(&reply).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?)?;
             stream.flush()?;
         }
     }
     Ok(())
+}
+
+/// The reason a refused join is sent back with.
+fn refusal(error: JoinError) -> u8 {
+    match error {
+        JoinError::Offer => REFUSED_OFFER,
+        JoinError::Credential(_) => REFUSED_CREDENTIAL,
+        JoinError::WrongCall => REFUSED_WRONG_CALL,
+        JoinError::CallFull => REFUSED_CALL_FULL,
+        JoinError::Stopped => REFUSED_STOPPED,
+    }
 }
