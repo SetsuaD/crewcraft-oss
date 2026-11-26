@@ -184,9 +184,7 @@ impl Verifier {
     /// expiry, the media server it names, and that it was not used before.
     pub fn verify(&mut self, credential: &[u8], now_ms: u64) -> Result<Grant, Error> {
         let (grant, signed) = parse(credential)?;
-        UnparsedPublicKey::new(&ED25519, self.public_key)
-            .verify(&credential[..signed], &credential[signed..])
-            .map_err(|_| Error::BadSignature)?;
+        UnparsedPublicKey::new(&ED25519, self.public_key).verify(&credential[..signed], &credential[signed..]).map_err(|_| Error::BadSignature)?;
         if now_ms > grant.not_after_ms {
             return Err(Error::Expired);
         }
