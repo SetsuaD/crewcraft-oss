@@ -23,15 +23,15 @@ use crewcraft::key_vault::MemoryVault;
 use crewcraft::loopback::parse_query;
 use crewcraft::server_endpoint::ServerEndpoint;
 use crewcraft::worker::{Browser, WorkerConfig};
+use crewcraft_authz::{Answer, Capabilities};
 use crewcraft_bootstrap::{Environment, ExternalEnrollment};
 use crewcraft_client_core::room_view::Shown;
 use crewcraft_desktop_ui::{Action, Update};
 use crewcraft_enroll::EnrollmentCode;
 use crewcraft_enroll::server_trust::RootFingerprint;
+use crewcraft_oidc::Identity;
 use crewcraft_oidc::{Key, parse_jwks};
 use crewcraft_proto::handshake::ServerSide;
-use crewcraft_authz::{Answer, Capabilities};
-use crewcraft_oidc::Identity;
 use crewcraft_server::external_signin::{Authorizer, ExternalSignIn, Provider};
 use crewcraft_server::lab_bootstrap::bootstrap_handler_with;
 use crewcraft_server::lab_installation::LabInstallation;
@@ -227,7 +227,6 @@ fn poll_until(controller: &mut Controller, what: &str, want: impl Fn(&Update) ->
     }
     panic!("timed out waiting for {what}; saw {seen:?}");
 }
-
 
 /// An authorizer whose answer the test sets; it records each purpose it was asked for.
 struct FakeAuthorizer {
