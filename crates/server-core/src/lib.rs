@@ -21,6 +21,7 @@ pub mod enrollment;
 pub mod file_store;
 pub mod html_text;
 pub mod import;
+pub mod import_media;
 pub mod invites;
 pub mod journal;
 pub mod mentions;

@@ -1229,6 +1229,11 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
     for chip in chips {
         let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
         ui.with_layout(layout, |ui| {
+            // A file an import could not capture has no bytes to save (T350e).
+            if chip.file == [0; 16] {
+                ui.weak(format!("{} (not archived)", chip.name));
+                return;
+            }
             if ui.small_button(format!("Save {}", chip.name)).clicked() {
                 action = Some(MessageAction::Save(chip.clone()));
             }

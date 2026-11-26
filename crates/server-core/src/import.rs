@@ -8,8 +8,10 @@
 //! index, threads).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
 
 use crate::durable::{DurableError, DurableServer, index_event};
+use crate::import_media::{ImportedFile, merge_files};
 use crate::op::Op;
 use crate::room::Role;
 use crate::room_service::MAX_TEXT_CHARS;
@@ -69,7 +71,7 @@ pub struct BundleMessage {
     pub edited_ms: Option<u64>,
     /// The source deleted it: it is kept as redacted, and never comes back.
     pub deleted: bool,
-    /// Counted, not yet imported (T350e).
+    /// Its files: captured ones are stored and attached, the rest kept by name and size (T350e).
     pub files: Vec<BundleFile>,
 }
 
@@ -79,6 +81,10 @@ pub struct BundleFile {
     pub size: u64,
     /// Whether the export holds the bytes.
     pub captured: bool,
+    /// Where the bytes are, when captured.
+    pub source: Option<PathBuf>,
+    /// The SHA-256 the bundle gives for the bytes, if any; the stored bytes must match it.
+    pub sha256: Option<[u8; 32]>,
 }
 
 impl Bundle {
@@ -133,8 +139,11 @@ pub struct Report {
     /// Edited or deleted since an earlier run.
     pub messages_updated: usize,
     pub messages_unchanged: usize,
-    /// Files on messages: counted, not imported until T350e.
-    pub files_not_imported: usize,
+    /// Captured files stored by this run (T350e).
+    pub files_stored: usize,
+    /// Files of the messages this run imported or updated that are not archived (the export did not capture them, or
+    /// storing them was refused).
+    pub files_not_archived: usize,
     /// Members without an account, by room key: skipped now, added by a later run once they have one.
     pub people_skipped: BTreeMap<String, BTreeSet<String>>,
     /// Message keys whose `reply_to` could not be a thread (a missing parent, a reply, or a deleted message): imported
@@ -167,6 +176,8 @@ pub(crate) struct Imported {
     text: String,
     deleted: bool,
     top_level: bool,
+    /// Its files, stored or not archived (T350e).
+    files: Vec<ImportedFile>,
 }
 
 /// What imports have made, rebuilt from the import records on every start.
@@ -208,9 +219,14 @@ pub(crate) fn replay(server: &mut Server, imports: &mut Imports, parents: &mut H
             if parent != 0 {
                 parents.insert((slug.clone(), cursor), parent);
             }
-            let imported = Imported { slug: slug.clone(), cursor, sent_ms, text, deleted, top_level: parent == 0 };
+            let imported = Imported { slug: slug.clone(), cursor, sent_ms, text, deleted, top_level: parent == 0, files: Vec::new() };
             imports.insert_message(key, imported);
             Ok(Replayed::Done { slug, cursor })
+        }
+        Op::ImportFiles { slug, key, files } => {
+            let imported = imports.messages.get_mut(&key).filter(|m| m.slug == slug).ok_or(())?;
+            imported.files = files.into_iter().map(|(name, size, id)| ImportedFile { name, size, id }).collect();
+            Ok(Replayed::Done { slug, cursor: 0 })
         }
         Op::ImportEdit { slug, key, text, .. } => {
             let imported = imports.messages.get_mut(&key).filter(|m| m.slug == slug).ok_or(())?;
@@ -356,17 +372,23 @@ impl DurableServer {
                 refuse(&mut report, "the text is empty or longer than 4000 characters");
                 continue;
             }
-            report.files_not_imported += message.files.len();
 
             // Already imported: bring it up to date, never back.
             if let Some(existing) = self.imports.messages.get(&external).cloned() {
-                if existing.deleted || (!message.deleted && existing.text == text) {
-                    report.messages_unchanged += 1;
-                } else {
+                let mut changed = false;
+                if !existing.deleted && (message.deleted || existing.text != text) {
                     if !dry_run {
                         self.update_imported(&external, &existing, message, text)?;
                     }
+                    changed = true;
+                }
+                if !existing.deleted && !message.deleted {
+                    changed |= self.import_files(&existing.slug, &external, &existing.files, message, index, dry_run, &mut report)?;
+                }
+                if changed {
                     report.messages_updated += 1;
+                } else {
+                    report.messages_unchanged += 1;
                 }
                 continue;
             }
@@ -395,8 +417,10 @@ impl DurableServer {
                         Parent::None | Parent::Planned => 0,
                     };
                     self.add_imported(slug, &external, message, text, parent)?;
+                    self.import_files(slug, &external, &[], message, index, false, &mut report)?;
                 }
                 _ => {
+                    self.import_files("", &external, &[], message, index, true, &mut report)?;
                     planned.insert(external, top_level && !message.deleted);
                 }
             }
@@ -427,9 +451,75 @@ impl DurableServer {
             text: text.to_owned(),
             deleted: message.deleted,
             top_level: parent == 0,
+            files: Vec::new(),
         };
         self.imports.insert_message(external.to_owned(), imported);
         Ok(())
+    }
+
+    /// Bring an imported message's files up to date with the bundle (T350e): store what is newly captured, keep what an
+    /// earlier run stored, and record the list when it changed. Returns whether it changed. A dry run stores nothing and
+    /// counts what a real run would store. A deleted message has no files.
+    #[allow(clippy::too_many_arguments)]
+    fn import_files(
+        &mut self,
+        slug: &str,
+        external: &str,
+        existing: &[ImportedFile],
+        message: &BundleMessage,
+        index: usize,
+        dry_run: bool,
+        report: &mut Report,
+    ) -> Result<bool, DurableError> {
+        if message.deleted || (message.files.is_empty() && existing.is_empty()) {
+            return Ok(false);
+        }
+        if dry_run {
+            let mut changed = existing.is_empty();
+            for (n, file) in message.files.iter().enumerate() {
+                if existing.get(n).is_some_and(|old| old.name == file.name && old.id.is_some()) {
+                    continue;
+                }
+                if file.captured {
+                    report.files_stored += 1;
+                    changed = true;
+                } else {
+                    report.files_not_archived += 1;
+                }
+            }
+            return Ok(changed);
+        }
+        let mut refusals = Vec::new();
+        let mut stored = 0;
+        let merged = merge_files(existing, &message.files, |n, file| match self.store_imported_file(slug, file)? {
+            Ok(id) => {
+                stored += 1;
+                Ok(Some(id))
+            }
+            Err(reason) => {
+                refusals.push(Refusal { at: format!("message {index} file {n}"), reason: reason.into() });
+                Ok(None)
+            }
+        })?;
+        report.files_stored += stored;
+        report.refusals.extend(refusals);
+        report.files_not_archived += merged.iter().filter(|file| file.id.is_none()).count();
+        if merged == existing {
+            return Ok(false);
+        }
+        let files: Vec<(String, u64, Option<[u8; 16]>)> = merged.iter().map(|file| (file.name.clone(), file.size, file.id)).collect();
+        self.record(&Op::ImportFiles { slug: slug.to_owned(), key: external.to_owned(), files })?;
+        if let Some(imported) = self.imports.messages.get_mut(external) {
+            imported.files = merged;
+        }
+        Ok(true)
+    }
+
+    /// The files of the imported message at `cursor` in `slug`, if it has any and is not deleted (T350e).
+    pub(crate) fn imported_files(&self, slug: &str, cursor: u64) -> Option<&[ImportedFile]> {
+        let key = self.imports.by_cursor.get(&(slug.to_owned(), cursor))?;
+        let imported = self.imports.messages.get(key).filter(|m| !m.deleted && !m.files.is_empty())?;
+        Some(&imported.files)
     }
 
     fn update_imported(&mut self, external: &str, existing: &Imported, message: &BundleMessage, text: &str) -> Result<(), DurableError> {

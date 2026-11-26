@@ -49,7 +49,7 @@ fn bundle() -> Bundle {
     let mut gone = message("ch1", "m5", CY, 5, "");
     gone.deleted = true;
     let mut with_file = message("dm1", "d2", BO, 2, "here is the plan");
-    with_file.files = vec![BundleFile { name: "plan.pdf".into(), size: 1200, captured: false }];
+    with_file.files = vec![BundleFile { name: "plan.pdf".into(), size: 1200, captured: false, source: None, sha256: None }];
     Bundle {
         source: "teams".into(),
         rooms: vec![
@@ -92,7 +92,7 @@ fn a_bundle_becomes_read_only_archive_rooms() {
     assert!(report.ok(), "{:?}", report.refusals);
     assert_eq!((report.rooms_created, report.rooms_found, report.members_added), (2, 0, 4));
     assert_eq!((report.messages_added, report.messages_updated, report.messages_unchanged), (6, 0, 0));
-    assert_eq!(report.files_not_imported, 1);
+    assert_eq!((report.files_stored, report.files_not_archived), (0, 1));
     assert_eq!(report.people_skipped.get("ch1"), Some(&BTreeSet::from([CY.to_owned()])), "no account yet");
     assert_eq!(report.made_top_level, vec!["m4".to_owned()], "a reply to a reply");
 
@@ -137,7 +137,7 @@ fn re_runs_add_nothing_and_later_runs_bring_changes_in() {
         Report {
             rooms_found: 2,
             messages_unchanged: 6,
-            files_not_imported: 1,
+            files_not_archived: 1,
             people_skipped: [("ch1".to_owned(), BTreeSet::from([CY.to_owned()]))].into(),
             ..Report::default()
         },

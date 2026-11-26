@@ -80,7 +80,7 @@ fn a_bundle_imports_once_and_a_dry_run_changes_nothing() {
     assert_eq!((first["dry_run"].clone(), first["rooms_created"].clone(), first["messages_added"].clone()), (json!(true), json!(2), json!(3)));
     // Nobody here has signed in yet: everyone is skipped, by room.
     assert_eq!(first["people_skipped"]["ch1"], json!(["ana@example.org", "bo@example.org"]), "addresses normalized");
-    assert_eq!(first["files_not_imported"], json!(2));
+    assert_eq!((first["files_stored"].clone(), first["files_not_archived"].clone()), (json!(1), json!(1)));
 
     let real = server(&["import", path(&data), "--bundle", path(&bundle)]);
     assert!(real.status.success(), "{}", String::from_utf8_lossy(&real.stderr));

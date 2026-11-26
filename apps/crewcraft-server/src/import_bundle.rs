@@ -73,12 +73,26 @@ pub fn read_bundle(dir: &Path) -> io::Result<Bundle> {
             for (n, file) in listed.iter().enumerate() {
                 let file_at = format!("{at} file {n}");
                 let file = object(file, &file_at, &["name", "size"], &["sha256", "path"])?;
-                let captured = match file.get("path") {
-                    None | Some(Value::Null) => false,
-                    Some(Value::String(path)) => captured(dir, path).map_err(|reason| invalid(format!("{file_at}: {reason}")))?,
+                let source = match file.get("path") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(path)) => {
+                        let found = captured(dir, path).map_err(|reason| invalid(format!("{file_at}: {reason}")))?;
+                        found.then(|| dir.join("files").join(path))
+                    }
                     Some(_) => return Err(invalid(format!("{file_at}: path is not a string"))),
                 };
-                files.push(BundleFile { name: string(file, "name", &file_at)?.to_owned(), size: number(file, "size", &file_at)?, captured });
+                let sha256 = match file.get("sha256") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(hex)) => Some(parse_sha256(hex).ok_or_else(|| invalid(format!("{file_at}: sha256 is not 64 hex digits")))?),
+                    Some(_) => return Err(invalid(format!("{file_at}: sha256 is not a string"))),
+                };
+                files.push(BundleFile {
+                    name: string(file, "name", &file_at)?.to_owned(),
+                    size: number(file, "size", &file_at)?,
+                    captured: source.is_some(),
+                    source,
+                    sha256,
+                });
             }
         }
         messages.push(BundleMessage {
@@ -116,7 +130,8 @@ pub fn report_json(report: &Report, dry_run: bool) -> String {
         "messages_added": report.messages_added,
         "messages_updated": report.messages_updated,
         "messages_unchanged": report.messages_unchanged,
-        "files_not_imported": report.files_not_imported,
+        "files_stored": report.files_stored,
+        "files_not_archived": report.files_not_archived,
         "people_skipped": skipped,
         "made_top_level": report.made_top_level,
         "refusals": refusals,
@@ -137,7 +152,8 @@ pub fn summary(report: &Report, dry_run: bool) -> String {
         (report.messages_added, "messages added"),
         (report.messages_updated, "messages updated (edited or deleted since)"),
         (report.messages_unchanged, "messages unchanged"),
-        (report.files_not_imported, "files not imported yet"),
+        (report.files_stored, "files stored"),
+        (report.files_not_archived, "files not archived (not captured by the export)"),
         (skipped, "people skipped (no account yet; a later run adds them)"),
         (report.made_top_level.len(), "replies imported as top-level messages"),
         (report.refusals.len(), "parts refused"),
@@ -147,6 +163,18 @@ pub fn summary(report: &Report, dry_run: bool) -> String {
         }
     }
     lines.join("\n") + "\n"
+}
+
+/// 64 hex digits as 32 bytes.
+fn parse_sha256(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 || !hex.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }
 
 fn address(raw: &str) -> String {

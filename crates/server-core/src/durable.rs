@@ -420,6 +420,10 @@ impl DurableServer {
 
     /// The files the message at `cursor` in `slug` carries (task T330c), in the order they were posted.
     pub fn attachments(&self, slug: &str, cursor: u64) -> Vec<crewcraft_proto::push::AttachedFile> {
+        // An imported message's files, stored or not archived (task T350e).
+        if let Some(files) = self.imported_attachments(slug, cursor) {
+            return files;
+        }
         let Some(ids) = self.attachments.get(&(slug.to_owned(), cursor)) else { return Vec::new() };
         ids.iter()
             .filter_map(|id| {
@@ -427,6 +431,16 @@ impl DurableServer {
                 Some(crewcraft_proto::push::AttachedFile { file: *id, name: file.name.clone(), size: file.size, image: file.image })
             })
             .collect()
+    }
+
+    /// The file store, when this server keeps files (task T350e).
+    pub(crate) fn file_store(&self) -> Option<&FileStore> {
+        self.store.as_ref()
+    }
+
+    /// The image size recorded for a stored file (task T350e).
+    pub(crate) fn stored_image(&self, file: &[u8; 16]) -> Option<(u32, u32)> {
+        self.files.get(file).and_then(|record| record.image)
     }
 
     fn detach(&mut self, slug: &str, target: u64) {
@@ -613,7 +627,7 @@ fn replay(server: &mut Server, op: Op) -> Result<u64, ServerError> {
         // Handled before `replay` is called: a file record changes no room, and a post with files needs the records.
         Op::FileStored { .. } | Op::PostFiles { .. } | Op::Reply { .. } => Ok(0),
         // Handled by `import::replay` (task T350a).
-        Op::ImportRoom { .. } | Op::ImportMessage { .. } | Op::ImportEdit { .. } | Op::ImportDelete { .. } => Ok(0),
+        Op::ImportRoom { .. } | Op::ImportMessage { .. } | Op::ImportEdit { .. } | Op::ImportDelete { .. } | Op::ImportFiles { .. } => Ok(0),
     }
 }
 
