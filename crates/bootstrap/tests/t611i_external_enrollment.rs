@@ -21,14 +21,16 @@ const NONCE: &str = "__________________________________________8";
 const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 const REDIRECT: &str = "http://127.0.0.1:5/callback";
 
+/// What one `verify` was given: bootstrap key, code, verifier, redirect URI.
+type Verified = ([u8; 32], String, String, String);
+
 /// The provider, played by the test.
 struct FakeProvider {
     begin_fails: bool,
     /// What `verify` answers.
     identity: Mutex<Option<VerifiedIdentity>>,
     begins: AtomicUsize,
-    /// What each `verify` was given: bootstrap key, code, verifier, redirect URI.
-    verified: Mutex<Vec<([u8; 32], String, String, String)>>,
+    verified: Mutex<Vec<Verified>>,
     /// The enroller, when the test drives it through `receive_shared`: `verify` checks its lock is free.
     shared: OnceLock<Arc<Mutex<Rig<MemLog>>>>,
     lock_was_free: AtomicBool,
