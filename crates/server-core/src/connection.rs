@@ -331,6 +331,11 @@ fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64
                 Err(crate::durable::ReplyError::Durable(error)) => Err(DurableConnError::Storage(error)),
             });
         }
+        Request::StorageUse => {
+            let used = server.storage_used(user);
+            let frame = crewcraft_proto::request::storage_frame(used, server.quota());
+            return Some(Ok((Response::Ok { cursor: used }, Some(Follow::Id(frame)))));
+        }
         Request::ListFiles => {
             let files = server.listed_files(user);
             return Some(Ok((Response::Ok { cursor: files.len() as u64 }, Some(Follow::Files(files)))));

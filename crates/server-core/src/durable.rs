@@ -52,6 +52,8 @@ pub struct DurableServer {
     store: Option<FileStore>,
     /// Uploads in progress, by upload id (task T330b).
     uploads: HashMap<[u8; 16], Upload>,
+    /// The storage each person's files may take (task T332a).
+    quota: u64,
     /// The files each message carries, by room and message cursor (task T330c).
     attachments: HashMap<(String, u64), Vec<[u8; 16]>>,
     /// Which message each attached file is on.
@@ -83,6 +85,8 @@ pub const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
 /// The most uploads in progress on the server, and per person.
 pub const MAX_UPLOADS: usize = 64;
 pub const MAX_UPLOADS_PER_PERSON: usize = 4;
+/// The storage each person's files may take unless the server says otherwise (REQUIREMENTS 2.4, task T332a): 10 GiB.
+pub const DEFAULT_QUOTA: u64 = 10 * 1024 * 1024 * 1024;
 /// An upload with no chunk for this long is discarded.
 pub const UPLOAD_IDLE_MS: u64 = 10 * 60 * 1000;
 
@@ -134,6 +138,8 @@ pub enum UploadError {
     BadSize,
     /// Too many uploads in progress, on the server or for this person.
     TooMany,
+    /// The upload would take the person past their storage quota (task T332a).
+    OverQuota,
     /// No upload in progress has this id for this person (or it expired).
     NoSuchUpload,
     /// A chunk outside the declared size.
@@ -265,6 +271,7 @@ impl DurableServer {
             files,
             store: None,
             uploads: HashMap::new(),
+            quota: DEFAULT_QUOTA,
             attachments,
             attached,
             detached,
@@ -302,6 +309,11 @@ impl DurableServer {
         let mine = self.uploads.values().filter(|upload| upload.user == user).count();
         if self.uploads.len() >= MAX_UPLOADS || mine >= MAX_UPLOADS_PER_PERSON {
             return Err(UploadError::TooMany);
+        }
+        // The quota counts what is stored and what is on its way, before any byte is received (task T332a).
+        let reserved: u64 = self.uploads.values().filter(|upload| upload.user == user).map(|upload| upload.size).sum();
+        if self.storage_used(user).saturating_add(reserved).saturating_add(size) > self.quota {
+            return Err(UploadError::OverQuota);
         }
         let mut id = [0u8; 16];
         OsRng.fill_bytes(&mut id);
@@ -487,6 +499,23 @@ impl DurableServer {
         listed.sort_by(|a, b| b.cursor.cmp(&a.cursor).then(a.room.cmp(&b.room)).then(a.name.cmp(&b.name)));
         listed.truncate(crewcraft_proto::request::MAX_LISTED_FILES);
         listed
+    }
+
+    /// Set the storage each person's files may take (task T332a); `DEFAULT_QUOTA` otherwise.
+    pub fn with_quota(mut self, bytes: u64) -> Self {
+        self.quota = bytes;
+        self
+    }
+
+    /// The storage each person's files may take (task T332a).
+    pub fn quota(&self) -> u64 {
+        self.quota
+    }
+
+    /// The bytes `user`'s uploaded files take (task T332a): every file record they uploaded, attached or not, except
+    /// files whose message was deleted. Identical bytes uploaded twice count twice: each upload is the person's own.
+    pub fn storage_used(&self, user: &str) -> u64 {
+        self.files.iter().filter(|(id, file)| file.uploader == user && !self.detached.contains(*id)).map(|(_, file)| file.size).sum()
     }
 
     /// The file store, when this server keeps files (task T350e).

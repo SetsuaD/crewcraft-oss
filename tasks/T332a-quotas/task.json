@@ -1,0 +1,21 @@
+{
+  "id": "T332a-quotas",
+  "title": "Storage quotas: each person's uploads against a quota, and StorageUse",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs"
+  ],
+  "test_path": "crates/server-core/tests/t332a_quotas.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t332a_quotas",
+  "depends_on": [
+    "T330b-upload"
+  ],
+  "spec": "REQUIREMENTS 2.4. DEFAULT_QUOTA = 10 GiB per person; DurableServer::with_quota and quota. storage_used(user): the sizes of every file record the person uploaded, attached or not, except files whose message was deleted (imported files belong to the archive owner). begin_upload refuses with OverQuota (E_OVER_QUOTA, 12), before any byte is received, when used + uploads in progress + size would pass the quota; reaching it exactly is fine. Request 25 StorageUse (no fields) answers Ok { cursor: used } and an id frame of storage_frame(used, quota) (two big-endian u64; storage_of reads it); the memory backend answers E_NO_STORAGE.",
+  "status": "done",
+  "context": [
+    "docs/FILES.md"
+  ]
+}

@@ -28,6 +28,9 @@
 //!   by one files frame (`encode_files`): `u8 tag (135) | u32 id | u16 n | n × (16 file id | str room | u64 message
 //!   cursor | str uploader (0 to MAX_AUTHOR) | str name (1 to MAX_FILE_NAME) | u64 size | u8 has image size | [u32
 //!   width | u32 height])`, n at most `MAX_LISTED_FILES`
+//! - tag 25 `StorageUse` (task T332a): no fields; behind `FEATURE_FILES`. Answered `Ok { cursor }` with the bytes the
+//!   person's files take, then by an id frame whose 16 bytes are that number and the person's quota, each a big-endian
+//!   u64 (`storage_of`)
 //! - tag 17 `React` (task T341a): `str room | u64 target | u8 reaction (1 to push::REACTIONS.len()) | u8 on (0 or 1)`,
 //!   answered `Ok { cursor }` of the reaction's event; announced by `FEATURE_REACTIONS`
 //!
@@ -120,6 +123,7 @@ const CALL_LEAVE: u8 = 21;
 const CALL_KEY: u8 = 22;
 const CALL_SEAL: u8 = 23;
 const LIST_FILES: u8 = 24;
+const STORAGE_USE: u8 = 25;
 /// The largest sealed sender key a `CallSeal` carries.
 pub const MAX_SEALED: usize = 256;
 /// The most files one `PostFiles` attaches (task T330c).
@@ -228,6 +232,8 @@ pub enum Request {
     },
     /// The files on messages in the signed-in person's rooms (task T331a).
     ListFiles,
+    /// How much storage the signed-in person's files take, and their quota (task T332a).
+    StorageUse,
     /// Up to `length` bytes of file `file` from `offset` (task T330d).
     Download {
         file: [u8; 16],
@@ -442,6 +448,10 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.push(LIST_FILES);
             out.extend_from_slice(&id.to_be_bytes());
         }
+        Request::StorageUse => {
+            out.push(STORAGE_USE);
+            out.extend_from_slice(&id.to_be_bytes());
+        }
         Request::CallStart { room, video } => {
             out.push(CALL_START);
             out.extend_from_slice(&id.to_be_bytes());
@@ -483,7 +493,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
     if !(1..=6).contains(&tag)
         && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag)
         && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT)
-        && !(CALL_START..=LIST_FILES).contains(&tag)
+        && !(CALL_START..=STORAGE_USE).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -583,6 +593,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
             Request::CallStart { room, video }
         }
         LIST_FILES => Request::ListFiles,
+        STORAGE_USE => Request::StorageUse,
         CALL_KEY => {
             let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
             let call = read_u64(bytes, &mut pos)?;
@@ -777,6 +788,23 @@ pub fn decode_hits(bytes: &[u8]) -> Result<(u32, Vec<SearchHit>), CodecError> {
         return Err(CodecError::TrailingBytes);
     }
     Ok((id, hits))
+}
+
+/// The 16 bytes of the id frame answering `StorageUse` (task T332a): the bytes used and the quota.
+pub fn storage_frame(used: u64, quota: u64) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    out[..8].copy_from_slice(&used.to_be_bytes());
+    out[8..].copy_from_slice(&quota.to_be_bytes());
+    out
+}
+
+/// The bytes used and the quota from the id frame answering `StorageUse` (task T332a).
+pub fn storage_of(frame: &[u8; 16]) -> (u64, u64) {
+    let mut used = [0u8; 8];
+    let mut quota = [0u8; 8];
+    used.copy_from_slice(&frame[..8]);
+    quota.copy_from_slice(&frame[8..]);
+    (u64::from_be_bytes(used), u64::from_be_bytes(quota))
 }
 
 /// One file the files frame lists (task T331a).

@@ -33,6 +33,8 @@ pub const E_NO_SUCH_FILE: u16 = 9;
 pub const E_BAD_ATTACHMENT: u16 = 10;
 /// No such open call in the room, or the person is not in it (task T360a1): the client leaves the call.
 pub const E_NO_SUCH_CALL: u16 = 11;
+/// The upload would take the person past their storage quota (task T332a).
+pub const E_OVER_QUOTA: u16 = 12;
 /// Anything else (`AlreadyMember`, `LastOwner`, `BadName`).
 pub const E_OTHER: u16 = 99;
 
@@ -45,6 +47,7 @@ pub fn upload_error_code(error: crate::durable::UploadError) -> u16 {
         U::ReadOnly => E_NOT_ALLOWED,
         U::BadName | U::BadSize | U::BadChunk | U::WrongContent => E_BAD_FILE,
         U::TooMany => E_RATE_LIMITED,
+        U::OverQuota => E_OVER_QUOTA,
         U::NoSuchUpload => E_NO_SUCH_UPLOAD,
         U::Storage | U::Durable(_) => E_OTHER,
     }
@@ -147,6 +150,7 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         | Request::CallHeartbeat { .. }
         | Request::CallLeave { .. }
         | Request::ListFiles
+        | Request::StorageUse
         | Request::CallKey { .. }
         | Request::CallSeal { .. }
         | Request::PostFiles { .. }
