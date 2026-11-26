@@ -393,7 +393,8 @@ bootstrap connection (section 3) takes a third pair of calls in place of the pas
    - the token's `email` equals the invitation's address (case-insensitive), so a colleague who obtains the link cannot
      bind their own provider account to someone else's invitation (the subject, not the email, is what is stored);
    - no account is bound to that `(issuer, subject)` already;
-   - with an authorizer configured, a fresh `allow` with `use` (`purpose: sign-in`), and the decision is stored.
+   - with an authorizer configured, a fresh `allow` with `use` (`purpose: sign-in`). The decision is not stored here (the
+     person does not exist yet); the first sign-in asks again and stores it.
    One `activate` then commits the invitation, the person (no password, no TOTP secret), the device and its exact leaf,
    **and the binding** together (`AccountOp::ActivatedExternal`, one journal record, so an account never exists
    unbound). Only after it returns `Ok` is the leaf sent as `Activated`.

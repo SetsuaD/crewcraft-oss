@@ -5,8 +5,14 @@
 //! `crewcraft_oidc` against that device's nonce, fetching the provider's keys once more when a token names an unknown
 //! key; the provider identity bound to this device's own person; the external authorizer asked and its decision
 //! stored durably before anything is granted; then an ordinary session for this device), the HTTPS-backed provider
-//! and authorizer, and reading an authorizer's answer (docs/AUTHORIZER.md). Called by: `stored_device_auth`. Calls:
-//! `crewcraft-oidc`, `crewcraft-authz`, `crewcraft-https`, the account store.
+//! and authorizer, and reading an authorizer's answer (docs/AUTHORIZER.md). Called by: `stored_device_auth`, and the
+//! bootstrap connection through `crewcraft_bootstrap::ExternalEnrollment` (task T611i). Calls: `crewcraft-oidc`,
+//! `crewcraft-authz`, `crewcraft-https`, the account store.
+//!
+//! Enrollment through the provider (task T611i) uses the same nonces and checks, keyed by the invitation's bootstrap
+//! key instead of a device: `begin_enrollment`, then `verify_enrollment`, which checks the token and asks the authorizer
+//! (a fresh `allow` with `use`) but stores nothing; the bootstrap connection then commits the person with the binding,
+//! and the first sign-in asks the authorizer again and stores its decision.
 //!
 //! Every refusal is the same `Refused` on the wire; `Refusal` says why, for the server's own log and the tests.
 
@@ -15,6 +21,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crewcraft_authz::{Access, Answer, Capabilities, Capability, Record, commit_decision};
+use crewcraft_bootstrap::{EnrollmentStart, ExternalEnrollment, VerifiedIdentity};
 use crewcraft_https::{Client, Response};
 use crewcraft_oidc::{Expected, Identity, Key, Provider as Discovery, parse_discovery, parse_jwks, verify_id_token};
 use crewcraft_server_core::account_store::AccountStore;
@@ -84,12 +91,20 @@ pub trait Authorizer: Send + Sync {
     fn ask(&self, identity: &Identity, purpose: &str) -> Answer;
 }
 
+/// Whose begun sign-in a nonce belongs to: an enrolled device, or an invitation's bootstrap key (task T611i). The two
+/// never satisfy each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Pending {
+    Device(u64),
+    Enrollment([u8; 32]),
+}
+
 /// External sign-in for one server: its provider, optional authorizer, rules, and the pending nonces.
 pub struct ExternalSignIn {
     provider: Arc<dyn Provider>,
     authorizer: Option<Arc<dyn Authorizer>>,
     require_mfa: bool,
-    pending: Mutex<HashMap<u64, (String, u64)>>,
+    pending: Mutex<HashMap<Pending, (String, u64)>>,
     last_key_refresh_ms: Mutex<Option<u64>>,
 }
 
@@ -111,12 +126,77 @@ impl ExternalSignIn {
 
     /// Begin a sign-in for `device_id`: a fresh nonce from `random` (replacing any earlier one for this device).
     pub fn begin(&self, device_id: u64, random: [u8; 32], now_ms: u64) -> Result<Start, Refusal> {
+        self.start(Pending::Device(device_id), random, now_ms)
+    }
+
+    /// Begin an enrollment through the provider for the invitation whose bootstrap key is `bootstrap_pub` (task T611i).
+    pub fn begin_enrollment(&self, bootstrap_pub: [u8; 32], random: [u8; 32], now_ms: u64) -> Result<Start, Refusal> {
+        self.start(Pending::Enrollment(bootstrap_pub), random, now_ms)
+    }
+
+    fn start(&self, key: Pending, random: [u8; 32], now_ms: u64) -> Result<Start, Refusal> {
         let authorization_endpoint = self.provider.authorization_endpoint().map_err(Refusal::Provider)?;
         let nonce = crewcraft_oidc::random_value(random);
         let mut pending = self.pending.lock().map_err(|_| Refusal::Store)?;
         pending.retain(|_, (_, expires)| *expires > now_ms);
-        pending.insert(device_id, (nonce.clone(), now_ms + PENDING_MS));
+        pending.insert(key, (nonce.clone(), now_ms + PENDING_MS));
         Ok(Start { issuer: self.provider.issuer().to_owned(), client_id: self.provider.client_id().to_owned(), authorization_endpoint, nonce })
+    }
+
+    /// Take the nonce begun for `key` out, so it is used once whatever happens next.
+    fn take(&self, key: Pending, now_ms: u64) -> Result<String, Refusal> {
+        let mut pending = self.pending.lock().map_err(|_| Refusal::Store)?;
+        match pending.remove(&key) {
+            Some((nonce, expires)) if expires > now_ms => Ok(nonce),
+            _ => Err(Refusal::NoPendingSignIn),
+        }
+    }
+
+    /// A loopback redirect, the code exchanged, and the ID token verified against `nonce`.
+    fn identify(&self, nonce: &str, code: &str, verifier: &str, redirect_uri: &str, now_ms: u64) -> Result<Identity, Refusal> {
+        if !is_loopback(redirect_uri) {
+            return Err(Refusal::NotLoopback);
+        }
+        let token = self.provider.exchange(code, verifier, redirect_uri).map_err(Refusal::Provider)?;
+        let expected = Expected {
+            issuer: self.provider.issuer(),
+            client_id: self.provider.client_id(),
+            nonce,
+            now: now_ms / 1000,
+            require_mfa: self.require_mfa,
+        };
+        let keys = self.provider.keys(false).map_err(Refusal::Provider)?;
+        match verify_id_token(&token, &keys, &expected) {
+            Err(crewcraft_oidc::Error::UnknownKey) if self.may_refresh_keys(now_ms) => {
+                let keys = self.provider.keys(true).map_err(Refusal::Provider)?;
+                verify_id_token(&token, &keys, &expected).map_err(Refusal::Token)
+            }
+            other => other.map_err(Refusal::Token),
+        }
+    }
+
+    /// Finish the enrollment begun for `bootstrap_pub` (task T611i): the same checks as a sign-in, and, with an
+    /// authorizer, a fresh `allow` with `use`. Nothing is stored: the bootstrap connection commits the person with this
+    /// identity, after checking the token's email is the invitation's.
+    pub fn verify_enrollment(
+        &self,
+        bootstrap_pub: [u8; 32],
+        code: &str,
+        verifier: &str,
+        redirect_uri: &str,
+        now_ms: u64,
+    ) -> Result<Identity, Refusal> {
+        let nonce = self.take(Pending::Enrollment(bootstrap_pub), now_ms)?;
+        let identity = self.identify(&nonce, code, verifier, redirect_uri, now_ms)?;
+        if let Some(authorizer) = &self.authorizer {
+            let answer = authorizer.ask(&identity, "sign-in");
+            match Record::default().sign_in(&answer, now_ms / 1000).1 {
+                Access::Allowed(caps) if caps.has(Capability::Use) => {}
+                Access::Allowed(_) => return Err(Refusal::NotAuthorized("no use".into())),
+                Access::Refused(why) => return Err(Refusal::NotAuthorized(why.to_string())),
+            }
+        }
+        Ok(identity)
     }
 
     /// Finish the sign-in begun on `device_id`, whose person is `user`, and return the new session token.
@@ -133,32 +213,8 @@ impl ExternalSignIn {
         now_ms: u64,
     ) -> Result<String, Refusal> {
         // The nonce is taken out first, so it is used once whatever happens next.
-        let nonce = {
-            let mut pending = self.pending.lock().map_err(|_| Refusal::Store)?;
-            match pending.remove(&device_id) {
-                Some((nonce, expires)) if expires > now_ms => nonce,
-                _ => return Err(Refusal::NoPendingSignIn),
-            }
-        };
-        if !is_loopback(redirect_uri) {
-            return Err(Refusal::NotLoopback);
-        }
-        let token = self.provider.exchange(code, verifier, redirect_uri).map_err(Refusal::Provider)?;
-        let expected = Expected {
-            issuer: self.provider.issuer(),
-            client_id: self.provider.client_id(),
-            nonce: &nonce,
-            now: now_ms / 1000,
-            require_mfa: self.require_mfa,
-        };
-        let keys = self.provider.keys(false).map_err(Refusal::Provider)?;
-        let identity = match verify_id_token(&token, &keys, &expected) {
-            Err(crewcraft_oidc::Error::UnknownKey) if self.may_refresh_keys(now_ms) => {
-                let keys = self.provider.keys(true).map_err(Refusal::Provider)?;
-                verify_id_token(&token, &keys, &expected).map_err(Refusal::Token)?
-            }
-            other => other.map_err(Refusal::Token)?,
-        };
+        let nonce = self.take(Pending::Device(device_id), now_ms)?;
+        let identity = self.identify(&nonce, code, verifier, redirect_uri, now_ms)?;
         if store.person_for_external(&identity.issuer, &identity.subject) != Some(user) {
             return Err(Refusal::NotThisPerson);
         }
@@ -182,6 +238,27 @@ impl ExternalSignIn {
         }
         *last = Some(now_ms);
         true
+    }
+}
+
+/// The bootstrap connection's view of the provider (task T611i). Both calls may reach the network; the bootstrap
+/// connection makes them with no lock held.
+impl ExternalEnrollment for ExternalSignIn {
+    fn begin(&self, bootstrap_pub: &[u8; 32], now_ms: u64) -> Option<EnrollmentStart> {
+        let mut random = [0; 32];
+        rand_core::RngCore::try_fill_bytes(&mut rand_core::OsRng, &mut random).ok()?;
+        let start = self.begin_enrollment(*bootstrap_pub, random, now_ms).ok()?;
+        Some(EnrollmentStart {
+            issuer: start.issuer,
+            client_id: start.client_id,
+            authorization_endpoint: start.authorization_endpoint,
+            nonce: start.nonce,
+        })
+    }
+
+    fn verify(&self, bootstrap_pub: &[u8; 32], code: &str, verifier: &str, redirect_uri: &str, now_ms: u64) -> Option<VerifiedIdentity> {
+        let identity = self.verify_enrollment(*bootstrap_pub, code, verifier, redirect_uri, now_ms).ok()?;
+        Some(VerifiedIdentity { issuer: identity.issuer, subject: identity.subject, email: identity.email })
     }
 }
 

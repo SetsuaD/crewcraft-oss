@@ -1,0 +1,22 @@
+{
+  "id": "T611i-server",
+  "title": "The server's side of enrolling through its identity provider",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/external_signin.rs",
+    "apps/crewcraft-server/src/lab_bootstrap.rs",
+    "apps/crewcraft-server/src/lab_runtime.rs",
+    "docs/SECURITY-DESIGN.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t611i_server_enrollment.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t611i_server_enrollment",
+  "depends_on": [
+    "T611e-external-signin-server",
+    "T611i-bootstrap"
+  ],
+  "spec": "ExternalSignIn keys its pending nonces by device or by an invitation's bootstrap key; the two never satisfy each other. begin_enrollment(bootstrap key) and verify_enrollment(bootstrap key, code, verifier, redirect) use a nonce once within PENDING_MS and apply the sign-in checks (loopback redirect, code exchange, ID token with that nonce and require-mfa, one key refresh), and with an authorizer require a fresh allow with use, storing nothing. ExternalSignIn implements crewcraft_bootstrap::ExternalEnrollment over them (begin draws fresh random bytes). bootstrap_handler_with(.., Some(provider)) makes the bootstrap connection enroll through it, and LabRuntime::with_external passes the provider there as well as to device sign-in.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

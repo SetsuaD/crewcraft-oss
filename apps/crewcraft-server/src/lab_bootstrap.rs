@@ -5,23 +5,41 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
 use crewcraft_accounts::password;
-use crewcraft_bootstrap::{BootstrapConnection, Enroller, Environment, StoreServices, receive_shared};
+use crewcraft_bootstrap::{BootstrapConnection, Enroller, Environment, ExternalEnrollment, StoreServices, receive_shared};
 use crewcraft_pki::Authority;
 use crewcraft_proto::bootstrap::{MAX_CSR, MAX_DEVICE_NAME, MAX_PASSWORD};
 use crewcraft_proto::frame::read_frame;
+use crewcraft_proto::signin::{MAX_AUTH_CODE_BYTES, MAX_REDIRECT_BYTES, MAX_VERIFIER_LEN};
 use crewcraft_server_core::account_store::AccountStore;
 
 use crate::lab_server::BootstrapStream;
 
 // One tag, a request id and three length-prefixed fields.
 const MAX_BOOTSTRAP_REQUEST: usize = 1 + 4 + 3 * 2 + MAX_DEVICE_NAME + MAX_CSR + MAX_PASSWORD;
+// `ConfirmExternal` (task T611i), the other three-field request, fits too.
+const _: () = assert!(1 + 4 + 3 * 2 + MAX_AUTH_CODE_BYTES + MAX_VERIFIER_LEN + MAX_REDIRECT_BYTES <= MAX_BOOTSTRAP_REQUEST);
 
 pub fn bootstrap_handler(
     accounts: Arc<Mutex<AccountStore>>,
     authority: Authority,
     environment: impl Environment + Send + 'static,
 ) -> impl Fn([u8; 32], &mut BootstrapStream) + Send + Sync + 'static {
-    let handler = Mutex::new(Enroller::new(authority, StoreServices::new_shared(accounts, environment)));
+    bootstrap_handler_with(accounts, authority, environment, None)
+}
+
+/// As `bootstrap_handler`; with `external`, invitations are redeemed through the server's identity provider instead of
+/// a password and an authenticator (task T611i).
+pub fn bootstrap_handler_with(
+    accounts: Arc<Mutex<AccountStore>>,
+    authority: Authority,
+    environment: impl Environment + Send + 'static,
+    external: Option<Arc<dyn ExternalEnrollment>>,
+) -> impl Fn([u8; 32], &mut BootstrapStream) + Send + Sync + 'static {
+    let enroller = Enroller::new(authority, StoreServices::new_shared(accounts, environment));
+    let handler = Mutex::new(match external {
+        Some(external) => enroller.with_external(external),
+        None => enroller,
+    });
     move |key, stream| {
         let mut connection = BootstrapConnection::new(key, &source_key(stream.peer_ip()));
         while let Ok(Some(frame)) = read_frame(stream, MAX_BOOTSTRAP_REQUEST) {

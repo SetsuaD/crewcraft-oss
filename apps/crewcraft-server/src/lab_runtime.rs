@@ -22,7 +22,7 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 #[cfg(unix)]
 use crate::control::ControlSocket;
 use crate::external_signin::ExternalSignIn;
-use crate::lab_bootstrap::bootstrap_handler;
+use crate::lab_bootstrap::bootstrap_handler_with;
 use crate::lab_installation::LabInstallation;
 use crate::lab_server::{BootstrapStream, LabOptions, LabServer};
 use crate::lab_state::LabState;
@@ -43,7 +43,8 @@ pub struct LabRuntime {
 }
 
 impl LabRuntime {
-    /// Also offer sign-in through an external identity provider on every device connection (task T611f).
+    /// Also offer sign-in through an external identity provider on every device connection (task T611f), and redeem
+    /// invitations through it instead of a password and an authenticator (task T611i).
     pub fn with_external(mut self, external: Arc<ExternalSignIn>) -> Self {
         self.external = Some(external);
         self
@@ -90,7 +91,13 @@ impl LabRuntime {
 
     /// Serve normal device sign-in and the explicitly admitted invitation flow.
     pub fn serve_enrolled(self, shutdown: &AtomicBool) -> io::Result<()> {
-        self.serve(shutdown, |accounts, issuer| Ok(bootstrap_handler(accounts, issuer, SystemEnvironment)))
+        let external = self.enrollment();
+        self.serve(shutdown, move |accounts, issuer| Ok(bootstrap_handler_with(accounts, issuer, SystemEnvironment, external)))
+    }
+
+    /// The provider invitations are redeemed through, if `identity.toml` configures one (task T611i).
+    fn enrollment(&self) -> Option<Arc<dyn crewcraft_bootstrap::ExternalEnrollment>> {
+        self.external.clone().map(|external| external as Arc<dyn crewcraft_bootstrap::ExternalEnrollment>)
     }
 
     /// As `serve_enrolled`, and answer `invite`, `room` and `add-member` on `control` while serving (task T238). The
@@ -101,7 +108,8 @@ impl LabRuntime {
         let beside = move |stopped: &dyn Fn() -> bool, accounts: &Mutex<AccountStore>, rooms: &Mutex<DurableServer>, now_ms: &dyn Fn() -> u64| {
             control.serve(stopped, accounts, rooms, now_ms)
         };
-        self.serve_beside(shutdown, |accounts, issuer| Ok(bootstrap_handler(accounts, issuer, SystemEnvironment)), Some(beside))
+        let external = self.enrollment();
+        self.serve_beside(shutdown, move |accounts, issuer| Ok(bootstrap_handler_with(accounts, issuer, SystemEnvironment, external)), Some(beside))
     }
 
     /// Build the handler with the same account store used by TLS admission and chat authentication.
