@@ -343,14 +343,16 @@ fn calls(
     now_ms: u64,
     media_device: Option<u64>,
 ) -> Option<Result<Answered, DurableConnError>> {
-    use crate::calls::CallError;
+    use crate::calls::{CallError, SealedKey};
     let answer = match request {
         Request::CallStart { room, video } => server.call_start(room, user, *video, now_ms),
         Request::CallJoin { room, call } => server.call_join(room, user, *call, now_ms).map(|()| *call),
         Request::CallHeartbeat { room, call } => server.call_heartbeat(room, user, *call, now_ms).map(|()| *call),
         Request::CallLeave { room, call } => server.call_leave(room, user, *call, now_ms).map(|()| *call),
         Request::CallKey { room, call, public } => server.call_key(room, user, *call, *public, now_ms).map(|()| *call),
-        Request::CallSeal { room, call, to, kid, sealed } => server.call_seal(room, user, *call, to, *kid, sealed.clone(), now_ms).map(|()| *call),
+        Request::CallSeal { room, call, to, kid, sealed } => {
+            server.call_seal(room, user, *call, SealedKey { to, kid: *kid, sealed: sealed.clone() }, now_ms).map(|()| *call)
+        }
         _ => return None,
     };
     Some(match answer {

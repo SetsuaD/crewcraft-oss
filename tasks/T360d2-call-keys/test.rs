@@ -13,7 +13,7 @@ use crewcraft_client_core::notify::Settings;
 use crewcraft_proto::frame::{Decoder, encode};
 use crewcraft_proto::push::{Push, decode_push, encode_push};
 use crewcraft_proto::request::{FEATURE_CALLS, MAX_SEALED, Request, decode_request, encode_request};
-use crewcraft_server_core::calls::{CallError, MAX_KIDS_PER_PAIR};
+use crewcraft_server_core::calls::{CallError, MAX_KIDS_PER_PAIR, SealedKey};
 use crewcraft_server_core::connection::Connection;
 use crewcraft_server_core::durable::DurableServer;
 use crewcraft_server_core::room::Role;
@@ -68,10 +68,14 @@ fn only_people_in_the_call_take_part_and_leaving_forgets() {
     assert_eq!(ds.call_key(&room, CY, call, [3; 32], T0), Err(CallError::NoSuchCall), "Cy is not in the call");
     ds.call_key(&room, ANA, call, [1; 32], T0).unwrap();
     ds.call_key(&room, BO, call, [2; 32], T0).unwrap();
-    assert_eq!(ds.call_seal(&room, ANA, call, CY, 1, vec![1], T0), Err(CallError::NoSuchCall), "not to someone outside it");
-    assert_eq!(ds.call_seal(&room, ANA, call, ANA, 1, vec![1], T0), Err(CallError::NoSuchCall), "not to oneself");
+    assert_eq!(
+        ds.call_seal(&room, ANA, call, SealedKey { to: CY, kid: 1, sealed: vec![1] }, T0),
+        Err(CallError::NoSuchCall),
+        "not to someone outside it"
+    );
+    assert_eq!(ds.call_seal(&room, ANA, call, SealedKey { to: ANA, kid: 1, sealed: vec![1] }, T0), Err(CallError::NoSuchCall), "not to oneself");
     for kid in 1..=(MAX_KIDS_PER_PAIR as u64 + 3) {
-        ds.call_seal(&room, ANA, call, BO, kid, vec![kid as u8], T0).unwrap();
+        ds.call_seal(&room, ANA, call, SealedKey { to: BO, kid, sealed: vec![kid as u8] }, T0).unwrap();
     }
     let kids: Vec<u64> = ds.open_call(&room).unwrap().sealed.keys().map(|(_, _, kid)| *kid).collect();
     assert_eq!(kids, (4..=(MAX_KIDS_PER_PAIR as u64 + 3)).collect::<Vec<_>>(), "the newest {MAX_KIDS_PER_PAIR} rotations are kept");
@@ -120,7 +124,7 @@ fn sealed_keys_reach_only_their_recipient_and_open_end_to_end() {
     let context = format!("call {call} kid 1");
     for (person, public) in keys.iter().filter(|(person, _)| person != ANA) {
         let sealed = seal(public, context.as_bytes(), base_key).unwrap();
-        ds.call_seal(&room, ANA, call, person, 1, sealed, T0).unwrap();
+        ds.call_seal(&room, ANA, call, SealedKey { to: person, kid: 1, sealed }, T0).unwrap();
     }
 
     // Bo gets only the box sealed to him, through his inbox, and opens it; the server could not.

@@ -54,6 +54,15 @@ pub struct Calls {
     open: HashMap<String, u64>,
 }
 
+/// One of a sender's keys sealed to one participant of a call (task T360d2): who it is for, its key id, and the sealed
+/// bytes only that participant can open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedKey<'a> {
+    pub to: &'a str,
+    pub kid: u64,
+    pub sealed: Vec<u8>,
+}
+
 /// A call I missed (REQUIREMENTS 2.5): dated by when it ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissedCall {
@@ -302,10 +311,10 @@ impl DurableServer {
         Ok(())
     }
 
-    /// Leave `actor`'s key `kid`, sealed to `to`, for `to` to collect (task T360d2). Both must be in the call; a
-    /// sender keeps at most `MAX_KIDS_PER_PAIR` keys for one recipient, the oldest dropped first.
-    #[allow(clippy::too_many_arguments)]
-    pub fn call_seal(&mut self, slug: &str, actor: &str, call: u64, to: &str, kid: u64, sealed: Vec<u8>, now_ms: u64) -> Result<(), CallError> {
+    /// Leave `actor`'s sealed key for its recipient to collect (task T360d2). Both must be in the call; a sender keeps
+    /// at most `MAX_KIDS_PER_PAIR` keys for one recipient, the oldest dropped first.
+    pub fn call_seal(&mut self, slug: &str, actor: &str, call: u64, key: SealedKey<'_>, now_ms: u64) -> Result<(), CallError> {
+        let SealedKey { to, kid, sealed } = key;
         self.call_heartbeat(slug, actor, call, now_ms)?;
         let record = self.calls.open_in_mut(slug, call).ok_or(CallError::NoSuchCall)?;
         if !record.present.contains_key(to) || to == actor {
