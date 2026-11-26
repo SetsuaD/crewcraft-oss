@@ -11,7 +11,7 @@ use crewcraft_client_core::session::{ClientSession, Phase, SessionError};
 use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
-use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_SEARCH, Request, Response, SearchHit};
+use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_SEARCH, FEATURE_THREADS, Request, Response, SearchHit};
 use crewcraft_proto::signin::{self, Opening, SignIn};
 use zeroize::Zeroizing;
 
@@ -286,6 +286,20 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
                 }
             }
         }
+    }
+
+    /// Whether the server agreed to threads (`request::FEATURE_THREADS`, task T340b).
+    pub fn threads(&self) -> bool {
+        self.features() & FEATURE_THREADS != 0
+    }
+
+    /// Reply to the message at `parent`, in its thread (task T340b); returns the reply's cursor. `Unsupported` without
+    /// the feature.
+    pub fn reply(&mut self, room: &str, parent: u64, text: &str, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
+        if !self.threads() {
+            return Err(ChatError::Unsupported);
+        }
+        self.request(Request::Reply { room: room.to_owned(), parent, text: text.to_owned() }, now_ms, 0, deadline)
     }
 
     fn files_only(&self) -> Result<(), ChatError> {

@@ -1,0 +1,24 @@
+{
+  "id": "T340b-threads-app",
+  "title": "Threads in the app: reply, N replies, the thread pane",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/ui-model/src/lib.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t340b_threads_window.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t340b_threads.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t340b_threads && cargo test -p crewcraft-desktop-ui --test t340b_threads_window",
+  "depends_on": [
+    "T340a-threads"
+  ],
+  "spec": "The app agrees to FEATURE_THREADS. ChatSession::reply and SignedInSession::reply send Request::Reply (Unsupported without the feature); SignedInSession::parents reads RoomView::parents. Command::Reply { room, parent, text } goes through the worker like a post (PostFailed on refusal), and the worker emits Event::Threads (Update::Threads) whenever a room's threads change. In the window any message can be selected and shows Reply (one's own also Edit and Delete); replies are left out of the conversation; a parent shows '1 reply' / 'N replies', which opens the thread beside the conversation (on a phone, in its place) with the parent, its replies, a 'Reply in thread' composer, 'Send reply' (trimmed, empty not sent, within MAX_DRAFT_CHARS) and 'Close thread'.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md"
+  ]
+}

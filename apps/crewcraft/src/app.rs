@@ -535,6 +535,7 @@ pub fn worker_update(event: Event) -> Vec<Update> {
                 .collect(),
         }],
         Event::Saved { path } => vec![Update::Failed(format!("Saved to {}", path.display()))],
+        Event::Threads { room, parents } => vec![Update::Threads { room, parents }],
         Event::SearchResults { query, hits } => vec![Update::SearchResults {
             query,
             results: hits
