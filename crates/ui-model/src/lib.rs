@@ -28,6 +28,8 @@ pub enum Command {
     Edit { room: String, target: u64, text: String },
     /// Delete one of the person's own messages, `target` being its cursor (task T316).
     Delete { room: String, target: u64 },
+    /// Find messages in every room the person is in (task T320c). `query` is trimmed, 1 to 200 bytes.
+    Search { query: String },
 }
 
 /// Why the composer did not submit. The draft is kept unchanged in every case.

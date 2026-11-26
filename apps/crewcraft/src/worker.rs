@@ -89,6 +89,8 @@ pub enum Event {
     Posted { room: String, cursor: u64 },
     /// The server accepted an edit or a deletion, recorded at `cursor` (task T316). The room's next snapshot shows it.
     Changed { room: String, cursor: u64 },
+    /// What a search for `query` found, newest first (task T320c).
+    SearchResults { query: String, hits: Vec<Found> },
     /// A post that was not acknowledged; `text` is returned so the window can restore the draft. After
     /// `Problem::Lost` the post may still have arrived: the room's next snapshot shows it if so.
     PostFailed { room: String, text: String, problem: Problem },
@@ -101,6 +103,15 @@ pub enum Event {
     SessionEnded,
     /// An external sign-in opened the provider's page in the browser and waits for the person there (task T611h).
     WaitingForBrowser,
+}
+
+/// One message a search found (task T320c): its room, its cursor, its author and the start of its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub room: String,
+    pub cursor: u64,
+    pub author: String,
+    pub snippet: String,
 }
 
 /// Where the worker keeps its session's resume ticket between runs (task T240). The app keeps it next to the device
@@ -166,6 +177,8 @@ pub enum Problem {
     ProviderRefused,
     /// The person cancelled the sign-in.
     Cancelled,
+    /// The server does not offer message search (task T320c).
+    SearchNotOffered,
 }
 
 /// A short sentence for the window, with no detail about which credential failed.
@@ -191,6 +204,7 @@ impl std::fmt::Display for Problem {
             Self::BrowserTimedOut => "The sign-in in the browser was not finished in time. Try again.",
             Self::ProviderRefused => "The sign-in page did not sign you in. Try again.",
             Self::Cancelled => "Sign-in cancelled.",
+            Self::SearchNotOffered => "This server does not offer message search.",
         })
     }
 }
@@ -211,6 +225,7 @@ impl Problem {
                 | Self::BrowserTimedOut
                 | Self::ProviderRefused
                 | Self::Cancelled
+                | Self::SearchNotOffered
         )
     }
 
@@ -507,6 +522,7 @@ impl Run {
                     self.change(room, |session, room| session.edit(room, target, &text));
                 }
                 Some(Input::Command(Command::Delete { room, target })) => self.change(room, |session, room| session.delete(room, target)),
+                Some(Input::Command(Command::Search { query })) => self.search(query),
                 Some(Input::SignOut) => {
                     self.retry = None;
                     let was_signed_in = self.session.is_some();
@@ -744,6 +760,24 @@ impl Run {
                 if problem.ends_session() {
                     self.fail_connection(problem, true);
                 }
+            }
+        }
+    }
+
+    /// A message search (task T320c): `SearchResults`, or `Failed` (`SearchNotOffered` from a server without search).
+    fn search(&mut self, query: String) {
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        match session.search(&query) {
+            Ok(Some(hits)) => {
+                let hits =
+                    hits.into_iter().map(|hit| Found { room: hit.room, cursor: hit.cursor, author: hit.author, snippet: hit.snippet }).collect();
+                self.emit(Event::SearchResults { query, hits });
+            }
+            Ok(None) => self.emit(Event::Failed(Problem::SearchNotOffered)),
+            Err(error) => {
+                self.request_failed(error);
             }
         }
     }

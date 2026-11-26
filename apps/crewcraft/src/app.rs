@@ -521,6 +521,13 @@ impl Controller {
 pub fn worker_update(event: Event) -> Vec<Update> {
     match event {
         Event::Connected | Event::Posted { .. } | Event::Changed { .. } => Vec::new(),
+        Event::SearchResults { query, hits } => vec![Update::SearchResults {
+            query,
+            results: hits
+                .into_iter()
+                .map(|hit| crewcraft_desktop_ui::SearchResult { room: hit.room, cursor: hit.cursor, author: hit.author, snippet: hit.snippet })
+                .collect(),
+        }],
         Event::SignedIn { email, rooms } => vec![Update::SignedIn { email, rooms }],
         Event::WaitingForBrowser => vec![Update::WaitingForBrowser],
         Event::Room { room, shown } => vec![Update::Snapshot { room, shown }],

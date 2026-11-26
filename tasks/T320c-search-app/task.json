@@ -1,0 +1,26 @@
+{
+  "id": "T320c-search-app",
+  "title": "Message search in the desktop app",
+  "crate": "crewcraft-server",
+  "files": [
+    "crates/client-core/src/client.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/ui-model/src/lib.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t320c_search_window.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t320c_search.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t320c_search",
+  "depends_on": [
+    "T320b-search-wire",
+    "T316-edit-delete"
+  ],
+  "spec": "The client offers FEATURE_SEARCH and decodes the hits frame (ClientEvent::Hits); ChatSession::search sends Search when the server agreed to it (Unsupported otherwise) and checks the hits match the count; SignedInSession::search returns None from a server without search. Command::Search { query } makes the worker report Event::SearchResults { query, hits } (or Failed(SearchNotOffered)); the app turns it into Update::SearchResults. The window's title bar has a 'Search messages' box and a Search button that send the trimmed query; the results replace the conversation ('Messages matching ...', each as 'author in room: snippet', 'No messages match.' when none), opening one opens its room and closes the results, and Close search returns. End to end against a running server: hits come newest first with author and current text, only from the person's rooms, an edit is found by its new text and a deleted message is not found.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md"
+  ]
+}
