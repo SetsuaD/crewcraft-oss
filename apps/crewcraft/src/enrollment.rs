@@ -3,10 +3,14 @@
 //!
 //! Owns: the enrollment thread and its two-step conversation with the window. Called by the window. Calls
 //! `device::NewDevice::enroll`.
+//!
+//! `start_external` enrolls through the server's identity provider instead (task T611i): the provider's page opens in
+//! the system browser (`EnrollmentEvent::WaitingForBrowser`), and `cancel` or dropping the handle ends the wait.
 
 use std::fmt;
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,9 +18,11 @@ use std::time::{Duration, Instant};
 use crewcraft_enroll::EnrollmentCode;
 use zeroize::Zeroizing;
 
-use crate::bootstrap_transport::MAX_CONFIRMATION_WINDOW;
+use crate::bootstrap_transport::{EXTERNAL_BROWSER_TIMEOUT, MAX_CONFIRMATION_WINDOW, MAX_EXTERNAL_CONFIRMATION_WINDOW};
 use crate::device::{DeviceError, NewDevice, StoredDevice};
-use crate::enroll_client::FirstTotpCode;
+use crate::enroll_client::{FirstTotpCode, browser_problem};
+use crate::external_flow::browse;
+use crate::worker::Browser;
 use crate::hardware_key::HardwareKeys;
 use crate::server_endpoint::ServerEndpoint;
 
@@ -41,6 +47,9 @@ impl fmt::Debug for AuthenticatorSetup {
 pub enum EnrollmentEvent {
     /// Show this to the person and ask for the first code; answer with `Enrollment::confirm`.
     AuthenticatorSetup(AuthenticatorSetup),
+    /// An enrollment through the provider opened its sign-in page in the browser (task T611i): the person finishes
+    /// there, or cancels with `Enrollment::cancel`.
+    WaitingForBrowser,
     /// Done. Save the record with `device_store::DeviceStore::save`.
     Enrolled(StoredDevice),
     /// Enrollment stopped. `DeviceError::Enrollment(EnrollmentError::ConfirmationUnknown(_))` means the server may
@@ -57,6 +66,13 @@ pub enum KeySource {
     Hardware { keys: Arc<dyn HardwareKeys>, alias: String },
 }
 
+/// Fresh random bytes for the PKCE verifier and the state.
+fn random_bytes() -> [u8; 32] {
+    let mut bytes = [0; 32];
+    rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut bytes);
+    bytes
+}
+
 impl fmt::Debug for KeySource {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -70,6 +86,14 @@ impl fmt::Debug for KeySource {
 /// ends by itself within the confirmation window at the latest.
 pub struct Enrollment {
     codes: Sender<FirstTotpCode>,
+    /// Ends the wait for the browser in an enrollment through the provider (task T611i).
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for Enrollment {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+    }
 }
 
 impl fmt::Debug for Enrollment {
@@ -138,7 +162,57 @@ impl Enrollment {
                 Err(error) => EnrollmentEvent::Failed(error),
             });
         })?;
-        Ok((Self { codes }, event_queue))
+        Ok((Self { codes, cancel: Arc::new(AtomicBool::new(false)) }, event_queue))
+    }
+
+    /// Enroll at `endpoint` through the server's identity provider (task T611i): the device key from `key`, the
+    /// provider's sign-in page opened with `browser`, and the whole exchange within `MAX_EXTERNAL_CONFIRMATION_WINDOW`.
+    pub fn start_external(
+        endpoint: ServerEndpoint,
+        code: EnrollmentCode,
+        device_name: &str,
+        key: KeySource,
+        browser: Browser,
+        wake: impl Fn() + Send + 'static,
+    ) -> io::Result<(Self, Receiver<EnrollmentEvent>)> {
+        let (codes, _) = mpsc::channel::<FirstTotpCode>();
+        let (events, event_queue) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancelled = cancel.clone();
+        let device_name = device_name.to_owned();
+        thread::Builder::new().name("crewcraft-enrollment".into()).spawn(move || {
+            let emit = |event| {
+                if events.send(event).is_ok() {
+                    wake();
+                }
+            };
+            let generated = match &key {
+                KeySource::Software => NewDevice::generate(),
+                KeySource::Hardware { keys, alias } => NewDevice::generate_in(keys.clone(), alias),
+            };
+            let result = generated.and_then(|device| {
+                device.enroll_external(&endpoint, &code, MAX_EXTERNAL_CONFIRMATION_WINDOW, &device_name, |start, deadline| {
+                    let open = |url: &str| {
+                        browser(url)?;
+                        emit(EnrollmentEvent::WaitingForBrowser);
+                        Ok(())
+                    };
+                    let timeout = deadline.saturating_duration_since(Instant::now()).min(EXTERNAL_BROWSER_TIMEOUT);
+                    browse(start, random_bytes, open, timeout, &|| cancelled.load(Ordering::Acquire)).map_err(|error| browser_problem(&error))
+                })
+            });
+            emit(match result {
+                Ok(device) => EnrollmentEvent::Enrolled(device),
+                Err(error) => EnrollmentEvent::Failed(error),
+            });
+        })?;
+        Ok((Self { codes, cancel }, event_queue))
+    }
+
+    /// Stop waiting for the browser in an enrollment through the provider (task T611i): the enrollment reports
+    /// `Failed` with `BrowserProblem::Cancelled`. Nothing happens for any other enrollment.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Release);
     }
 
     /// Answer `AuthenticatorSetup` with the first code from the authenticator. False if the code is not six digits

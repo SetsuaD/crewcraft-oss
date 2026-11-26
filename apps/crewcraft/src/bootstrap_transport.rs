@@ -16,10 +16,20 @@ use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
 use crate::connect::Transport;
-use crate::enroll_client::{EnrollmentError, EnrollmentRequest, FirstTotpCode, TotpSetup, VerifiedDeviceChain, enroll};
+use crate::chat_session::ExternalStart;
+use crate::enroll_client::{
+    BrowserProblem, EnrollmentError, EnrollmentRequest, ExternalEnrollmentRequest, FirstTotpCode, TotpSetup, VerifiedDeviceChain, enroll,
+    enroll_external,
+};
+use crate::external_flow::Redirect;
 use crate::lab_client::{LabEndpoint, LabError};
 
 pub const MAX_CONFIRMATION_WINDOW: Duration = Duration::from_secs(120);
+/// The longest window for an enrollment through the server's identity provider (task T611i): the browser sign-in
+/// (`EXTERNAL_BROWSER_TIMEOUT`) and the exchanges around it. The server keeps its bootstrap connections open as long.
+pub const MAX_EXTERNAL_CONFIRMATION_WINDOW: Duration = Duration::from_secs(330);
+/// How long the person has in the browser during an enrollment through the provider.
+pub const EXTERNAL_BROWSER_TIMEOUT: Duration = Duration::from_secs(300);
 const CERT_LIFETIME: time::Duration = time::Duration::minutes(3);
 const CLOCK_SKEW: time::Duration = time::Duration::seconds(30);
 
@@ -62,7 +72,28 @@ pub(crate) fn open_bootstrap<'a>(
     code: &EnrollmentCode,
     confirmation_window: Duration,
 ) -> Result<BootstrapConnection<'a>, BootstrapTransportError> {
-    if confirmation_window.is_zero() || confirmation_window > MAX_CONFIRMATION_WINDOW {
+    open_within(connect, root_der, code, confirmation_window, MAX_CONFIRMATION_WINDOW)
+}
+
+/// As `open_bootstrap`, for an enrollment through the server's identity provider (task T611i): the window may be up
+/// to `MAX_EXTERNAL_CONFIRMATION_WINDOW`.
+pub(crate) fn open_bootstrap_external<'a>(
+    connect: impl FnOnce(Arc<dyn ResolvesClientCert>) -> Result<Transport, LabError>,
+    root_der: &'a [u8],
+    code: &EnrollmentCode,
+    confirmation_window: Duration,
+) -> Result<BootstrapConnection<'a>, BootstrapTransportError> {
+    open_within(connect, root_der, code, confirmation_window, MAX_EXTERNAL_CONFIRMATION_WINDOW)
+}
+
+fn open_within<'a>(
+    connect: impl FnOnce(Arc<dyn ResolvesClientCert>) -> Result<Transport, LabError>,
+    root_der: &'a [u8],
+    code: &EnrollmentCode,
+    confirmation_window: Duration,
+    limit: Duration,
+) -> Result<BootstrapConnection<'a>, BootstrapTransportError> {
+    if confirmation_window.is_zero() || confirmation_window > limit {
         return Err(BootstrapTransportError::ConfirmationWindow);
     }
     let device = bootstrap_identity(code)?;
@@ -92,6 +123,23 @@ impl BootstrapConnection<'_> {
                 return None;
             }
             prompt(setup, deadline).filter(|_| Instant::now() < deadline)
+        })
+    }
+
+    /// Run `RedeemExternal`, the browser part and `ConfirmExternal` over this connection (task T611i). `browse` is
+    /// given the server's start and this connection's cutoff; a redirect that arrives at or after it is not used.
+    pub fn enroll_external(
+        self,
+        request: ExternalEnrollmentRequest<'_>,
+        browse: impl FnOnce(&ExternalStart, Instant) -> Result<Redirect, BrowserProblem>,
+    ) -> Result<VerifiedDeviceChain, EnrollmentError> {
+        let deadline = self.stream.deadline;
+        enroll_external(self.stream, request, self.root_der, |start| {
+            if Instant::now() >= deadline {
+                return Err(BrowserProblem::TimedOut);
+            }
+            let redirect = browse(start, deadline)?;
+            if Instant::now() >= deadline { Err(BrowserProblem::TimedOut) } else { Ok(redirect) }
         })
     }
 }

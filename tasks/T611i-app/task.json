@@ -1,0 +1,30 @@
+{
+  "id": "T611i-app",
+  "title": "Enroll with your organization: the app's enrollment through the browser, end to end",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft/src/external_flow.rs",
+    "apps/crewcraft/src/enroll_client.rs",
+    "apps/crewcraft/src/bootstrap_transport.rs",
+    "apps/crewcraft/src/server_endpoint.rs",
+    "apps/crewcraft/src/device.rs",
+    "apps/crewcraft/src/enrollment.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t611i_enroll_button.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs",
+    "docs/SECURITY-DESIGN.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t611i_enroll_and_sign_in.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t611i_enroll_and_sign_in",
+  "depends_on": [
+    "T611i-server",
+    "T611h-signin-button"
+  ],
+  "spec": "The enrollment screen has 'Enroll with your organization', which needs only the link (Action::EnrollExternal; the form is cleared), shows the wait for the browser with Cancel (Action::CancelSignIn), and any answer ends the wait. Controller::set_browser sets the browser for enrollments and later sign-ins. Enrollment::start_external runs enroll_client::enroll_external over a bootstrap connection opened with up to MAX_EXTERNAL_CONFIRMATION_WINDOW: RedeemExternal, external_flow::browse (WaitingForBrowser; cancel or drop ends it), ConfirmExternal, Activated, the chain verified. ERR_WRONG_PATH is EnrollmentError::WrongPath on either path; the app's words say which way the server enrolls, that a refused confirmation did not match the invitation, and why the browser failed. A server with identity.toml keeps bootstrap connections up to EXTERNAL_BOOTSTRAP_TIMEOUT. End to end against a running server: a password enrollment is refused with words that say so; an enrollment whose provider identity carries another email is refused and leaves that invitation live; a person enrolls with only the link and the browser (no authenticator setup), signs in through the provider, and posts; the store holds them bound to the provider identity with no password.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

@@ -19,7 +19,9 @@ use rustls::sign::{CertifiedKey, SigningKey, SingleCertAndKey};
 use zeroize::Zeroizing;
 
 use crate::bootstrap_transport::BootstrapTransportError;
-use crate::enroll_client::{EnrollmentError, EnrollmentRequest, FirstTotpCode, TotpSetup};
+use crate::chat_session::ExternalStart;
+use crate::enroll_client::{BrowserProblem, EnrollmentError, EnrollmentRequest, ExternalEnrollmentRequest, FirstTotpCode, TotpSetup};
+use crate::external_flow::Redirect;
 use crate::hardware_key::{HardwareKey, HardwareKeys, RequestSigner, TlsSigningKey, valid_alias};
 use crate::lab_client::LabError;
 use crate::server_endpoint::ServerEndpoint;
@@ -112,6 +114,36 @@ impl NewDevice {
             }
             Err(error) => {
                 let _ = store.delete(alias);
+                Err(error)
+            }
+        }
+    }
+
+    /// As `enroll`, through the server's identity provider instead of a password and an authenticator (task T611i).
+    /// `browse` runs the browser part for the server's start before the cutoff it is given.
+    pub fn enroll_external(
+        self,
+        endpoint: &ServerEndpoint,
+        code: &EnrollmentCode,
+        confirmation_window: Duration,
+        device_name: &str,
+        browse: impl FnOnce(&ExternalStart, Instant) -> Result<Redirect, BrowserProblem>,
+    ) -> Result<StoredDevice, DeviceError> {
+        let Self { key, signing_key, csr, spki, store } = self;
+        let enrolled = (|| {
+            let connection = endpoint.open_bootstrap_external(code, confirmation_window).map_err(DeviceError::Bootstrap)?;
+            let request = ExternalEnrollmentRequest { device_name, csr: &csr, expected_spki: &spki };
+            let chain = connection.enroll_external(request, browse).map_err(DeviceError::Enrollment)?;
+            let identity = CertifiedKey::new(vec![chain.leaf.clone(), chain.issuer.clone()], signing_key);
+            identity.keys_match().map_err(|_| DeviceError::KeyMismatch)?;
+            Ok((chain.leaf.to_vec(), chain.issuer.to_vec()))
+        })();
+        match enrolled {
+            Ok((leaf, issuer)) => Ok(StoredDevice { endpoint: endpoint.clone(), leaf, issuer, key }),
+            Err(error) => {
+                if let (DeviceKey::Hardware(key), Some(store)) = (&key, &store) {
+                    let _ = store.delete(key.alias());
+                }
                 Err(error)
             }
         }

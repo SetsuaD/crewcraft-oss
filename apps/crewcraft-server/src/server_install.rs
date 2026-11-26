@@ -86,7 +86,8 @@ impl ServerConfig {
         }
     }
 
-    /// The options `serve` binds with.
+    /// The options `serve` binds with. With an identity provider, `serve` raises the bootstrap budget to
+    /// `EXTERNAL_BOOTSTRAP_TIMEOUT`.
     pub fn serve_options(&self) -> LabOptions {
         LabOptions {
             address: self.listen,
@@ -101,6 +102,10 @@ impl ServerConfig {
         }
     }
 }
+
+/// The bootstrap budget on a server that enrolls through its identity provider (task T611i): the person signs in in
+/// the browser during the enrollment. The app's window is `bootstrap_transport::MAX_EXTERNAL_CONFIRMATION_WINDOW`.
+pub const EXTERNAL_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(330);
 
 /// A listen address with a port other than zero.
 pub fn parse_listen(text: &str) -> io::Result<SocketAddr> {
