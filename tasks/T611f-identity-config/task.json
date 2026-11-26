@@ -1,0 +1,24 @@
+{
+  "id": "T611f-identity-config",
+  "title": "identity.toml: the server's external sign-in settings",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/identity_config.rs",
+    "apps/crewcraft-server/src/lab_runtime.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/lib.rs",
+    "apps/crewcraft-server/Cargo.toml",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t611f_identity_config.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t611f_identity_config",
+  "depends_on": [
+    "T611e-external-signin-server"
+  ],
+  "spec": "identity.toml in the data directory (strict TOML, 16 KiB at most): [identity] source = \"oidc\" (the only value), an https issuer, a client-id of 1..256 printable characters, require-mfa \"yes\" (default) or \"no\", optional ca-bundle; optional [authorizer] with an https url, optional ca-bundle, and client-certificate with client-key (both or neither). Named files are plain names (no directories, not hidden) in the data directory, regular files of at most 1 MiB; a client key others can read is refused on Unix. load returns None without the file; otherwise it builds ExternalSignIn with an HttpsProvider (the pinned CA bundle, or the public roots) and, if configured, an HttpsAuthorizer with mutual TLS. serve applies it to every device connection and stops with the reason if the file does not check out.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md",
+    "apps/crewcraft-server/src/external_signin.rs"
+  ]
+}

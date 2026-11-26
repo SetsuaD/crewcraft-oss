@@ -93,6 +93,17 @@ pub struct ExternalSignIn {
     last_key_refresh_ms: Mutex<Option<u64>>,
 }
 
+impl fmt::Debug for ExternalSignIn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The pending nonces are never shown.
+        f.debug_struct("ExternalSignIn")
+            .field("issuer", &self.provider.issuer())
+            .field("authorizer", &self.authorizer.is_some())
+            .field("require_mfa", &self.require_mfa)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ExternalSignIn {
     pub fn new(provider: Arc<dyn Provider>, authorizer: Option<Arc<dyn Authorizer>>, require_mfa: bool) -> Self {
         Self { provider, authorizer, require_mfa, pending: Mutex::new(HashMap::new()), last_key_refresh_ms: Mutex::new(None) }

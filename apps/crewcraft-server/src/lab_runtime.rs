@@ -21,6 +21,7 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 #[cfg(unix)]
 use crate::control::ControlSocket;
+use crate::external_signin::ExternalSignIn;
 use crate::lab_bootstrap::bootstrap_handler;
 use crate::lab_installation::LabInstallation;
 use crate::lab_server::{BootstrapStream, LabOptions, LabServer};
@@ -37,9 +38,17 @@ pub struct LabRuntime {
     issuer: Authority,
     now_ms: Clock,
     ownership: LabState,
+    /// Sign-in through an external identity provider, when `identity.toml` configures one (task T611f).
+    external: Option<Arc<ExternalSignIn>>,
 }
 
 impl LabRuntime {
+    /// Also offer sign-in through an external identity provider on every device connection (task T611f).
+    pub fn with_external(mut self, external: Arc<ExternalSignIn>) -> Self {
+        self.external = Some(external);
+        self
+    }
+
     /// Bind with the installation's original trust anchor and a freshly signed localhost server certificate.
     /// `now_ms` supplies the server's current Unix time in milliseconds.
     pub fn bind(installation: LabInstallation, options: LabOptions, now_ms: impl Fn() -> u64 + Send + Sync + 'static) -> io::Result<Self> {
@@ -72,7 +81,7 @@ impl LabRuntime {
         let accounts = Arc::new(Mutex::new(accounts));
         let admission: Arc<dyn Admission> = Arc::new(InstalledAdmission { accounts: accounts.clone(), now_ms: now_ms.clone() });
         let server = bind(options, identity, roots, admission, rooms)?;
-        Ok(Self { server, accounts, issuer, now_ms, ownership })
+        Ok(Self { server, accounts, issuer, now_ms, ownership, external: None })
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -116,7 +125,7 @@ impl LabRuntime {
         B: Fn([u8; 32], &mut BootstrapStream) + Send + Sync + 'static,
         S: FnOnce(&dyn Fn() -> bool, &Mutex<AccountStore>, &Mutex<DurableServer>, &dyn Fn() -> u64) + Send,
     {
-        let Self { server, accounts, issuer, now_ms, ownership } = self;
+        let Self { server, accounts, issuer, now_ms, ownership, external } = self;
         let bootstrap = make_bootstrap(accounts.clone(), issuer)?;
         let throttle = Arc::new(Mutex::new(Throttle::new()));
         let rooms = server.rooms();
@@ -134,7 +143,13 @@ impl LabRuntime {
             let result = server.serve(
                 shutdown,
                 move || clock(),
-                move |der, now| StoredDeviceAuth::bind(device_accounts.clone(), throttle.clone(), der, now),
+                move |der, now| {
+                    let auth = StoredDeviceAuth::bind(device_accounts.clone(), throttle.clone(), der, now)?;
+                    Ok(match &external {
+                        Some(external) => auth.with_external(external.clone()),
+                        None => auth,
+                    })
+                },
                 bootstrap,
             );
             finished.store(true, Ordering::Release);
