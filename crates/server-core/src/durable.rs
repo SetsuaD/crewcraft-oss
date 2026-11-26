@@ -531,6 +531,14 @@ impl DurableServer {
         Ok(cursor)
     }
 
+    /// `Server::react`, recorded (task T341a).
+    pub fn react(&mut self, slug: &str, actor: &str, target: u64, reaction: u8, on: bool, now_ms: u64) -> Result<u64, DurableError> {
+        self.check_alive()?;
+        let cursor = self.server.react(slug, actor, target, reaction, on, now_ms).map_err(DurableError::Server)?;
+        self.record(&Op::React { slug: slug.to_string(), actor: actor.to_string(), target, reaction, on, now_ms })?;
+        Ok(cursor)
+    }
+
     pub fn delete(&mut self, slug: &str, actor: &str, target: u64) -> Result<u64, DurableError> {
         self.check_alive()?;
         let cursor = self.server.delete(slug, actor, target).map_err(DurableError::Server)?;
@@ -581,6 +589,7 @@ fn replay(server: &mut Server, op: Op) -> Result<u64, ServerError> {
         Op::Edit { slug, actor, target, text, now_ms } => server.edit(&slug, &actor, target, &text, now_ms),
         Op::Delete { slug, actor, target } => server.delete(&slug, &actor, target),
         Op::MarkRead { slug, user, cursor } => server.mark_read(&slug, &user, cursor).map(|_| 0),
+        Op::React { slug, actor, target, reaction, on, now_ms } => server.react(&slug, &actor, target, reaction, on, now_ms),
         // Handled before `replay` is called: a file record changes no room, and a post with files needs the records.
         Op::FileStored { .. } | Op::PostFiles { .. } | Op::Reply { .. } => Ok(0),
     }
@@ -678,7 +687,7 @@ fn index_event(
         EventKind::Deleted { target } => {
             room.remove(target);
         }
-        EventKind::Joined { .. } | EventKind::Left { .. } => {}
+        EventKind::Joined { .. } | EventKind::Left { .. } | EventKind::Reacted { .. } => {}
     }
 }
 

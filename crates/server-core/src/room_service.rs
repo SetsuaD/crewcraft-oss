@@ -1,7 +1,7 @@
 //! One room's server-side behaviour, composed from the room rules (`room`, T111), the cursor log (`cursor_log`, T101),
 //! read markers (`unread`, T105), mentions (`mentions`, T104) and the safe renderer (`render`, T115). Task T120.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::cursor_log::{EventLog, Since};
 use crate::mentions::mentions;
@@ -15,11 +15,30 @@ pub const MAX_TEXT_CHARS: usize = 4000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventKind {
     Posted,
-    Edited { target: u64 },
-    Deleted { target: u64 },
-    Joined { user: String, role: Role },
-    Left { user: String },
+    Edited {
+        target: u64,
+    },
+    Deleted {
+        target: u64,
+    },
+    Joined {
+        user: String,
+        role: Role,
+    },
+    Left {
+        user: String,
+    },
+    /// The actor added (`on`) or took back `reaction` (a code, see `push::REACTIONS`) on the message at `target`
+    /// (task T341a).
+    Reacted {
+        target: u64,
+        reaction: u8,
+        on: bool,
+    },
 }
+
+/// Who reacted to one message: by reaction code, the people, sorted (task T341a).
+pub type Reactions = BTreeMap<u8, BTreeSet<String>>;
 
 /// One entry of the room's log. Every successful change appends exactly one event; its cursor is the log's.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +68,8 @@ pub enum ServiceError {
     TooLong,
     /// The target is not a `Posted` event still held in the log, or it was already deleted.
     NoSuchMessage,
+    /// A reaction code outside `push::REACTIONS` (task T341a).
+    BadReaction,
 }
 
 const ROOM_ID: &str = "room";
@@ -58,12 +79,14 @@ pub struct RoomService {
     log: EventLog<Event>,
     markers: ReadMarkers,
     deleted: HashSet<u64>,
+    /// Who reacted to each message, by its cursor (task T341a).
+    reactions: HashMap<u64, Reactions>,
 }
 
 impl RoomService {
     /// A room owned by `owner` whose log keeps the newest `capacity` events. Creating it appends no event.
     pub fn new(owner: &str, capacity: usize) -> Self {
-        Self { room: Room::new(owner), log: EventLog::new(capacity), markers: ReadMarkers::new(), deleted: HashSet::new() }
+        Self { room: Room::new(owner), log: EventLog::new(capacity), markers: ReadMarkers::new(), deleted: HashSet::new(), reactions: HashMap::new() }
     }
 
     /// `Room::add`, then a `Joined { user, role }` event by `actor`. Returns its cursor.
@@ -153,6 +176,7 @@ impl RoomService {
             }
         }
         self.deleted.insert(target);
+        self.reactions.remove(&target);
         let new_event = Event {
             cursor: self.log.head() + 1,
             actor: actor.to_string(),
@@ -161,6 +185,49 @@ impl RoomService {
             mentions: Vec::new(),
         };
         Ok(self.log.append(new_event))
+    }
+
+    /// Add (`on`) or take back the actor's `reaction` on the message posted at `target` (task T341a). Checks, in order: a
+    /// non-member is `Room(NotMember)`; a member who cannot post (a Guest) is `NotAllowed`; a code outside
+    /// `push::REACTIONS` is `BadReaction`; the target must be a live `Posted` event (`NoSuchMessage`). Appends
+    /// `Reacted { target, reaction, on }` even when it changes nothing (adding a reaction twice), so every request is
+    /// answered with an event of its own.
+    pub fn react(&mut self, actor: &str, target: u64, reaction: u8, on: bool) -> Result<u64, ServiceError> {
+        if self.room.role(actor).is_none() {
+            return Err(ServiceError::Room(RoomError::NotMember));
+        }
+        if !self.room.can_post(actor) {
+            return Err(ServiceError::NotAllowed);
+        }
+        if crewcraft_proto::push::reaction_name(reaction).is_none() {
+            return Err(ServiceError::BadReaction);
+        }
+        self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
+        let people = self.reactions.entry(target).or_default();
+        if on {
+            people.entry(reaction).or_default().insert(actor.to_string());
+        } else if let Some(who) = people.get_mut(&reaction) {
+            who.remove(actor);
+            if who.is_empty() {
+                people.remove(&reaction);
+            }
+        }
+        if people.is_empty() {
+            self.reactions.remove(&target);
+        }
+        let event = Event {
+            cursor: self.log.head() + 1,
+            actor: actor.to_string(),
+            kind: EventKind::Reacted { target, reaction, on },
+            html: String::new(),
+            mentions: Vec::new(),
+        };
+        Ok(self.log.append(event))
+    }
+
+    /// Who reacted to the message at `target` (task T341a); empty when no one has.
+    pub fn reactions(&self, target: u64) -> Reactions {
+        self.reactions.get(&target).cloned().unwrap_or_default()
     }
 
     /// The events after `cursor` (as `EventLog::since`), for members only (`Room(NotMember)` otherwise).

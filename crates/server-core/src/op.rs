@@ -10,6 +10,7 @@
 //! - tag 5 `Edit`: `str slug | str actor | u64 target | str text | u64 now_ms`
 //! - tag 6 `Delete`: `str slug | str actor | u64 target`
 //! - tag 7 `MarkRead`: `str slug | str user | u64 cursor`
+//! - tag 19 `React` (task T341a): `str slug | str actor | u64 target | u8 reaction | u8 on (0 or 1) | u64 now_ms`
 
 use crewcraft_proto::message::CodecError;
 
@@ -57,6 +58,15 @@ pub enum Op {
         slug: String,
         user: String,
         cursor: u64,
+    },
+    /// A reaction added or taken back (task T341a).
+    React {
+        slug: String,
+        actor: String,
+        target: u64,
+        reaction: u8,
+        on: bool,
+        now_ms: u64,
     },
     /// A finished upload's record (docs/FILES.md, task T330a): who uploaded which bytes to which room, under which name.
     /// Tag 16 (8 to 15 stay unassigned): `str slug | str uploader | 16 file id | 32 SHA-256 | u64 size | str name | u8 has image size |
@@ -172,6 +182,15 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             for file in files {
                 out.extend_from_slice(file);
             }
+        }
+        Op::React { slug, actor, target, reaction, on, now_ms } => {
+            out.push(REACT);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, actor)?;
+            out.extend_from_slice(&target.to_be_bytes());
+            out.push(*reaction);
+            out.push(u8::from(*on));
+            out.extend_from_slice(&now_ms.to_be_bytes());
         }
         Op::Reply { slug, author, parent, text, now_ms } => {
             out.push(REPLY);
@@ -324,6 +343,22 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::Reply { slug, author, parent, text, now_ms })
         }
+        REACT => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let actor = decode_str(bytes, &mut pos)?;
+            let target = decode_u64(bytes, &mut pos)?;
+            let [reaction, on] = decode_array::<2>(bytes, &mut pos)?;
+            let on = match on {
+                0 => false,
+                1 => true,
+                other => return Err(CodecError::BadKind(other)),
+            };
+            let now_ms = decode_u64(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::React { slug, actor, target, reaction, on, now_ms })
+        }
         _ => Err(CodecError::BadKind(tag)),
     }
 }
@@ -334,6 +369,8 @@ const FILE_STORED: u8 = 16;
 const POST_FILES: u8 = 17;
 /// The tag of `Op::Reply` (task T340a).
 const REPLY: u8 = 18;
+/// The tag of `Op::React` (task T341a).
+const REACT: u8 = 19;
 
 fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;

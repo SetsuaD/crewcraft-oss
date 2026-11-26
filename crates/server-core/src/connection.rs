@@ -51,6 +51,9 @@ pub fn to_push(room: &str, cursor: u64, event: &Event) -> Push {
         }
         EventKind::Deleted { target } => Push::Deleted { room: room.to_string(), cursor, target: *target },
         EventKind::Joined { .. } | EventKind::Left { .. } => Push::Other { room: room.to_string(), cursor },
+        EventKind::Reacted { target, reaction, on } => {
+            Push::Reacted { room: room.to_string(), cursor, target: *target, author: event.actor.clone(), reaction: *reaction, on: *on }
+        }
     }
 }
 
@@ -163,7 +166,11 @@ impl Connection {
                 && let Ok(Since::Events(events)) = service.sync(&self.user, *cursor)
             {
                 for (ev_cursor, ev) in events {
-                    let push = to_push(room, ev_cursor, &ev);
+                    let mut push = to_push(room, ev_cursor, &ev);
+                    // A client that did not agree to reactions only advances past them (task T341a).
+                    if matches!(push, Push::Reacted { .. }) && self.features & crewcraft_proto::request::FEATURE_REACTIONS == 0 {
+                        push = Push::Other { room: room.clone(), cursor: ev_cursor };
+                    }
                     let posted = matches!(push, Push::Posted { .. });
                     let push_bytes = encode_push(&push).map_err(ConnError::Request)?;
                     let framed_push = encode(&push_bytes).map_err(ConnError::Frame)?;

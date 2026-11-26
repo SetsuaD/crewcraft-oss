@@ -12,6 +12,9 @@
 //! - tag 70 `Attached` (task T330c; 68 and 69 stay unassigned): `u8 count (1 to MAX_ATTACHMENTS) | count × (16 file id | str name | u64 size |
 //!   u8 has image size | [u32 width | u32 height])`. Its `cursor` is the message's own; it follows that message's
 //!   `Posted` and advances nothing. Only a client that agreed to `request::FEATURE_FILES` is sent it.
+//! - tag 72 `Reacted` (task T341a): `u64 target | str author | u8 reaction (1 to REACTIONS.len()) | u8 on (0 or 1)`.
+//!   An event of its own: it advances the cursor like `Other`. A client that did not agree to
+//!   `request::FEATURE_REACTIONS` is sent `Other` in its place.
 //!
 //! `room`, `author` and each mention are 1 to `message::MAX_NAME` bytes; `html` is 0 to `MAX_HTML` bytes; at most
 //! `MAX_MENTIONS` mentions.
@@ -26,6 +29,17 @@ pub const MAX_MENTIONS: usize = 32;
 pub const ATTACHED: u8 = 70;
 /// The tag of `Push::Threaded` (task T340a).
 pub const THREADED: u8 = 71;
+/// The tag of `Push::Reacted` (task T341a).
+pub const REACTED: u8 = 72;
+/// The reactions, by code: code `n` is `REACTIONS[n - 1]` (task T341a). A fixed set, as Teams has, named in words: the
+/// bundled font has no emoji, and a fixed set keeps imported reactions and every client in step.
+pub const REACTIONS: [&str; 6] = ["Like", "Heart", "Laugh", "Surprised", "Sad", "Angry"];
+
+/// The name of reaction `code`, or `None` for a code outside `REACTIONS`.
+pub fn reaction_name(code: u8) -> Option<&'static str> {
+    REACTIONS.get(usize::from(code).checked_sub(1)?).copied()
+}
+
 /// The most files one message carries (task T330c).
 pub const MAX_ATTACHMENTS: usize = 10;
 /// The longest file name, in bytes (as `request::MAX_FILE_NAME`).
@@ -77,6 +91,16 @@ pub enum Push {
         room: String,
         cursor: u64,
         parent: u64,
+    },
+    /// `author` added (`on`) or took back their `reaction` (a code, see `REACTIONS`) on the message at `target`
+    /// (task T341a). The event's own cursor is `cursor`.
+    Reacted {
+        room: String,
+        cursor: u64,
+        target: u64,
+        author: String,
+        reaction: u8,
+        on: bool,
     },
 }
 
@@ -177,6 +201,18 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
             write_str(&mut out, room, 1, MAX_NAME)?;
             out.extend_from_slice(&cursor.to_be_bytes());
         }
+        Push::Reacted { room, cursor, target, author, reaction, on } => {
+            if reaction_name(*reaction).is_none() {
+                return Err(CodecError::BadKind(*reaction));
+            }
+            out.push(REACTED);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&target.to_be_bytes());
+            write_str(&mut out, author, 1, MAX_NAME)?;
+            out.push(*reaction);
+            out.push(u8::from(*on));
+        }
         Push::Threaded { room, cursor, parent } => {
             out.push(THREADED);
             write_str(&mut out, room, 1, MAX_NAME)?;
@@ -217,7 +253,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(64..=67).contains(&tag) && tag != ATTACHED && tag != THREADED {
+    if !(64..=67).contains(&tag) && tag != ATTACHED && tag != THREADED && tag != REACTED {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -257,6 +293,20 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         }
         67 => Push::Other { room, cursor },
         THREADED => Push::Threaded { room, cursor, parent: read_u64(bytes, &mut pos)? },
+        REACTED => {
+            let target = read_u64(bytes, &mut pos)?;
+            let author = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let reaction = read_u8(bytes, &mut pos)?;
+            if reaction_name(reaction).is_none() {
+                return Err(CodecError::BadKind(reaction));
+            }
+            let on = match read_u8(bytes, &mut pos)? {
+                0 => false,
+                1 => true,
+                other => return Err(CodecError::BadKind(other)),
+            };
+            Push::Reacted { room, cursor, target, author, reaction, on }
+        }
         ATTACHED => {
             let count = usize::from(*bytes.get(pos).ok_or(CodecError::Truncated)?);
             pos += 1;

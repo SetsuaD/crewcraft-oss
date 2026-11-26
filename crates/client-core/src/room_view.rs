@@ -27,6 +27,8 @@ pub struct RoomView {
     attachments: BTreeMap<u64, Vec<crewcraft_proto::push::AttachedFile>>,
     /// Each reply's parent, by the reply's cursor (task T340a).
     parents: BTreeMap<u64, u64>,
+    /// Who reacted to each message, by its cursor, then by reaction code (task T341a).
+    reactions: BTreeMap<u64, BTreeMap<u8, BTreeSet<String>>>,
 }
 
 impl Default for RoomView {
@@ -46,6 +48,7 @@ impl RoomView {
             needs_resync: false,
             attachments: BTreeMap::new(),
             parents: BTreeMap::new(),
+            reactions: BTreeMap::new(),
         }
     }
 
@@ -110,6 +113,27 @@ impl RoomView {
     /// Each reply's parent, by the reply's cursor (task T340a).
     pub fn parents(&self) -> &BTreeMap<u64, u64> {
         &self.parents
+    }
+
+    /// Keep that `author` added (`on`) or took back `reaction` on the message at `target` (task T341a).
+    pub fn react(&mut self, target: u64, author: &str, reaction: u8, on: bool) {
+        let people = self.reactions.entry(target).or_default();
+        if on {
+            people.entry(reaction).or_default().insert(author.to_owned());
+        } else if let Some(who) = people.get_mut(&reaction) {
+            who.remove(author);
+            if who.is_empty() {
+                people.remove(&reaction);
+            }
+        }
+        if people.is_empty() {
+            self.reactions.remove(&target);
+        }
+    }
+
+    /// Who reacted to each message that has reactions, by cursor, then by reaction code (task T341a).
+    pub fn reactions(&self) -> &BTreeMap<u64, BTreeMap<u8, BTreeSet<String>>> {
+        &self.reactions
     }
 
     /// The files of each message that has any, by cursor (task T330c).
