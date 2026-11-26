@@ -1,0 +1,19 @@
+{
+  "id": "T611d-loopback",
+  "title": "The app's loopback receiver and browser launch for an external sign-in",
+  "crate": "crewcraft",
+  "files": [
+    "apps/crewcraft/src/loopback.rs",
+    "apps/crewcraft/src/lib.rs"
+  ],
+  "test_path": "apps/crewcraft/tests/t611d_loopback.rs",
+  "test_cmd": "cargo test -p crewcraft --test t611d_loopback",
+  "depends_on": [
+    "T611a-external-signin-wire"
+  ],
+  "spec": "Loopback::bind listens on 127.0.0.1 on a system-chosen port; redirect_uri is http://127.0.0.1:<port>/callback. wait(state, deadline) takes one acceptable redirect: GET /callback with a state equal to the expected one (constant-time), returning its percent-decoded code (printable ASCII, at most 2048 bytes) or, with error=..., Provider(error); every other request (another path or method, a wrong or missing state, no code, over 8 KiB) is answered (404 or 400) and ignored; nothing acceptable before the deadline is TimedOut. Answers are a short no-store HTML page with a strict CSP. Code's Debug hides the code. parse_query decodes %XX and + and drops undecodable pairs. open_browser opens only https URLs without spaces, passing the URL as one argument to the platform opener (rundll32 url.dll on Windows, open on macOS, xdg-open elsewhere), never through a shell.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}
