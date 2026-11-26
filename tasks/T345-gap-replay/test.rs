@@ -392,7 +392,9 @@ fn an_enrolled_reconnect_recovers_current_window_and_metadata_then_resumes_incre
     let old_parent_reply = bob.reply(room, outside, "a new reply to the recovered old plan").unwrap();
     let (_, shown) = bob.sync(room).unwrap();
     assert_eq!(bob.parents(room).get(&old_parent_reply), Some(&outside));
-    assert!(shown.iter().any(|entry| matches!(entry, Shown::Line(line) if line.cursor == old_parent_reply && line.html.contains("recovered old plan"))));
+    assert!(
+        shown.iter().any(|entry| matches!(entry, Shown::Line(line) if line.cursor == old_parent_reply && line.html.contains("recovered old plan")))
+    );
     let now = clock_now(&running.clock);
     drop((alice, bob));
     running.stop();
@@ -403,7 +405,9 @@ fn an_enrolled_reconnect_recovers_current_window_and_metadata_then_resumes_incre
     let mut alice = fixture.endpoint(&running).resume(fixture.devices[0].clone(), &alice_ticket).unwrap();
     let (_, shown) = alice.sync(room).unwrap();
     assert_eq!(alice.parents(room).get(&old_parent_reply), Some(&outside), "old-parent replies replay through the normal durable journal");
-    assert!(shown.iter().any(|entry| matches!(entry, Shown::Line(line) if line.cursor == old_parent_reply && line.html.contains("recovered old plan"))));
+    assert!(
+        shown.iter().any(|entry| matches!(entry, Shown::Line(line) if line.cursor == old_parent_reply && line.html.contains("recovered old plan")))
+    );
     assert!(!alice.reactions(room).iter().any(|(target, _)| *target == with_file), "the old-target reaction removal also survives replay");
     let mut bob = fixture.endpoint(&running).resume(fixture.devices[1].clone(), &bob_ticket).unwrap();
     assert_eq!(bob.react(room, with_file, 1, true), Err(LabError::Chat(ChatError::Rejected(E_NO_SUCH_ROOM))));

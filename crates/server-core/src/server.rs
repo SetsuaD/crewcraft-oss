@@ -214,7 +214,15 @@ impl Server {
     }
 
     /// Resolve a target from durable current state without changing reaction authorization or token ordering (T345).
-    pub(crate) fn react_validated(&mut self, slug: &str, actor: &str, target: Option<u64>, reaction: u8, on: bool, now_ms: u64) -> Result<u64, ServerError> {
+    pub(crate) fn react_validated(
+        &mut self,
+        slug: &str,
+        actor: &str,
+        target: Option<u64>,
+        reaction: u8,
+        on: bool,
+        now_ms: u64,
+    ) -> Result<u64, ServerError> {
         self.require_member(slug, actor)?;
         if !self.limiter.check(&actor.to_string(), now_ms) {
             return Err(ServerError::RateLimited);

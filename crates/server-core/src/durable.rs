@@ -255,7 +255,9 @@ impl DurableServer {
                 continue;
             }
             if let Op::Reply { slug, author, parent, text, now_ms } = op {
-                if !live_message(&server, &previews, &slug, &author, parent).is_ok_and(|message| !message.html.is_empty()) || parents.contains_key(&(slug.clone(), parent)) {
+                if !live_message(&server, &previews, &slug, &author, parent).is_ok_and(|message| !message.html.is_empty())
+                    || parents.contains_key(&(slug.clone(), parent))
+                {
                     return Err(DurableError::Corrupt { index });
                 }
                 let cursor = server.post(&slug, &author, &text, now_ms).map_err(|_| DurableError::Corrupt { index })?;
@@ -1059,11 +1061,23 @@ mod pins_saved_tests {
         let room = server.create_room("owner", "Room").unwrap();
         server.add_member(&room, "owner", "guest", Role::Guest).unwrap();
         let target = server.post(&room, "owner", "message", 10_000).unwrap();
-        assert_eq!(server.react(&room, "guest", u64::MAX, 0, true, 10_000), Err(DurableError::Server(ServerError::Service(ServiceError::NotAllowed))));
-        assert_eq!(server.react(&room, "outsider", u64::MAX, 0, true, 10_000), Err(DurableError::Server(ServerError::Service(ServiceError::Room(RoomError::NotMember)))));
-        assert_eq!(server.react(&room, "owner", u64::MAX, 0, true, 10_000), Err(DurableError::Server(ServerError::Service(ServiceError::BadReaction))));
+        assert_eq!(
+            server.react(&room, "guest", u64::MAX, 0, true, 10_000),
+            Err(DurableError::Server(ServerError::Service(ServiceError::NotAllowed)))
+        );
+        assert_eq!(
+            server.react(&room, "outsider", u64::MAX, 0, true, 10_000),
+            Err(DurableError::Server(ServerError::Service(ServiceError::Room(RoomError::NotMember))))
+        );
+        assert_eq!(
+            server.react(&room, "owner", u64::MAX, 0, true, 10_000),
+            Err(DurableError::Server(ServerError::Service(ServiceError::BadReaction)))
+        );
         for _ in 2..crate::server::POST_BURST {
-            assert_eq!(server.react(&room, "owner", u64::MAX, 1, true, 10_000), Err(DurableError::Server(ServerError::Service(ServiceError::NoSuchMessage))));
+            assert_eq!(
+                server.react(&room, "owner", u64::MAX, 1, true, 10_000),
+                Err(DurableError::Server(ServerError::Service(ServiceError::NoSuchMessage)))
+            );
         }
         assert_eq!(server.react(&room, "owner", target, 1, true, 10_000), Err(DurableError::Server(ServerError::RateLimited)));
         assert!(server.server().room(&room).unwrap().reactions(target).is_empty());
