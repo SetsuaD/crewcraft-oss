@@ -1,8 +1,7 @@
 //! The app's side of an external sign-in's browser hand-off (RFC 8252, SECURITY-DESIGN.md section 9; task T611d).
 //!
 //! Owns: listening on the loopback address for exactly one redirect, checking it, answering the browser with a short
-//! page, and opening the system browser at the provider's sign-in page. Called by: the sign-in flow (wiring comes in
-//! a later task). Calls: the standard library only.
+//! page, and opening the system browser at the provider's sign-in page. Called by: `external_flow`. Calls: the standard library only.
 //!
 //! The listener binds `127.0.0.1` on a port the system picks, so nothing outside this computer can reach it, and
 //! takes one request: `GET <path>?code=...&state=...`. The `state` must equal the one the app made for this sign-in
@@ -28,6 +27,8 @@ pub enum LoopbackError {
     TimedOut,
     /// The provider sent the browser back with an error (`access_denied`, for example).
     Provider(String),
+    /// The person cancelled the sign-in, or the app is closing (task T611h).
+    Cancelled,
 }
 
 impl fmt::Display for LoopbackError {
@@ -36,6 +37,7 @@ impl fmt::Display for LoopbackError {
             LoopbackError::Bind(kind) => write!(f, "could not listen for the sign-in redirect: {kind}"),
             LoopbackError::TimedOut => f.write_str("the sign-in was not finished in time"),
             LoopbackError::Provider(error) => write!(f, "the sign-in provider refused: {error}"),
+            LoopbackError::Cancelled => f.write_str("the sign-in was cancelled"),
         }
     }
 }
@@ -76,7 +78,16 @@ impl Loopback {
     /// Wait until `deadline` for a redirect carrying `expected_state`, and return its code. Requests with another
     /// state, another path or method, or nothing usable are answered and ignored.
     pub fn wait(self, expected_state: &str, deadline: Instant) -> Result<Code, LoopbackError> {
+        self.wait_unless(expected_state, deadline, &|| false)
+    }
+
+    /// As `wait`, but ending with `Cancelled` as soon as `cancelled` says so (it is asked every 25 ms while no request
+    /// is in progress), so a person can stop waiting and a closing app is not held up (task T611h).
+    pub fn wait_unless(self, expected_state: &str, deadline: Instant, cancelled: &dyn Fn() -> bool) -> Result<Code, LoopbackError> {
         loop {
+            if cancelled() {
+                return Err(LoopbackError::Cancelled);
+            }
             match self.listener.accept() {
                 Ok((stream, _)) => {
                     if let Some(outcome) = handle(stream, expected_state, deadline) {

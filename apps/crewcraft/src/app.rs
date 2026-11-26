@@ -32,7 +32,7 @@ use crate::hardware_key::{HardwareKeys, new_alias};
 use crate::key_vault::{OpenVault, SystemVault};
 use crate::lab_client::LabError;
 use crate::server_endpoint::ServerEndpoint;
-use crate::signed_in::Credentials;
+use crate::signed_in::{Credentials, valid_email};
 use crate::ticket_file::TicketFile;
 use crate::worker::{Event, Worker, WorkerConfig};
 
@@ -341,6 +341,22 @@ impl Controller {
                     _ => vec![Update::Failed("The connection to the server has stopped. Restart CrewCraft.".to_owned())],
                 }
             }
+            Action::SignInExternal { email } => {
+                let email = email.trim();
+                if !valid_email(email) {
+                    return vec![Update::Failed("Type the email address this device is enrolled for.".to_owned())];
+                }
+                match &self.worker {
+                    Some((worker, _)) if worker.sign_in_external(email) => Vec::new(),
+                    _ => vec![Update::Failed("The connection to the server has stopped. Restart CrewCraft.".to_owned())],
+                }
+            }
+            Action::CancelSignIn => {
+                if let Some((worker, _)) = &self.worker {
+                    worker.cancel_sign_in();
+                }
+                Vec::new()
+            }
             Action::Room(command) => match &self.worker {
                 Some((worker, _)) if worker.send(command) => Vec::new(),
                 _ => vec![Update::SignedOut],
@@ -468,6 +484,7 @@ pub fn worker_update(event: Event) -> Vec<Update> {
     match event {
         Event::Connected | Event::Posted { .. } => Vec::new(),
         Event::SignedIn { email, rooms } => vec![Update::SignedIn { email, rooms }],
+        Event::WaitingForBrowser => vec![Update::WaitingForBrowser],
         Event::Room { room, shown } => vec![Update::Snapshot { room, shown }],
         Event::Unread { room, count } => vec![Update::Unread { room, unread: count }],
         Event::PostFailed { room, problem, .. } => vec![Update::Failed(format!("A message to {room} was not sent: {problem}"))],

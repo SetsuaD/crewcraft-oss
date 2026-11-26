@@ -19,6 +19,11 @@
 //! The person's rooms: right after a sign-in the worker asks the server which rooms the person is a member of
 //! (`ListRooms`, task T233) and follows exactly those, so `Event::SignedIn` lists them and each gets an unread count.
 //! A server too old to list rooms is still used: the worker then keeps the rooms it already followed.
+//!
+//! Sign-in through an organization's identity provider (task T611h): `sign_in_external` runs `external_flow` on this
+//! thread. The provider's page opens in the system browser (`Event::WaitingForBrowser`); the wait for it ends when the
+//! browser comes back, on `cancel_sign_in`, at `external_flow::BROWSER_TIMEOUT`, or when the worker is dropped. The
+//! session it opens is kept and resumed exactly like one from a password sign-in.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -31,16 +36,23 @@ use std::time::{Duration, Instant};
 
 use crewcraft_client_core::room_view::Shown;
 use crewcraft_ui_model::Command;
+use rand_core::{OsRng, RngCore};
 use rustls::client::ResolvesClientCert;
 
-use crate::chat_session::ChatError;
+use crate::chat_session::{ChatError, ExternalStart};
 use crate::connect::{Connection, interrupt};
+use crate::external_flow::{BROWSER_TIMEOUT, ExternalServer, FlowError, run_unless};
 use crate::lab_client::LabError;
+use crate::loopback::LoopbackError;
 use crate::server_endpoint::ServerEndpoint;
 use crate::signed_in::{Credentials, ResumeTicket, SignedInSession, valid_room};
 
 /// The most rooms one worker follows (and polls).
 pub const MAX_FOLLOWED: usize = 64;
+
+/// Opens a URL (the provider's https sign-in page) in the system browser (task T611h): `loopback::open_browser`, or a
+/// test's or a phone's own.
+pub type Browser = Arc<dyn Fn(&str) -> io::Result<()> + Send + Sync>;
 
 /// How often the worker polls, and how it backs off while the server cannot be reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +97,8 @@ pub enum Event {
     /// The server no longer accepts the resume ticket (more than 12 hours since the sign-in, signed out elsewhere, or
     /// the device was revoked): sign in again with a new code (task T240).
     SessionEnded,
+    /// An external sign-in opened the provider's page in the browser and waits for the person there (task T611h).
+    WaitingForBrowser,
 }
 
 /// Where the worker keeps its session's resume ticket between runs (task T240). The app keeps it next to the device
@@ -136,6 +150,20 @@ pub enum Problem {
     Lost(io::ErrorKind),
     /// The server's reply did not follow the protocol; the connection was closed.
     Protocol,
+    /// The server does not offer sign-in through an organization's identity provider (task T611h).
+    ExternalNotOffered,
+    /// The server did not accept the organization's sign-in for this device's person.
+    ExternalRefused,
+    /// The system browser could not be opened at the sign-in page.
+    Browser,
+    /// The app could not listen on this computer for the browser to come back.
+    NoRedirect,
+    /// The sign-in was not finished in the browser in time.
+    BrowserTimedOut,
+    /// The organization's sign-in page ended the sign-in without signing in (the person declined, for example).
+    ProviderRefused,
+    /// The person cancelled the sign-in.
+    Cancelled,
 }
 
 /// A short sentence for the window, with no detail about which credential failed.
@@ -154,6 +182,13 @@ impl std::fmt::Display for Problem {
             Self::Refused(_) => "The server refused that request.",
             Self::Lost(_) => "The connection to the server was lost.",
             Self::Protocol => "The server's reply could not be understood.",
+            Self::ExternalNotOffered => "This server does not offer sign-in with your organization.",
+            Self::ExternalRefused => "The server did not accept that sign-in: another person's account, or no access to this chat.",
+            Self::Browser => "The browser could not be opened for the sign-in.",
+            Self::NoRedirect => "CrewCraft could not wait for the sign-in to come back from the browser.",
+            Self::BrowserTimedOut => "The sign-in in the browser was not finished in time. Try again.",
+            Self::ProviderRefused => "The sign-in page did not sign you in. Try again.",
+            Self::Cancelled => "Sign-in cancelled.",
         })
     }
 }
@@ -161,7 +196,20 @@ impl std::fmt::Display for Problem {
 impl Problem {
     /// Whether the connection is gone after this problem.
     fn ends_session(self) -> bool {
-        !matches!(self, Self::NotSignedIn | Self::InvalidRoom | Self::TooManyRooms | Self::InvalidRequest | Self::Refused(_))
+        !matches!(
+            self,
+            Self::NotSignedIn
+                | Self::InvalidRoom
+                | Self::TooManyRooms
+                | Self::InvalidRequest
+                | Self::Refused(_)
+                | Self::ExternalNotOffered
+                | Self::Browser
+                | Self::NoRedirect
+                | Self::BrowserTimedOut
+                | Self::ProviderRefused
+                | Self::Cancelled
+        )
     }
 
     /// Whether trying the connection again later can help.
@@ -196,6 +244,8 @@ fn problem(error: LabError) -> Problem {
 
 enum Input {
     SignIn(Credentials),
+    /// An external sign-in for the person with this email (task T611h).
+    SignInExternal(String),
     Command(Command),
     SignOut,
 }
@@ -203,12 +253,18 @@ enum Input {
 /// State shared with the thread so that dropping the `Worker` can end blocking I/O at once.
 struct Shared {
     stop: AtomicBool,
+    /// The window asked to stop waiting for the browser (task T611h).
+    cancel: AtomicBool,
     socket: Mutex<Option<TcpStream>>,
 }
 
 impl Shared {
     fn stopped(&self) -> bool {
         self.stop.load(Ordering::Acquire)
+    }
+
+    fn cancelled(&self) -> bool {
+        self.stopped() || self.cancel.load(Ordering::Acquire)
     }
 
     fn set_socket(&self, socket: Option<TcpStream>) {
@@ -271,11 +327,23 @@ impl Worker {
         keeper: Box<dyn TicketKeeper>,
         wake: impl Fn() + Send + 'static,
     ) -> io::Result<(Self, Receiver<Event>)> {
+        Self::start_with_browser(endpoint, device, config, keeper, Arc::new(crate::loopback::open_browser), wake)
+    }
+
+    /// As `start_with_keeper`, opening external sign-in pages with `browser` (task T611h; tests pass their own).
+    pub fn start_with_browser(
+        endpoint: ServerEndpoint,
+        device: Arc<dyn ResolvesClientCert>,
+        config: WorkerConfig,
+        keeper: Box<dyn TicketKeeper>,
+        browser: Browser,
+        wake: impl Fn() + Send + 'static,
+    ) -> io::Result<(Self, Receiver<Event>)> {
         let ticket = keeper.load();
         let retry = ticket.as_ref().map(|_| Retry { at: Instant::now(), wait: config.first_retry });
         let (inputs, input_queue) = mpsc::channel();
         let (events, event_queue) = mpsc::channel();
-        let shared = Arc::new(Shared { stop: AtomicBool::new(false), socket: Mutex::new(None) });
+        let shared = Arc::new(Shared { stop: AtomicBool::new(false), cancel: AtomicBool::new(false), socket: Mutex::new(None) });
         let run = Run {
             endpoint,
             device,
@@ -295,6 +363,7 @@ impl Worker {
             retry,
             keeper,
             ticket,
+            browser,
         };
         let thread = thread::Builder::new().name("crewcraft-connection".into()).spawn(move || run.run(&input_queue))?;
         Ok((Self { inputs: Some(inputs), shared, thread: Some(thread) }, event_queue))
@@ -303,6 +372,21 @@ impl Worker {
     /// Sign in with fresh credentials, replacing any current session. False if the worker has stopped.
     pub fn sign_in(&self, credentials: Credentials) -> bool {
         self.input(Input::SignIn(credentials))
+    }
+
+    /// Sign in through the server's external identity provider (task T611h), replacing any current session: the
+    /// worker opens the provider's page in the browser and reports `WaitingForBrowser`, then `SignedIn` or `Failed`.
+    /// `email` names the person this device is enrolled for. False if the worker has stopped.
+    pub fn sign_in_external(&self, email: &str) -> bool {
+        // Cleared here, not on the worker's thread, so a cancel right after this call is never lost.
+        self.shared.cancel.store(false, Ordering::Release);
+        self.input(Input::SignInExternal(email.to_owned()))
+    }
+
+    /// Stop waiting for the browser in an external sign-in (task T611h): the worker reports `Failed(Cancelled)`. A
+    /// code the browser already handed back is not used. Nothing happens when no sign-in is waiting.
+    pub fn cancel_sign_in(&self) {
+        self.shared.cancel.store(true, Ordering::Release);
     }
 
     /// Hand a command from the window to the worker. `Sync` also makes that room the open room. False if the worker
@@ -360,6 +444,41 @@ struct Run {
     keeper: Box<dyn TicketKeeper>,
     /// The current session's resume ticket (task T240).
     ticket: Option<ResumeTicket>,
+    browser: Browser,
+}
+
+/// Fresh random bytes for the external sign-in's PKCE verifier and state.
+fn random_bytes() -> [u8; 32] {
+    let mut bytes = [0; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+
+/// The external sign-in's two server calls over the worker's endpoint and device (task T611h). Each connection is
+/// registered with `Shared`, so dropping the worker ends it at once.
+struct Via<'a> {
+    endpoint: &'a ServerEndpoint,
+    device: &'a Arc<dyn ResolvesClientCert>,
+    shared: &'a Shared,
+    email: &'a str,
+}
+
+impl ExternalServer for Via<'_> {
+    type Session = SignedInSession;
+
+    fn begin(&self) -> Result<Option<ExternalStart>, LabError> {
+        let mut connection = self.endpoint.connect(self.device.clone())?;
+        self.shared.set_socket(connection.interrupt.take());
+        let start = self.endpoint.begin_external_over(connection.transport);
+        self.shared.set_socket(None);
+        start
+    }
+
+    fn finish(&self, code: &str, verifier: &str, redirect_uri: &str) -> Result<SignedInSession, LabError> {
+        let mut connection = self.endpoint.connect(self.device.clone())?;
+        self.shared.set_socket(connection.interrupt.take());
+        self.endpoint.finish_external_over(connection.transport, self.email, code, verifier, redirect_uri)
+    }
 }
 
 impl Run {
@@ -379,6 +498,7 @@ impl Run {
             };
             match input {
                 Some(Input::SignIn(credentials)) => self.sign_in(&credentials),
+                Some(Input::SignInExternal(email)) => self.sign_in_external(&email),
                 Some(Input::Command(Command::Sync { room })) => self.open_room(room),
                 Some(Input::Command(Command::Post { room, text })) => self.post(room, text),
                 Some(Input::SignOut) => {
@@ -428,6 +548,42 @@ impl Run {
             Ok(session) => self.start_session(session, credentials.email()),
             Err(error) => self.fail_connection(problem(error), false),
         }
+    }
+
+    /// An external sign-in (task T611h): begin on one connection, the browser and its loopback redirect, finish on
+    /// another. Problems the server causes are handled like a failed password sign-in; the others are only reported.
+    fn sign_in_external(&mut self, email: &str) {
+        self.end_session();
+        self.retry = None;
+        let outcome = {
+            let via = Via { endpoint: &self.endpoint, device: &self.device, shared: &self.shared, email };
+            let (events, wake, browser, shared) = (&self.events, &self.wake, &self.browser, &self.shared);
+            let open = |url: &str| {
+                browser(url)?;
+                if events.send(Event::WaitingForBrowser).is_ok() {
+                    wake();
+                }
+                Ok(())
+            };
+            run_unless(&via, random_bytes, open, BROWSER_TIMEOUT, &|| shared.cancelled())
+        };
+        let problem = match outcome {
+            Ok(session) => return self.start_session(session, email),
+            Err(FlowError::Server(error)) => {
+                let problem = match problem(error) {
+                    Problem::SignInRefused => Problem::ExternalRefused,
+                    other => other,
+                };
+                return self.fail_connection(problem, false);
+            }
+            Err(FlowError::NotOffered) => Problem::ExternalNotOffered,
+            Err(FlowError::Browser(_)) => Problem::Browser,
+            Err(FlowError::Loopback(LoopbackError::Bind(_))) => Problem::NoRedirect,
+            Err(FlowError::Loopback(LoopbackError::TimedOut)) => Problem::BrowserTimedOut,
+            Err(FlowError::Loopback(LoopbackError::Provider(_))) => Problem::ProviderRefused,
+            Err(FlowError::Loopback(LoopbackError::Cancelled)) => Problem::Cancelled,
+        };
+        self.emit(Event::Failed(problem));
     }
 
     /// Take over a session that was just signed in or resumed: keep its resume ticket, list the person's rooms, report

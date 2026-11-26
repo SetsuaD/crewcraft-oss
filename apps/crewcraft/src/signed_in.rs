@@ -61,6 +61,12 @@ impl fmt::Debug for Credentials {
     }
 }
 
+/// Whether `email` can name the person in a sign-in: 1 to 320 bytes with no control character, the rule
+/// `Credentials::new` applies (used for the external sign-in, task T611h).
+pub fn valid_email(email: &str) -> bool {
+    !email.is_empty() && email.len() <= MAX_EMAIL_BYTES && !email.chars().any(char::is_control)
+}
+
 /// What reopens a signed-in session without a password or code (task T240): the person's email and the session token
 /// the server returned. The server accepts it only from the same device, within 12 hours of the sign-in. Wiped from
 /// memory when dropped; `Debug` shows neither field.

@@ -3,7 +3,7 @@
 //! Owns: the order of the steps and what each needs from the one before: ask the server to begin (its issuer, client
 //! id, authorization endpoint and nonce), make the PKCE pair and a state value, listen on the loopback, open the system
 //! browser at the provider's sign-in page, wait for the redirect, and give the code, the verifier and the redirect URI
-//! to the server to finish. Called by: the connection worker. Calls: `loopback`, `crewcraft-oidc` for PKCE and the URL.
+//! to the server to finish. Called by: the connection worker (task T611h). Calls: `loopback`, `crewcraft-oidc` for PKCE and the URL.
 //!
 //! The steps that talk to the server and open the browser are passed in, so the flow is tested without either.
 
@@ -57,9 +57,21 @@ pub trait ExternalServer {
 /// opens the URL (`loopback::open_browser` in the app); `timeout` bounds the wait for the browser.
 pub fn run<S: ExternalServer>(
     server: &S,
+    random: impl FnMut() -> [u8; 32],
+    open_browser: impl FnOnce(&str) -> io::Result<()>,
+    timeout: Duration,
+) -> Result<S::Session, FlowError> {
+    run_unless(server, random, open_browser, timeout, &|| false)
+}
+
+/// As `run`, but the wait for the browser ends with `Loopback(Cancelled)` as soon as `cancelled` says so (task T611h:
+/// the window's Cancel, or the worker stopping). The finish is not started after a cancel.
+pub fn run_unless<S: ExternalServer>(
+    server: &S,
     mut random: impl FnMut() -> [u8; 32],
     open_browser: impl FnOnce(&str) -> io::Result<()>,
     timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<S::Session, FlowError> {
     let start = server.begin().map_err(FlowError::Server)?.ok_or(FlowError::NotOffered)?;
     let pair = pkce(random());
@@ -78,6 +90,9 @@ pub fn run<S: ExternalServer>(
         &Request { client_id: &start.client_id, redirect_uri: &redirect_uri, state: &state, nonce: &start.nonce, code_challenge: &pair.challenge },
     );
     open_browser(&url).map_err(|e| FlowError::Browser(e.kind()))?;
-    let code = loopback.wait(&state, Instant::now() + timeout).map_err(FlowError::Loopback)?;
+    let code = loopback.wait_unless(&state, Instant::now() + timeout, cancelled).map_err(FlowError::Loopback)?;
+    if cancelled() {
+        return Err(FlowError::Loopback(LoopbackError::Cancelled));
+    }
     server.finish(&code.0, &verifier, &redirect_uri).map_err(FlowError::Server)
 }
