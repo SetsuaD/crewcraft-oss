@@ -33,24 +33,9 @@ pub struct CurrentPage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CurrentRecord {
-    Message {
-        cursor: u64,
-        author: String,
-        html: String,
-        edited: bool,
-        parent: Option<u64>,
-        sent_ms: Option<u64>,
-    },
-    File {
-        cursor: u64,
-        index: u8,
-        file: AttachedFile,
-    },
-    Reaction {
-        cursor: u64,
-        reaction: u8,
-        author: String,
-    },
+    Message { cursor: u64, author: String, html: String, edited: bool, parent: Option<u64>, sent_ms: Option<u64> },
+    File { cursor: u64, index: u8, file: AttachedFile },
+    Reaction { cursor: u64, reaction: u8, author: String },
 }
 
 impl CurrentRecord {
@@ -116,7 +101,9 @@ pub fn decode_page(bytes: &[u8]) -> Result<(u32, CurrentPage), CodecError> {
 }
 
 fn check_page(page: &CurrentPage) -> Result<(), CodecError> {
-    if page.room.is_empty() || page.room.len() > MAX_NAME || page.records.len() > MAX_CURRENT_PAGE_RECORDS
+    if page.room.is_empty()
+        || page.room.len() > MAX_NAME
+        || page.records.len() > MAX_CURRENT_PAGE_RECORDS
         || page.index >= MAX_CURRENT_RECORDS as u32
         || (page.records.is_empty() && (!page.last || page.index != 0 || page.older))
     {
@@ -251,7 +238,9 @@ impl Reader<'_> {
 
     fn record(&mut self) -> Result<CurrentRecord, CodecError> {
         let kind = self.byte()?;
-        if kind > 2 { return Err(CodecError::BadKind(kind)); }
+        if kind > 2 {
+            return Err(CodecError::BadKind(kind));
+        }
         let cursor = u64::from_be_bytes(self.array()?);
         match kind {
             0 => {
@@ -268,14 +257,14 @@ impl Reader<'_> {
                 let file = self.array()?;
                 let name = self.string(1, MAX_ATTACHMENT_NAME)?;
                 let size = u64::from_be_bytes(self.array()?);
-                let image = if self.boolean()? {
-                    Some((u32::from_be_bytes(self.array()?), u32::from_be_bytes(self.array()?)))
-                } else { None };
+                let image = if self.boolean()? { Some((u32::from_be_bytes(self.array()?), u32::from_be_bytes(self.array()?))) } else { None };
                 Ok(CurrentRecord::File { cursor, index, file: AttachedFile { file, name, size, image } })
             }
             2 => {
                 let reaction = self.byte()?;
-                if reaction_name(reaction).is_none() { return Err(CodecError::BadKind(reaction)); }
+                if reaction_name(reaction).is_none() {
+                    return Err(CodecError::BadKind(reaction));
+                }
                 let author = self.string(1, MAX_AUTHOR)?;
                 Ok(CurrentRecord::Reaction { cursor, reaction, author })
             }
@@ -301,7 +290,9 @@ mod tests {
         let original = page(vec![message(3, String::new()), CurrentRecord::Reaction { cursor: 3, reaction: 1, author: "reader".into() }]);
         let bytes = encode_page(7, &original)?;
         assert_eq!(decode_page(&bytes)?, (7, original.clone()));
-        for end in 0..bytes.len() { assert!(decode_page(&bytes[..end]).is_err()); }
+        for end in 0..bytes.len() {
+            assert!(decode_page(&bytes[..end]).is_err());
+        }
         let flags = 1 + 4 + 2 + original.room.len() + 8 + 4;
         for offset in flags..flags + 3 {
             let mut hostile = bytes.clone();

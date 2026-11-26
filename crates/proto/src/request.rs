@@ -1286,7 +1286,9 @@ mod read_state_tests {
         let request = Request::Current { room: "room".into() };
         let bytes = encode_request(22, &request)?;
         assert_eq!(decode_request(&bytes)?, (22, request));
-        for end in 0..bytes.len() { assert!(decode_request(&bytes[..end]).is_err()); }
+        for end in 0..bytes.len() {
+            assert!(decode_request(&bytes[..end]).is_err());
+        }
         let mut trailing = bytes;
         trailing.push(0);
         assert_eq!(decode_request(&trailing), Err(CodecError::TrailingBytes));
@@ -1342,7 +1344,7 @@ mod pins_saved_tests {
             let request = Request::ListSaved { after_room, after_cursor };
             assert_eq!(decode_request(&encode_request(8, &request).unwrap()).unwrap(), (8, request));
         }
-        for tag in [0, 7, 13, 31, 63, 128, SAVED_TAG, 255] {
+        for tag in [0, 7, 13, 32, 63, 128, SAVED_TAG, 255] {
             assert_eq!(decode_request(&[tag]), Err(CodecError::BadKind(tag)));
         }
         assert!(encode_request(8, &Request::ListSaved { after_room: String::new(), after_cursor: 4 }).is_err());

@@ -35,8 +35,12 @@ mod current_window_tests {
 
     fn message() -> CurrentRecord {
         CurrentRecord::Message {
-            cursor: 30, author: "writer@example.org".into(), html: "<p>Current edited reply</p>".into(),
-            edited: true, parent: Some(2), sent_ms: Some(0),
+            cursor: 30,
+            author: "writer@example.org".into(),
+            html: "<p>Current edited reply</p>".into(),
+            edited: true,
+            parent: Some(2),
+            sent_ms: Some(0),
         }
     }
 
@@ -70,10 +74,21 @@ mod current_window_tests {
 
         let mut complete = CurrentWindow::new("room", 40);
         assert!(!stage(&mut complete, page(0, false, vec![message()]))?);
-        assert!(stage(&mut complete, page(1, true, vec![
-            CurrentRecord::File { cursor: 30, index: 0, file: AttachedFile { file: [2; 16], name: "current.txt".into(), size: 6, image: None } },
-            CurrentRecord::Reaction { cursor: 30, reaction: 1, author: "reader@example.org".into() },
-        ]))?);
+        assert!(stage(
+            &mut complete,
+            page(
+                1,
+                true,
+                vec![
+                    CurrentRecord::File {
+                        cursor: 30,
+                        index: 0,
+                        file: AttachedFile { file: [2; 16], name: "current.txt".into(), size: 6, image: None }
+                    },
+                    CurrentRecord::Reaction { cursor: 30, reaction: 1, author: "reader@example.org".into() },
+                ]
+            )
+        )?);
         view.install_current(complete)?;
         assert_eq!(view.cursor(), 40);
         let shown = view.shown();
@@ -178,9 +193,19 @@ pub struct CurrentWindow {
 impl CurrentWindow {
     pub fn new(room: &str, head: u64) -> Self {
         Self {
-            room: room.to_owned(), head, next: 0, bytes: 0, records: 0, flags: None, last_key: None,
-            complete: false, lines: Vec::new(), attachments: BTreeMap::new(), parents: BTreeMap::new(),
-            reactions: BTreeMap::new(), sent: BTreeMap::new(),
+            room: room.to_owned(),
+            head,
+            next: 0,
+            bytes: 0,
+            records: 0,
+            flags: None,
+            last_key: None,
+            complete: false,
+            lines: Vec::new(),
+            attachments: BTreeMap::new(),
+            parents: BTreeMap::new(),
+            reactions: BTreeMap::new(),
+            sent: BTreeMap::new(),
         }
     }
 
@@ -188,8 +213,13 @@ impl CurrentWindow {
     pub fn page(&mut self, page: CurrentPage, framed_bytes: usize) -> Result<bool, CodecError> {
         let bytes = self.bytes.checked_add(framed_bytes).ok_or(CodecError::FieldLength)?;
         let records = self.records.checked_add(page.records.len()).ok_or(CodecError::FieldLength)?;
-        if self.complete || page.room != self.room || page.head != self.head || page.index != self.next
-            || page.records.len() > MAX_CURRENT_PAGE_RECORDS || bytes > MAX_CURRENT_BYTES || records > MAX_CURRENT_RECORDS
+        if self.complete
+            || page.room != self.room
+            || page.head != self.head
+            || page.index != self.next
+            || page.records.len() > MAX_CURRENT_PAGE_RECORDS
+            || bytes > MAX_CURRENT_BYTES
+            || records > MAX_CURRENT_RECORDS
             || self.flags.is_some_and(|flags| flags != (page.older, page.archived))
             || (page.records.is_empty() && !(page.index == 0 && page.last))
         {
@@ -209,17 +239,27 @@ impl CurrentWindow {
                         return Err(CodecError::FieldLength);
                     }
                     self.lines.push(Line { cursor, author, html, edited });
-                    if let Some(parent) = parent { self.parents.insert(cursor, parent); }
-                    if let Some(sent_ms) = sent_ms { self.sent.insert(cursor, sent_ms); }
+                    if let Some(parent) = parent {
+                        self.parents.insert(cursor, parent);
+                    }
+                    if let Some(sent_ms) = sent_ms {
+                        self.sent.insert(cursor, sent_ms);
+                    }
                 }
                 CurrentRecord::File { cursor, index, file } => {
-                    if self.lines.last().is_none_or(|line| line.cursor != cursor) { return Err(CodecError::FieldLength); }
+                    if self.lines.last().is_none_or(|line| line.cursor != cursor) {
+                        return Err(CodecError::FieldLength);
+                    }
                     let files = self.attachments.entry(cursor).or_default();
-                    if usize::from(index) != files.len() { return Err(CodecError::FieldLength); }
+                    if usize::from(index) != files.len() {
+                        return Err(CodecError::FieldLength);
+                    }
                     files.push(file);
                 }
                 CurrentRecord::Reaction { cursor, reaction, author } => {
-                    if self.lines.last().is_none_or(|line| line.cursor != cursor) { return Err(CodecError::FieldLength); }
+                    if self.lines.last().is_none_or(|line| line.cursor != cursor) {
+                        return Err(CodecError::FieldLength);
+                    }
                     self.reactions.entry(cursor).or_default().entry(reaction).or_default().insert(author);
                 }
             }
@@ -558,15 +598,17 @@ impl RoomView {
         self.needs_resync = true;
     }
 
-    pub fn gap_notice(&self) -> Option<&GapNotice> { self.gap_notice.as_ref() }
+    pub fn gap_notice(&self) -> Option<&GapNotice> {
+        self.gap_notice.as_ref()
+    }
 
-    pub fn recovery_epoch(&self) -> u64 { self.recovery_epoch }
+    pub fn recovery_epoch(&self) -> u64 {
+        self.recovery_epoch
+    }
 
     /// Install only a complete current window. No message notifications are produced; pending sends survive.
     pub fn install_current(&mut self, window: CurrentWindow) -> Result<(), CodecError> {
-        if !window.complete || window.head < self.cursor()
-            || self.gap_notice.as_ref().is_some_and(|gap| window.head < gap.head)
-        {
+        if !window.complete || window.head < self.cursor() || self.gap_notice.as_ref().is_some_and(|gap| window.head < gap.head) {
             return Err(CodecError::FieldLength);
         }
         let (older, archived) = window.flags.ok_or(CodecError::FieldLength)?;

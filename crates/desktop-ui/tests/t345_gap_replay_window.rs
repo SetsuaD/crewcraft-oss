@@ -13,12 +13,17 @@ fn line(cursor: u64, text: &str) -> Shown {
 }
 
 fn chat(size: [f32; 2]) -> Harness<'static, Window> {
-    let mut h = Harness::builder().with_size(size).with_context_setup(|ctx| ctx.set_fonts(fonts()))
+    let mut h = Harness::builder()
+        .with_size(size)
+        .with_context_setup(|ctx| ctx.set_fonts(fonts()))
         .build_ui_state(|ui, window: &mut Window| window.ui(ui), Window::new());
     h.state_mut().apply(Update::SignedIn { email: "reader@example.org".into(), rooms: vec![ROOM.into(), "other".into()] });
     h.state_mut().apply(Update::Snapshot { room: ROOM.into(), shown: vec![line(5, "Previous body")] });
     h.run();
-    if size[0] < 600.0 { h.get_by_label(ROOM).click(); h.run(); }
+    if size[0] < 600.0 {
+        h.get_by_label(ROOM).click();
+        h.run();
+    }
     h.state_mut().take_actions();
     h
 }
@@ -32,7 +37,8 @@ fn recovery_clears_stale_sidecars_and_the_history_notice_survives_later_snapshot
     let mut h = chat([1100.0, 800.0]);
     h.state_mut().apply(Update::Archive { room: ROOM.into(), times: vec![(5, 1)] });
     h.state_mut().apply(Update::Threads { room: ROOM.into(), parents: vec![(5, 1)] });
-    h.state_mut().apply(Update::Attachments { room: ROOM.into(), files: vec![(5, vec![FileChip { file: [1; 16], name: "old.txt".into(), size: 3 }])] });
+    h.state_mut()
+        .apply(Update::Attachments { room: ROOM.into(), files: vec![(5, vec![FileChip { file: [1; 16], name: "old.txt".into(), size: 3 }])] });
     h.state_mut().apply(Update::Reactions { room: ROOM.into(), reactions: vec![(5, vec![(1, vec!["reader@example.org".into()])])] });
     h.state_mut().apply(Update::Calls {
         room: ROOM.into(),
@@ -79,7 +85,8 @@ fn an_all_reply_window_keeps_its_true_missing_parent_and_opens_the_available_thr
         h.run();
         h.get_by_label("Old parent body");
         h.state_mut().apply(Update::Recovered { room: ROOM.into() });
-        h.state_mut().apply(Update::Snapshot { room: ROOM.into(), shown: vec![line(150, "First recovered reply"), line(151, "Latest recovered reply")] });
+        h.state_mut()
+            .apply(Update::Snapshot { room: ROOM.into(), shown: vec![line(150, "First recovered reply"), line(151, "Latest recovered reply")] });
         h.state_mut().apply(Update::Threads { room: ROOM.into(), parents: vec![(150, 1), (151, 1)] });
         h.run();
         assert!(h.query_by_label("Old parent body").is_none());

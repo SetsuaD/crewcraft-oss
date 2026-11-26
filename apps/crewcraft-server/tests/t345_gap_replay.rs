@@ -30,8 +30,8 @@ use crewcraft_proto::frame::{Decoder, encode};
 use crewcraft_proto::handshake::{self, Hello, ServerSide};
 use crewcraft_proto::push::{AttachedFile, Push, encode_push};
 use crewcraft_proto::request::{
-    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS,
-    FEATURE_READ_STATE, FEATURE_THREADS, Request, Response, decode_request, encode_response,
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_READ_STATE,
+    FEATURE_THREADS, Request, Response, decode_request, encode_response,
 };
 use crewcraft_proto::signin::{self, SignIn};
 use crewcraft_server::lab_bootstrap::bootstrap_handler;
@@ -58,8 +58,14 @@ const STEP_MS: u64 = 30_000;
 const ALICE: &str = "alice@example.org";
 const BOB: &str = "bob@example.org";
 const PASSWORD: &str = "synthetic current room password";
-const FEATURES: u32 = FEATURE_LIST_ROOMS | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE
-    | FEATURE_PINS_SAVED | FEATURE_READ_STATE | FEATURE_GAP_REPLAY;
+const FEATURES: u32 = FEATURE_LIST_ROOMS
+    | FEATURE_FILES
+    | FEATURE_THREADS
+    | FEATURE_REACTIONS
+    | FEATURE_ARCHIVE
+    | FEATURE_PINS_SAVED
+    | FEATURE_READ_STATE
+    | FEATURE_GAP_REPLAY;
 
 fn wall_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
@@ -130,7 +136,8 @@ impl Drop for Running {
 
 fn start(state: LabInstallation, now_ms: u64, secrets: Vec<[u8; 20]>) -> Running {
     let options = LabOptions {
-        address: "127.0.0.1:0".parse().unwrap(), capacity: NonZeroUsize::new(8).unwrap(),
+        address: "127.0.0.1:0".parse().unwrap(),
+        capacity: NonZeroUsize::new(8).unwrap(),
         timeouts: Timeouts { handshake: WAIT, sign_in: WAIT, signed_in_frame: WAIT, bootstrap: WAIT },
         protocol: ServerSide { min_version: 1, max_version: 1, features: FEATURES, name: "current room test".into() },
     };
@@ -162,7 +169,9 @@ impl Person {
         let csr = CertificateParams::new(Vec::<String>::new()).unwrap().serialize_request(&key).unwrap();
         let spki = key.subject_public_key_info();
         let request = EnrollmentRequest { device_name: "Replay Test Device", csr: csr.der().as_ref(), password: PASSWORD, expected_spki: &spki };
-        let chain = endpoint.open_bootstrap(&self.invitation, WAIT).unwrap()
+        let chain = endpoint
+            .open_bootstrap(&self.invitation, WAIT)
+            .unwrap()
             .enroll(request, |_, _| FirstTotpCode::parse(self.code_at(clock_now(clock))))
             .unwrap();
         let mut roots = RootCertStore::empty();
@@ -193,9 +202,13 @@ impl Fixture {
             Person { email: BOB, secret: [19; 20], invitation: EnrollmentCode::from_bytes([2; 20]) },
         ];
         for person in &people {
-            state.accounts.issue_invite(Invite {
-                email: person.email.into(), bootstrap_pub: person.invitation.bootstrap_public_key(), expires_ms: setup_time + 600_000,
-            }, setup_time).unwrap();
+            state
+                .accounts
+                .issue_invite(
+                    Invite { email: person.email.into(), bootstrap_pub: person.invitation.bootstrap_public_key(), expires_ms: setup_time + 600_000 },
+                    setup_time,
+                )
+                .unwrap();
         }
         let room = state.rooms.create_room(ALICE, "Project").unwrap();
         state.rooms.add_member(&room, ALICE, BOB, Role::Member).unwrap();
@@ -294,13 +307,23 @@ fn an_enrolled_reconnect_recovers_current_window_and_metadata_then_resumes_incre
     let mut bob = endpoint.resume(fixture.devices[1].clone(), &bob_ticket).unwrap();
     let (head, shown) = bob.sync(room).unwrap();
     assert_eq!(head, old_head + added);
-    let lines = shown.iter().filter_map(|entry| match entry { Shown::Line(line) => Some(line), _ => None }).collect::<Vec<_>>();
+    let lines = shown
+        .iter()
+        .filter_map(|entry| match entry {
+            Shown::Line(line) => Some(line),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines.len(), MAX_CURRENT_MESSAGES);
     assert!(!lines.iter().any(|line| line.cursor == outside || line.cursor == deleted));
     assert!(lines.iter().any(|line| line.cursor == edited && line.edited && line.html.contains("current revised detail")));
     assert_eq!(bob.parents(room).get(&reply), Some(&outside), "the real parent relation survives an omitted parent");
     assert_eq!(bob.attachments(room).get(&with_file).unwrap()[0].file, upload.file);
-    assert!(bob.reactions(room).iter().any(|(at, reactions)| *at == with_file && reactions.iter().any(|(code, people)| *code == 1 && people.iter().any(|who| who == BOB))));
+    assert!(
+        bob.reactions(room)
+            .iter()
+            .any(|(at, reactions)| *at == with_file && reactions.iter().any(|(code, people)| *code == 1 && people.iter().any(|who| who == BOB)))
+    );
     let notice = bob.gap_notice(room).unwrap();
     assert!(notice.recovered && notice.older);
     assert!(notice.oldest > notice.after + 1);
@@ -325,15 +348,15 @@ fn an_enrolled_reconnect_recovers_current_window_and_metadata_then_resumes_incre
     // A fresh worker must publish the recovered replacement and empty sidecars, so the real window can clear its
     // previous metadata. It uses another authenticated connection on Bob's registered device.
     bob.react(room, with_file, 1, false).unwrap();
-    let config = WorkerConfig {
-        poll_interval: Duration::from_millis(50), first_retry: Duration::from_millis(50), max_retry: Duration::from_millis(200),
-    };
+    let config =
+        WorkerConfig { poll_interval: Duration::from_millis(50), first_retry: Duration::from_millis(50), max_retry: Duration::from_millis(200) };
     let (worker, events) = Worker::start(fixture.endpoint(&running), fixture.devices[1].clone(), config, || {}).unwrap();
     running.advance(STEP_MS);
     let code = fixture.people[1].code_at(clock_now(&running.clock));
     assert!(worker.sign_in(Credentials::new(BOB, PASSWORD, &code).unwrap()));
     let deadline = Instant::now() + WAIT;
-    let (mut connected, mut signed_in, mut recovered, mut gap, mut window, mut files, mut empty_reactions) = (false, false, false, false, false, false, false);
+    let (mut connected, mut signed_in, mut recovered, mut gap, mut window, mut files, mut empty_reactions) =
+        (false, false, false, false, false, false, false);
     let mut observed = Vec::new();
     while !(connected && signed_in && recovered && gap && window && files && empty_reactions) {
         let received = events.recv_timeout(deadline.saturating_duration_since(Instant::now()));
@@ -380,8 +403,7 @@ fn an_enrolled_reconnect_recovers_current_window_and_metadata_then_resumes_incre
 
 const SCRIPT_ROOM: &str = "project";
 const SCRIPT_HEAD: u64 = 10_004;
-const SCRIPT_FEATURES: u32 = FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_PINS_SAVED
-    | FEATURE_READ_STATE | FEATURE_GAP_REPLAY;
+const SCRIPT_FEATURES: u32 = FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_PINS_SAVED | FEATURE_READ_STATE | FEATURE_GAP_REPLAY;
 
 /// The established ChatSession transport seam, with production framing, sign-in and negotiation codecs. This
 /// peer supplies deterministic hostile sequences that a legitimate server does not produce. Capturing requests
@@ -433,9 +455,15 @@ impl ScriptedSession {
         assert_eq!(chat.sync(SCRIPT_ROOM, false, 0, 0, deadline), Ok(3));
         let view = chat.view(SCRIPT_ROOM).unwrap();
         assert_eq!(view.cursor(), 3);
-        if features & FEATURE_FILES != 0 { assert!(view.attachments().contains_key(&1)); }
-        if features & FEATURE_THREADS != 0 { assert!(view.parents().contains_key(&2)); }
-        if features & FEATURE_REACTIONS != 0 { assert!(view.reactions().contains_key(&1)); }
+        if features & FEATURE_FILES != 0 {
+            assert!(view.attachments().contains_key(&1));
+        }
+        if features & FEATURE_THREADS != 0 {
+            assert!(view.parents().contains_key(&2));
+        }
+        if features & FEATURE_REACTIONS != 0 {
+            assert!(view.reactions().contains_key(&1));
+        }
         Self { chat, written, deadline }
     }
 
@@ -453,26 +481,46 @@ impl ScriptedSession {
 }
 
 fn script_file(current: bool) -> AttachedFile {
-    AttachedFile { file: [if current { 8 } else { 7 }; 16], name: String::from(if current { "current.txt" } else { "old.txt" }), size: 4, image: None }
+    AttachedFile {
+        file: [if current { 8 } else { 7 }; 16],
+        name: String::from(if current { "current.txt" } else { "old.txt" }),
+        size: 4,
+        image: None,
+    }
 }
 
 fn script_metadata(replies: &mut Vec<Vec<u8>>, head: u64, features: u32) {
     if features & FEATURE_CALLS != 0 {
-        replies.push(encode_push(&Push::CallState {
-            room: SCRIPT_ROOM.into(), cursor: 0, call: 9, video: true, started_by: BOB.into(), started_ms: 42,
-            participants: vec![ALICE.into(), BOB.into()],
-        }).unwrap());
+        replies.push(
+            encode_push(&Push::CallState {
+                room: SCRIPT_ROOM.into(),
+                cursor: 0,
+                call: 9,
+                video: true,
+                started_by: BOB.into(),
+                started_ms: 42,
+                participants: vec![ALICE.into(), BOB.into()],
+            })
+            .unwrap(),
+        );
     }
     if features & FEATURE_PINS_SAVED != 0 {
-        replies.push(encode_push(&Push::Pinned {
-        room: SCRIPT_ROOM.into(), cursor: head, target: if head == 3 { 1 } else { 10 }, author: BOB.into(),
-        html: if head == 3 { "cached plan" } else { "current recovered body" }.into(), edited: head != 3,
-        }).unwrap());
+        replies.push(
+            encode_push(&Push::Pinned {
+                room: SCRIPT_ROOM.into(),
+                cursor: head,
+                target: if head == 3 { 1 } else { 10 },
+                author: BOB.into(),
+                html: if head == 3 { "cached plan" } else { "current recovered body" }.into(),
+                edited: head != 3,
+            })
+            .unwrap(),
+        );
     }
     if features & FEATURE_READ_STATE != 0 {
-        replies.push(encode_push(&Push::ReadState {
-        room: SCRIPT_ROOM.into(), cursor: head, position: 3, revision: 1, unread: u64::from(head != 3),
-        }).unwrap());
+        replies.push(
+            encode_push(&Push::ReadState { room: SCRIPT_ROOM.into(), cursor: head, position: 3, revision: 1, unread: u64::from(head != 3) }).unwrap(),
+        );
     }
 }
 
@@ -490,12 +538,22 @@ fn script_prefix_with_features(features: u32) -> Vec<Vec<u8>> {
         signin::encode_reply(&signin::Reply::Accepted { token: &token }).unwrap(),
         handshake::encode_reply(&handshake::Reply::Welcome { version: 1, features, server: "current recovery peer".into() }).unwrap(),
         encode_response(1, &Response::Ok { cursor: 3 }).unwrap(),
-        encode_push(&Push::Posted { room: SCRIPT_ROOM.into(), cursor: 1, author: BOB.into(), html: "cached plan".into(), mentions: Vec::new() }).unwrap(),
+        encode_push(&Push::Posted { room: SCRIPT_ROOM.into(), cursor: 1, author: BOB.into(), html: "cached plan".into(), mentions: Vec::new() })
+            .unwrap(),
     ];
     if features & FEATURE_FILES != 0 {
         replies.push(encode_push(&Push::Attached { room: SCRIPT_ROOM.into(), cursor: 1, files: vec![script_file(false)] }).unwrap());
     }
-    replies.push(encode_push(&Push::Posted { room: SCRIPT_ROOM.into(), cursor: 2, author: BOB.into(), html: "cached deleted message".into(), mentions: Vec::new() }).unwrap());
+    replies.push(
+        encode_push(&Push::Posted {
+            room: SCRIPT_ROOM.into(),
+            cursor: 2,
+            author: BOB.into(),
+            html: "cached deleted message".into(),
+            mentions: Vec::new(),
+        })
+        .unwrap(),
+    );
     if features & FEATURE_THREADS != 0 {
         replies.push(encode_push(&Push::Threaded { room: SCRIPT_ROOM.into(), cursor: 2, parent: 1 }).unwrap());
     }
@@ -545,7 +603,9 @@ fn a_complete_multipage_capture_replaces_cached_state_and_syncs_from_the_capture
         assert_eq!(requests.len(), if features & FEATURE_CALLS != 0 { 5 } else { 4 });
         assert_eq!(requests.iter().filter(|request| matches!(request, Request::Current { .. })).count(), 1);
         assert!(matches!(&requests[3], Request::Sync { room, cursor } if room == SCRIPT_ROOM && *cursor == SCRIPT_HEAD));
-        if features & FEATURE_CALLS != 0 { assert!(matches!(&requests[4], Request::Ping)); }
+        if features & FEATURE_CALLS != 0 {
+            assert!(matches!(&requests[4], Request::Ping));
+        }
         let view = session.chat.view(SCRIPT_ROOM).unwrap();
         assert_eq!(view.cursor(), SCRIPT_HEAD, "metadata cursors do not replace the captured event head");
         let shown = view.shown();
@@ -556,8 +616,12 @@ fn a_complete_multipage_capture_replaces_cached_state_and_syncs_from_the_capture
         assert!(view.parents().is_empty() && view.reactions().is_empty());
         assert_eq!(view.recovery_epoch(), 1);
         assert!(view.gap_notice().is_some_and(|notice| notice.recovered && !notice.older && notice.after == 3));
-        if features & FEATURE_PINS_SAVED != 0 { assert_eq!(view.pinned_message().unwrap().html, "current recovered body"); }
-        if features & FEATURE_READ_STATE != 0 { assert_eq!(view.read_state().unwrap().head, SCRIPT_HEAD); }
+        if features & FEATURE_PINS_SAVED != 0 {
+            assert_eq!(view.pinned_message().unwrap().html, "current recovered body");
+        }
+        if features & FEATURE_READ_STATE != 0 {
+            assert_eq!(view.read_state().unwrap().head, SCRIPT_HEAD);
+        }
         if features & FEATURE_CALLS != 0 {
             let call = view.call().unwrap();
             assert_eq!(call.call, 9, "the cleared open-call cache was restored before sync returned");
@@ -632,6 +696,10 @@ fn a_second_gap_after_install_keeps_the_completed_capture_and_does_not_recurse()
     assert_eq!(view.recovery_epoch(), 1, "a completed replacement remains usable when its final sync fails");
     assert!(view.gap_notice().is_some_and(|notice| notice.recovered && notice.head == later_head));
     let requests = session.requests();
-    assert_eq!(requests.iter().filter(|request| matches!(request, Request::Current { .. })).count(), 1, "a single sync cannot start unbounded recovery attempts");
+    assert_eq!(
+        requests.iter().filter(|request| matches!(request, Request::Current { .. })).count(),
+        1,
+        "a single sync cannot start unbounded recovery attempts"
+    );
     assert_eq!(requests.len(), 4);
 }

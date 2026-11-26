@@ -42,12 +42,19 @@ impl DurableServer {
                 return Err(CurrentError::TooLarge);
             }
             capture.push(CurrentRecord::Message {
-                cursor, author: message.author.clone(), html: message.html.clone(), edited: message.edited,
-                parent: self.parent_of(slug, cursor), sent_ms: self.imported_sent_ms(slug, cursor),
+                cursor,
+                author: message.author.clone(),
+                html: message.html.clone(),
+                edited: message.edited,
+                parent: self.parent_of(slug, cursor),
+                sent_ms: self.imported_sent_ms(slug, cursor),
             })?;
             // Normal stored filenames are validated at acceptance. Imported names are checked before the bounded
             // existing attachment accessor clones them, including entries whose bytes were not archived.
-            if self.imported_files(slug, cursor).is_some_and(|files| files.iter().take(MAX_ATTACHMENTS).any(|file| file.name.is_empty() || file.name.len() > MAX_ATTACHMENT_NAME)) {
+            if self
+                .imported_files(slug, cursor)
+                .is_some_and(|files| files.iter().take(MAX_ATTACHMENTS).any(|file| file.name.is_empty() || file.name.len() > MAX_ATTACHMENT_NAME))
+            {
                 return Err(CurrentError::TooLarge);
             }
             for (index, file) in self.attachments(slug, cursor).into_iter().enumerate() {
@@ -75,7 +82,12 @@ struct Capture {
 
 impl Capture {
     fn new(room: &str, head: u64, older: bool, archived: bool, id: u32) -> Self {
-        Self { page: CurrentPage { room: room.to_owned(), head, index: 0, last: false, older, archived, records: Vec::new() }, id, count: 0, frames: Vec::new() }
+        Self {
+            page: CurrentPage { room: room.to_owned(), head, index: 0, last: false, older, archived, records: Vec::new() },
+            id,
+            count: 0,
+            frames: Vec::new(),
+        }
     }
 
     fn check_record(&self) -> Result<(), CurrentError> {
@@ -132,14 +144,23 @@ mod tests {
     }
 
     impl Drop for TestJournal {
-        fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
     }
 
     #[test]
     fn both_record_and_encoded_byte_budgets_stop_a_large_reactor_stream() -> Result<(), CurrentError> {
         for author_length in [16, MAX_AUTHOR] {
             let mut capture = Capture::new("room", 1, false, false, 1);
-            capture.push(CurrentRecord::Message { cursor: 1, author: "writer".into(), html: String::new(), edited: false, parent: None, sent_ms: None })?;
+            capture.push(CurrentRecord::Message {
+                cursor: 1,
+                author: "writer".into(),
+                html: String::new(),
+                edited: false,
+                parent: None,
+                sent_ms: None,
+            })?;
             let mut refused_at = None;
             for index in 0..=MAX_CURRENT_RECORDS {
                 let author = format!("{index:05}{}", "x".repeat(author_length - 5));
@@ -149,7 +170,11 @@ mod tests {
                 }
             }
             assert!(capture.frames.len() <= MAX_CURRENT_BYTES);
-            assert!(refused_at.is_some_and(|at| if author_length == MAX_AUTHOR { at < MAX_CURRENT_RECORDS - 1 } else { at == MAX_CURRENT_RECORDS - 1 }));
+            assert!(refused_at.is_some_and(|at| if author_length == MAX_AUTHOR {
+                at < MAX_CURRENT_RECORDS - 1
+            } else {
+                at == MAX_CURRENT_RECORDS - 1
+            }));
         }
         Ok(())
     }
@@ -160,12 +185,16 @@ mod tests {
         let mut server = DurableServer::open(&journal.0).map_err(CurrentError::Storage)?;
         let room = server.create_room("owner", "Room").map_err(CurrentError::Storage)?;
         let message = server.post(&room, "owner", "body", 0).map_err(CurrentError::Storage)?;
-        server.previews.insert(room.clone(), BTreeMap::from([(message, CurrentMessage { author: "owner".into(), html: "x".repeat(MAX_HTML + 1), edited: false })]));
+        server.previews.insert(
+            room.clone(),
+            BTreeMap::from([(message, CurrentMessage { author: "owner".into(), html: "x".repeat(MAX_HTML + 1), edited: false })]),
+        );
         assert_eq!(server.current(&room, "stranger", 1), Err(CurrentError::NoSuchRoom));
         assert_eq!(server.current("absent", "stranger", 1), Err(CurrentError::NoSuchRoom));
         let request = encode_request(5, &Request::Current { room }).map_err(|_| CurrentError::TooLarge)?;
         let bytes = encode(&request).map_err(|_| CurrentError::TooLarge)?;
-        let output = Connection::with_features("owner", FEATURE_GAP_REPLAY).receive_durable(&mut server, &bytes, 0).map_err(|_| CurrentError::TooLarge)?;
+        let output =
+            Connection::with_features("owner", FEATURE_GAP_REPLAY).receive_durable(&mut server, &bytes, 0).map_err(|_| CurrentError::TooLarge)?;
         let mut decoder = Decoder::new();
         decoder.push(&output);
         let answer = decoder.next_frame().map_err(|_| CurrentError::TooLarge)?.ok_or(CurrentError::TooLarge)?;

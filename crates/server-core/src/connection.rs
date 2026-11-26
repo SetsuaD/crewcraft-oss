@@ -146,7 +146,10 @@ impl Connection {
         server.sweep_calls(now_ms).map_err(DurableConnError::Storage)?;
         let media_device = self.device.filter(|_| self.features & crewcraft_proto::request::FEATURE_MEDIA != 0);
         self.receive_with(server, bytes, now_ms, |s, user, id, request, now| {
-            match current_answer(s, user, id, request).or_else(|| upload(s, user, request, now)).or_else(|| calls(s, user, request, now, media_device)) {
+            match current_answer(s, user, id, request)
+                .or_else(|| upload(s, user, request, now))
+                .or_else(|| calls(s, user, request, now, media_device))
+            {
                 Some(answer) => answer,
                 None => handle_backend(&mut Backend::Durable(s), user, request, now).map(|r| (r, None)).map_err(DurableConnError::Storage),
             }
@@ -171,7 +174,8 @@ impl Connection {
             let needs_pins_saved = matches!(request, Request::Pin { .. } | Request::SaveMessage { .. } | Request::ListSaved { .. });
             let (response, follow) = if (needs_pins_saved && !pins_saved)
                 || (matches!(request, Request::MarkUnread { .. }) && !reads)
-                || (matches!(request, Request::Current { .. }) && !gap_replay) {
+                || (matches!(request, Request::Current { .. }) && !gap_replay)
+            {
                 (refusal_of(crate::dispatch::E_NOT_ALLOWED), None)
             } else {
                 dispatch(server, &self.user, id, &request, now_ms)?

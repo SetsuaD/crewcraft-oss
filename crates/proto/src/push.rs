@@ -651,11 +651,7 @@ fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, CodecError> {
 }
 
 fn check_gap(head: u64, after: u64, oldest: u64) -> Result<(), CodecError> {
-    if oldest > head || oldest.saturating_sub(after) <= 1 {
-        Err(CodecError::FieldLength)
-    } else {
-        Ok(())
-    }
+    if oldest > head || oldest.saturating_sub(after) <= 1 { Err(CodecError::FieldLength) } else { Ok(()) }
 }
 
 #[cfg(test)]
@@ -667,7 +663,9 @@ mod read_state_tests {
         let gap = Push::Gap { room: "room".into(), cursor: 20, after: 2, oldest: 8 };
         let bytes = encode_push(&gap)?;
         assert_eq!(decode_push(&bytes)?, gap);
-        for end in 0..bytes.len() { assert!(decode_push(&bytes[..end]).is_err()); }
+        for end in 0..bytes.len() {
+            assert!(decode_push(&bytes[..end]).is_err());
+        }
         let mut trailing = bytes;
         trailing.push(0);
         assert_eq!(decode_push(&trailing), Err(CodecError::TrailingBytes));

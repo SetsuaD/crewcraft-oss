@@ -115,8 +115,13 @@ pub enum Update {
         room: String,
         shown: Vec<Shown>,
     },
-    Recovered { room: String },
-    Gap { room: String, notice: crewcraft_client_core::room_view::GapNotice },
+    Recovered {
+        room: String,
+    },
+    Gap {
+        room: String,
+        notice: crewcraft_client_core::room_view::GapNotice,
+    },
     Unread {
         room: String,
         unread: u32,
@@ -540,7 +545,9 @@ impl Window {
             Update::Snapshot { room, shown } => {
                 self.feeds.insert(room, feed_rows(&shown));
             }
-            Update::Gap { room, notice } => { self.gaps.insert(room, notice); }
+            Update::Gap { room, notice } => {
+                self.gaps.insert(room, notice);
+            }
             Update::Recovered { room } => {
                 self.message_files.remove(&room);
                 self.threads.remove(&room);
@@ -995,7 +1002,10 @@ impl Window {
                     if let FeedRow::Message { cursor, .. } = row {
                         shown_lines = call_lines_ui(ui, &call_lines, shown_lines, *cursor);
                     }
-                    let parent = match row { FeedRow::Message { cursor, .. } => threads.get(cursor).copied(), _ => None };
+                    let parent = match row {
+                        FeedRow::Message { cursor, .. } => threads.get(cursor).copied(),
+                        _ => None,
+                    };
                     if parent.is_some_and(|parent| present.contains(&parent)) {
                         continue;
                     }
@@ -1114,7 +1124,10 @@ impl Window {
                             if let FeedRow::Message { cursor, .. } = row {
                                 shown_lines = call_lines_ui(ui, &call_lines, shown_lines, *cursor);
                             }
-                            let parent = match row { FeedRow::Message { cursor, .. } => threads.get(cursor).copied(), _ => None };
+                            let parent = match row {
+                                FeedRow::Message { cursor, .. } => threads.get(cursor).copied(),
+                                _ => None,
+                            };
                             if parent.is_some_and(|parent| present.contains(&parent)) {
                                 continue;
                             }
@@ -1244,10 +1257,15 @@ impl Window {
     }
 
     fn message_cursors(&self, room: &str) -> std::collections::BTreeSet<u64> {
-        self.feeds.get(room).into_iter().flatten().filter_map(|row| match row {
-            FeedRow::Message { cursor, .. } => Some(*cursor),
-            FeedRow::Pending { .. } => None,
-        }).collect()
+        self.feeds
+            .get(room)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| match row {
+                FeedRow::Message { cursor, .. } => Some(*cursor),
+                FeedRow::Pending { .. } => None,
+            })
+            .collect()
     }
 
     fn gap_ui(&self, ui: &mut Ui, room: &str) {
@@ -1259,7 +1277,9 @@ impl Window {
             } else {
                 ui.label("Current-state recovery is incomplete; the previous view is shown.");
             }
-            if gap.older { ui.label("Earlier current messages are not loaded in this window."); }
+            if gap.older {
+                ui.label("Earlier current messages are not loaded in this window.");
+            }
         }
     }
 
@@ -1782,7 +1802,9 @@ fn orphan_thread_ui(ui: &mut Ui, parent: Option<u64>, previous: &mut Option<u64>
     *previous = parent;
     if show {
         ui.label("Replies to an unavailable message");
-        if ui.add(egui::Button::new("View thread").min_size(egui::vec2(0.0, TOUCH_TARGET))).clicked() { return parent.map(MessageAction::OpenThread); }
+        if ui.add(egui::Button::new("View thread").min_size(egui::vec2(0.0, TOUCH_TARGET))).clicked() {
+            return parent.map(MessageAction::OpenThread);
+        }
     }
     None
 }

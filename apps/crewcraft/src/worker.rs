@@ -86,58 +86,137 @@ pub enum Event {
     /// The sign-in was accepted for `email`. `rooms` are the rooms the person is a member of, as the server listed
     /// them (at most `MAX_FOLLOWED`), sorted; they are followed, synced and polled from now on. From a server too old
     /// to list rooms, `rooms` are the rooms this worker already follows (opened or posted to earlier).
-    SignedIn { email: String, rooms: Vec<String> },
+    SignedIn {
+        email: String,
+        rooms: Vec<String>,
+    },
     /// The open room as it is drawn now. Sent when the room is opened and whenever it changes.
-    Room { room: String, shown: Vec<Shown> },
+    Room {
+        room: String,
+        shown: Vec<Shown>,
+    },
     /// An atomic recovered window replaced this room's side metadata, including empty lists (T345).
-    Recovered { room: String },
-    Gap { room: String, notice: GapNotice },
+    Recovered {
+        room: String,
+    },
+    Gap {
+        room: String,
+        notice: GapNotice,
+    },
     /// A followed room's count. With personal read-state support, a remote rewind can leave an open room unread.
-    Unread { room: String, count: u32 },
+    Unread {
+        room: String,
+        count: u32,
+    },
     /// Authoritative personal state, including a rewind made on another device (T344).
-    ReadState { room: String, state: ReadState },
+    ReadState {
+        room: String,
+        state: ReadState,
+    },
     /// The confirmed unread action leaves its room's conversation without clearing the count (T344).
-    MarkedUnread { room: String },
+    MarkedUnread {
+        room: String,
+    },
     /// The server acknowledged a post at `cursor`.
-    Posted { room: String, cursor: u64 },
+    Posted {
+        room: String,
+        cursor: u64,
+    },
     /// The server accepted an edit or a deletion, recorded at `cursor` (task T316). The room's next snapshot shows it.
-    Changed { room: String, cursor: u64 },
+    Changed {
+        room: String,
+        cursor: u64,
+    },
     /// What a search for `query` found, newest first (task T320c).
-    SearchResults { query: String, hits: Vec<Found> },
+    SearchResults {
+        query: String,
+        hits: Vec<Found>,
+    },
     /// A file uploaded to `room`, ready to attach to the next post there (task T330e).
-    Uploaded { room: String, file: [u8; 16], name: String, size: u64 },
+    Uploaded {
+        room: String,
+        file: [u8; 16],
+        name: String,
+        size: u64,
+    },
     /// The files each message of `room` carries, by cursor, whenever they change (task T330e).
-    Attachments { room: String, files: Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)> },
+    Attachments {
+        room: String,
+        files: Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)>,
+    },
     /// A file was saved at `path` (task T330e).
-    Saved { path: std::path::PathBuf },
+    Saved {
+        path: std::path::PathBuf,
+    },
     /// Each reply's parent in `room`, by the reply's cursor, whenever they change (task T340b).
-    Threads { room: String, parents: Vec<(u64, u64)> },
+    Threads {
+        room: String,
+        parents: Vec<(u64, u64)>,
+    },
     /// `room` is an archive room, with its imported messages' original times by cursor (task T350d2).
-    Archive { room: String, times: Vec<(u64, u64)> },
+    Archive {
+        room: String,
+        times: Vec<(u64, u64)>,
+    },
     /// The files in the person's rooms, newest message first (task T331b).
-    Files { files: Vec<crewcraft_proto::request::ListedFile> },
+    Files {
+        files: Vec<crewcraft_proto::request::ListedFile>,
+    },
     /// The bytes the person's files take, and their quota (task T332b).
-    Storage { used: u64, quota: u64 },
+    Storage {
+        used: u64,
+        quota: u64,
+    },
     /// An image file's bytes for its preview (task T333); empty when it could not be fetched.
-    Preview { file: [u8; 16], bytes: Vec<u8> },
+    Preview {
+        file: [u8; 16],
+        bytes: Vec<u8>,
+    },
     /// `room`'s open call (or none) and its call history lines by cursor, whenever they change (task T360a2).
-    Calls { room: String, open: Option<crewcraft_client_core::room_view::OpenCall>, lines: Vec<(u64, String)> },
+    Calls {
+        room: String,
+        open: Option<crewcraft_client_core::room_view::OpenCall>,
+        lines: Vec<(u64, String)>,
+    },
     /// This app is now in call `call` of `room` (task T360a2).
-    InCall { room: String, call: u64 },
+    InCall {
+        room: String,
+        call: u64,
+    },
     /// This app's call in `room` is end-to-end encrypted: it sends under key id `kid`, and the sender keys of `from` have
     /// reached it (task T360d3).
-    CallSecurity { room: String, call: u64, kid: u64, from: Vec<String> },
+    CallSecurity {
+        room: String,
+        call: u64,
+        kid: u64,
+        from: Vec<String>,
+    },
     /// This app left its call in `room`; `reason` says why when it did not choose to (task T360a2).
-    LeftCall { room: String, reason: Option<String> },
+    LeftCall {
+        room: String,
+        reason: Option<String>,
+    },
     /// Who reacted to each message in `room` with what, whenever it changes (task T341b).
-    Reactions { room: String, reactions: crewcraft_ui_model::RoomReactions },
+    Reactions {
+        room: String,
+        reactions: crewcraft_ui_model::RoomReactions,
+    },
     /// The authoritative room pin, including a body outside the current history page (T343).
-    Pin { room: String, pinned: Option<PinnedMessage> },
+    Pin {
+        room: String,
+        pinned: Option<PinnedMessage>,
+    },
     /// The person's readable saved messages in their current state (T343).
-    SavedMessages { messages: Vec<crewcraft_proto::request::SavedMessage> },
+    SavedMessages {
+        messages: Vec<crewcraft_proto::request::SavedMessage>,
+    },
     /// A post that was not acknowledged; `text` is returned so the window can restore the draft. After
     /// `Problem::Lost` the post may still have arrived: the room's next snapshot shows it if so.
-    PostFailed { room: String, text: String, problem: Problem },
+    PostFailed {
+        room: String,
+        text: String,
+        problem: Problem,
+    },
     /// Something the window can show. See `Problem`.
     Failed(Problem),
     /// The signed-in session ended (lost, or signed out).
@@ -1355,10 +1434,11 @@ impl Run {
         // The room's open call and its history lines, when they change (task T360a2).
         if let Some(session) = self.session.as_mut() {
             let calls = session.calls(room);
-            let changed = recovered || match self.calls_sent.get(room) {
-                Some(last) => *last != calls,
-                None => calls.0.is_some() || !calls.1.is_empty(),
-            };
+            let changed = recovered
+                || match self.calls_sent.get(room) {
+                    Some(last) => *last != calls,
+                    None => calls.0.is_some() || !calls.1.is_empty(),
+                };
             if changed {
                 self.calls_sent.insert(room.to_owned(), calls.clone());
                 self.emit(Event::Calls { room: room.to_owned(), open: calls.0, lines: calls.1 });
@@ -1379,10 +1459,11 @@ impl Run {
         // Who reacted with what, when it changes; an empty list once the last reaction goes (task T341b).
         if let Some(session) = self.session.as_mut() {
             let reactions = session.reactions(room);
-            let changed = recovered || match self.reactions_sent.get(room) {
-                Some(last) => *last != reactions,
-                None => !reactions.is_empty(),
-            };
+            let changed = recovered
+                || match self.reactions_sent.get(room) {
+                    Some(last) => *last != reactions,
+                    None => !reactions.is_empty(),
+                };
             if changed {
                 self.reactions_sent.insert(room.to_owned(), reactions.clone());
                 self.emit(Event::Reactions { room: room.to_owned(), reactions });

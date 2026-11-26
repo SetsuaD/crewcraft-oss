@@ -12,8 +12,8 @@ use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
 use crewcraft_proto::request::{
-    FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_READ_STATE, FEATURE_SEARCH,
-    FEATURE_THREADS, MAX_SAVED_PAGE, Request, Response, SavedMessage, SavedPage, SearchHit,
+    FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS,
+    FEATURE_READ_STATE, FEATURE_SEARCH, FEATURE_THREADS, MAX_SAVED_PAGE, Request, Response, SavedMessage, SavedPage, SearchHit,
 };
 use crewcraft_proto::signin::{self, Opening, SignIn};
 use zeroize::Zeroizing;
