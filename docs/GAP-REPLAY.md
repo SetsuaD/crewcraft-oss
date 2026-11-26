@@ -93,6 +93,12 @@ The worker forces all replacement metadata updates, including empty file/thread/
 message text is unchanged. It refreshes the personal Saved view when requested. Pins and saved references outside
 the 50-message window continue to resolve through the existing full current-state APIs.
 
+Recovered live messages remain actionable. Durable reaction and reply validation uses the full current-message
+projection rather than requiring the original post to remain in the event tail. Existing membership, posting,
+read-only, reaction-code, rate-limit and top-level-parent checks retain their ordering and behavior. Journal replay
+uses the same live-target validation, so actions on recovered posts survive a subsequent reopen. Deleted or
+inaccessible targets remain refused.
+
 ## Honest visible history
 
 A room-specific gap notice survives a successful follow-up Sync. It states that earlier event history could not be

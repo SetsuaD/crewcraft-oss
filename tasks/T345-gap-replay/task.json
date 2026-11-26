@@ -12,6 +12,7 @@
     "crates/server-core/src/lib.rs",
     "crates/server-core/src/durable.rs",
     "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/server.rs",
     "crates/server-core/src/connection.rs",
     "crates/server-core/src/dispatch.rs",
     "apps/crewcraft-server/src/main.rs",

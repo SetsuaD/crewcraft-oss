@@ -301,6 +301,19 @@ impl RoomService {
     /// `Reacted { target, reaction, on }` even when it changes nothing (adding a reaction twice), so every request is
     /// answered with an event of its own.
     pub fn react(&mut self, actor: &str, target: u64, reaction: u8, on: bool) -> Result<u64, ServiceError> {
+        self.check_reaction_access(actor, reaction)?;
+        self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
+        Ok(self.append_reaction(actor, target, reaction, on))
+    }
+
+    /// The durable caller resolved the optional live target from the complete current-message projection (T345).
+    pub(crate) fn react_validated(&mut self, actor: &str, target: Option<u64>, reaction: u8, on: bool) -> Result<u64, ServiceError> {
+        self.check_reaction_access(actor, reaction)?;
+        let target = target.ok_or(ServiceError::NoSuchMessage)?;
+        Ok(self.append_reaction(actor, target, reaction, on))
+    }
+
+    fn check_reaction_access(&self, actor: &str, reaction: u8) -> Result<(), ServiceError> {
         if self.room.role(actor).is_none() {
             return Err(ServiceError::Room(RoomError::NotMember));
         }
@@ -310,7 +323,10 @@ impl RoomService {
         if crewcraft_proto::push::reaction_name(reaction).is_none() {
             return Err(ServiceError::BadReaction);
         }
-        self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
+        Ok(())
+    }
+
+    fn append_reaction(&mut self, actor: &str, target: u64, reaction: u8, on: bool) -> u64 {
         let people = self.reactions.entry(target).or_default();
         if on {
             people.entry(reaction).or_default().insert(actor.to_string());
@@ -330,7 +346,7 @@ impl RoomService {
             html: String::new(),
             mentions: Vec::new(),
         };
-        Ok(self.log.append(event))
+        self.log.append(event)
     }
 
     /// Append a call's history line by `actor` (task T360a1), rendered from `text`. The call rules are the caller's
@@ -556,6 +572,24 @@ impl RoomService {
 #[allow(clippy::unwrap_used)]
 mod pins_saved_tests {
     use super::*;
+
+    #[test]
+    fn validated_old_reactions_keep_guest_read_only_and_bad_code_refusals() {
+        let mut room = RoomService::new("owner", 2);
+        let old = room.post("owner", "old").unwrap();
+        room.add_member("owner", "member", Role::Member).unwrap();
+        room.add_member("owner", "guest", Role::Guest).unwrap();
+        assert_eq!(room.react("member", old, 1, true), Err(ServiceError::NoSuchMessage));
+        room.react_validated("member", Some(old), 1, true).unwrap();
+        assert!(room.reactions(old).get(&1).is_some_and(|people| people.contains("member")));
+        assert_eq!(room.react_validated("outsider", None, 0, true), Err(ServiceError::Room(RoomError::NotMember)));
+        assert_eq!(room.react_validated("guest", None, 0, true), Err(ServiceError::NotAllowed));
+        assert_eq!(room.react_validated("member", None, 0, true), Err(ServiceError::BadReaction));
+        assert_eq!(room.react_validated("member", None, 1, true), Err(ServiceError::NoSuchMessage));
+        room.set_read_only();
+        assert_eq!(room.react_validated("member", Some(old), 1, false), Err(ServiceError::NotAllowed));
+        assert!(room.reactions(old).get(&1).is_some_and(|people| people.contains("member")));
+    }
 
     #[test]
     fn stale_unpin_and_deleted_targets_cannot_replace_a_newer_pin() {

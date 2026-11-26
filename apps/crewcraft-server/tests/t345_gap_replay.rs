@@ -38,7 +38,7 @@ use crewcraft_server::lab_bootstrap::bootstrap_handler;
 use crewcraft_server::lab_installation::LabInstallation;
 use crewcraft_server::lab_runtime::LabRuntime;
 use crewcraft_server::lab_server::{LabOptions, Timeouts};
-use crewcraft_server_core::dispatch::E_NO_SUCH_ROOM;
+use crewcraft_server_core::dispatch::{E_NO_SUCH_MESSAGE, E_NO_SUCH_ROOM};
 use crewcraft_server_core::invites::Invite;
 use crewcraft_server_core::journal::{Journal, MAX_RECORD};
 use crewcraft_server_core::op::{Op, encode_op};
@@ -387,6 +387,12 @@ fn an_enrolled_reconnect_recovers_current_window_and_metadata_then_resumes_incre
         }
     }
     drop(worker);
+    // Recovered live messages remain actionable even when their original events have left the retained tail.
+    // The original top-level pin is deliberately outside both that tail and the fifty-message window.
+    let old_parent_reply = bob.reply(room, outside, "a new reply to the recovered old plan").unwrap();
+    let (_, shown) = bob.sync(room).unwrap();
+    assert_eq!(bob.parents(room).get(&old_parent_reply), Some(&outside));
+    assert!(shown.iter().any(|entry| matches!(entry, Shown::Line(line) if line.cursor == old_parent_reply && line.html.contains("recovered old plan"))));
     let now = clock_now(&running.clock);
     drop((alice, bob));
     running.stop();
@@ -394,10 +400,17 @@ fn an_enrolled_reconnect_recovers_current_window_and_metadata_then_resumes_incre
     state.rooms.remove_member(room, ALICE, BOB).unwrap();
     drop(state);
     let running = start(fixture.reopen(), now, Vec::new());
+    let mut alice = fixture.endpoint(&running).resume(fixture.devices[0].clone(), &alice_ticket).unwrap();
+    let (_, shown) = alice.sync(room).unwrap();
+    assert_eq!(alice.parents(room).get(&old_parent_reply), Some(&outside), "old-parent replies replay through the normal durable journal");
+    assert!(shown.iter().any(|entry| matches!(entry, Shown::Line(line) if line.cursor == old_parent_reply && line.html.contains("recovered old plan"))));
+    assert!(!alice.reactions(room).iter().any(|(target, _)| *target == with_file), "the old-target reaction removal also survives replay");
     let mut bob = fixture.endpoint(&running).resume(fixture.devices[1].clone(), &bob_ticket).unwrap();
+    assert_eq!(bob.react(room, with_file, 1, true), Err(LabError::Chat(ChatError::Rejected(E_NO_SUCH_ROOM))));
+    assert_eq!(bob.reply(room, outside, "must not be accepted"), Err(LabError::Chat(ChatError::Rejected(E_NO_SUCH_MESSAGE))));
     assert_eq!(bob.sync(room), Err(LabError::Chat(ChatError::Rejected(E_NO_SUCH_ROOM))));
     assert!(bob.saved_messages().unwrap().is_empty());
-    drop(bob);
+    drop((alice, bob));
     running.stop();
 }
 
