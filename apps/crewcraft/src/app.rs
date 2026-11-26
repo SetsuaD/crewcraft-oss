@@ -540,6 +540,7 @@ pub fn worker_update(event: Event) -> Vec<Update> {
         Event::Archive { room, times } => vec![Update::Archive { room, times }],
         Event::Calls { room, open, lines } => vec![Update::Calls { room, open, lines }],
         Event::Files { files } => vec![Update::Files { files }],
+        Event::Storage { used, quota } => vec![Update::Storage { used, quota }],
         Event::InCall { room, call } => vec![Update::InCall { room, call: Some(call), reason: None }],
         Event::LeftCall { room, reason } => vec![Update::InCall { room, call: None, reason }],
         Event::CallSecurity { room, call, kid, from } => vec![Update::CallSecurity { room, call, kid, from }],

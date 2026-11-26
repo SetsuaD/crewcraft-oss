@@ -109,6 +109,8 @@ pub enum Event {
     Archive { room: String, times: Vec<(u64, u64)> },
     /// The files in the person's rooms, newest message first (task T331b).
     Files { files: Vec<crewcraft_proto::request::ListedFile> },
+    /// The bytes the person's files take, and their quota (task T332b).
+    Storage { used: u64, quota: u64 },
     /// `room`'s open call (or none) and its call history lines by cursor, whenever they change (task T360a2).
     Calls { room: String, open: Option<crewcraft_client_core::room_view::OpenCall>, lines: Vec<(u64, String)> },
     /// This app is now in call `call` of `room` (task T360a2).
@@ -1046,6 +1048,11 @@ impl Run {
         let Some(session) = self.session.as_mut() else {
             return self.emit(Event::Failed(Problem::NotSignedIn));
         };
+        // How much of the quota the files take, with the list (task T332b).
+        if let Ok(Some((used, quota))) = session.storage_use() {
+            self.emit(Event::Storage { used, quota });
+        }
+        let Some(session) = self.session.as_mut() else { return };
         match session.list_files() {
             Ok(Some(files)) => self.emit(Event::Files { files }),
             Ok(None) => self.emit(Event::Failed(Problem::FilesNotOffered)),

@@ -1,0 +1,24 @@
+{
+  "id": "T332b-storage-app",
+  "title": "Storage use against the quota in the Files area",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t332b_storage_window.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t332b_storage.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t332b_storage",
+  "depends_on": [
+    "T332a-quotas",
+    "T331b-files-app"
+  ],
+  "spec": "ChatSession::storage_use sends StorageUse and reads the id frame (storage_of); SignedInSession::storage_use (None when the server keeps no files). Listing files also asks for the storage use; the worker emits Event::Storage { used, quota } (Update::Storage). The Files area's header shows 'Storage: <used> of <quota>' in short sizes, which now go up to GB ('1.0 GB' from 1 GiB). End to end, after Alice posts a file her storage is its size of the 10 GiB default quota, and Bob's is 0.",
+  "status": "done",
+  "context": [
+    "docs/FILES.md"
+  ]
+}
