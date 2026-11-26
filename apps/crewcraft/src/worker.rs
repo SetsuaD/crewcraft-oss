@@ -99,6 +99,8 @@ pub enum Event {
     Saved { path: std::path::PathBuf },
     /// Each reply's parent in `room`, by the reply's cursor, whenever they change (task T340b).
     Threads { room: String, parents: Vec<(u64, u64)> },
+    /// `room` is an archive room, with its imported messages' original times by cursor (task T350d2).
+    Archive { room: String, times: Vec<(u64, u64)> },
     /// Who reacted to each message in `room` with what, whenever it changes (task T341b).
     Reactions { room: String, reactions: crewcraft_ui_model::RoomReactions },
     /// A post that was not acknowledged; `text` is returned so the window can restore the draft. After
@@ -397,6 +399,7 @@ impl Worker {
             files_sent: BTreeMap::new(),
             threads_sent: BTreeMap::new(),
             reactions_sent: BTreeMap::new(),
+            archive_sent: BTreeMap::new(),
             next_poll: Instant::now(),
             retry,
             keeper,
@@ -481,6 +484,8 @@ struct Run {
     files_sent: BTreeMap<String, Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)>>,
     /// The last threads sent, per room (task T340b).
     threads_sent: BTreeMap<String, Vec<(u64, u64)>>,
+    /// The last archive times sent, per archive room (task T350d2).
+    archive_sent: BTreeMap<String, Vec<(u64, u64)>>,
     /// The last reactions sent, per room (task T341b).
     reactions_sent: BTreeMap<String, crewcraft_ui_model::RoomReactions>,
     next_poll: Instant,
@@ -964,6 +969,14 @@ impl Run {
                 self.files_sent.insert(room.to_owned(), files.clone());
                 self.emit(Event::Attachments { room: room.to_owned(), files });
             }
+        }
+        // An archive room, and its original times when they change (task T350d2).
+        if let Some(session) = self.session.as_mut()
+            && let Some(times) = session.archive(room)
+            && self.archive_sent.get(room) != Some(&times)
+        {
+            self.archive_sent.insert(room.to_owned(), times.clone());
+            self.emit(Event::Archive { room: room.to_owned(), times });
         }
         // Who reacted with what, when it changes; an empty list once the last reaction goes (task T341b).
         if let Some(session) = self.session.as_mut() {
