@@ -1,6 +1,9 @@
 //! The CrewCraft desktop window, drawn with egui. Task T305.
 //!
-//! Owns: the screens (enroll, authenticator setup, sign in, chat), what each one draws, and the bundled font. Called
+//! Owns: the screens (enroll, authenticator setup, sign in, chat), what each one draws, and the bundled font. The
+//! wide chat screen follows the familiar team-chat layout (REQUIREMENTS 2.20, task T315): a title bar with room
+//! search, an app bar, the room list pane, and a main pane with the conversation header, the feed as bubbles and the
+//! composer. Called
 //! by: the desktop app (`apps/crewcraft`), which runs this inside an eframe window, forwards every `Action` to the
 //! connection worker and hands its results back as `Update`s. Calls: `crewcraft-ui-model` for the room list, composer
 //! and feed rows. Nothing here touches the network, the disk or a clock, so every screen is tested without a window.
@@ -19,7 +22,7 @@ use crewcraft_ui_model::composer::Composer;
 use crewcraft_ui_model::feed::feed_rows;
 use crewcraft_ui_model::room_list::RoomList;
 use crewcraft_ui_model::{Command, DraftError, FeedRow};
-use egui::{Align, Color32, FontData, FontDefinitions, FontFamily, Key, Layout, Modifiers, RichText, ScrollArea, TextEdit, Ui};
+use egui::{Align, FontData, FontDefinitions, FontFamily, Key, Layout, Modifiers, RichText, ScrollArea, TextEdit, Ui};
 use zeroize::Zeroizing;
 
 /// The width of the enrollment and sign-in forms, or the window's width when that is narrower (a phone).
@@ -157,6 +160,10 @@ pub struct Window {
     phone_pane: PhonePane,
     /// The title-bar name: the organization's, or empty for "CrewCraft" (T314).
     title: String,
+    /// The room search box's text: the list pane shows only rooms whose name contains it (T315).
+    room_filter: String,
+    /// The bubble colours from the theme, or `None` to derive them from egui's visuals (T315).
+    bubbles: Option<appearance::BubbleColors>,
 }
 
 /// The panes of the phone layout (REQUIREMENTS 2.9): the room list, one conversation, and the account.
@@ -183,6 +190,11 @@ impl Window {
     /// Empty restores "CrewCraft".
     pub fn set_title(&mut self, name: &str) {
         self.title = name.trim().to_owned();
+    }
+
+    /// Draw message bubbles in the theme's `bubble-mine` and `bubble-other` colours (T315).
+    pub fn set_bubble_colors(&mut self, colors: appearance::BubbleColors) {
+        self.bubbles = Some(colors);
     }
 
     /// The title-bar name.
@@ -362,10 +374,12 @@ impl Window {
             self.phone_chat_ui(ui);
             return;
         }
-        egui::Panel::top("crewcraft-app-bar").show(ui, |ui| {
+        egui::Panel::top("crewcraft-title-bar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.strong(self.title().to_owned());
-                ui.label(&self.server);
+                ui.add_space(16.0);
+                let label = ui.label("Search rooms");
+                ui.add(TextEdit::singleline(&mut self.room_filter).hint_text("Type to filter").desired_width(220.0)).labelled_by(label.id);
                 let total = self.rooms.total_unread();
                 if total > 0 {
                     ui.label(format!("{total} unread"));
@@ -375,18 +389,38 @@ impl Window {
                         self.actions.push(Action::SignOut);
                     }
                     ui.label(&self.email);
+                    if !self.server.is_empty() {
+                        ui.weak(&self.server);
+                    }
                 });
             });
         });
-        egui::Panel::left("crewcraft-rooms").resizable(true).default_size(200.0).show(ui, |ui| {
+        // The app bar. Chat is the one area so far; Teams, Calendar, Calls, Files and Apps join it as they ship, so the
+        // bar never offers a button that does nothing.
+        egui::Panel::left("crewcraft-app-bar").resizable(false).exact_size(72.0).show(ui, |ui| {
+            ui.add_space(8.0);
+            let total = self.rooms.total_unread();
+            let chat = if total > 0 { format!("Chat ({total})") } else { "Chat".to_owned() };
+            let _ = ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(true, chat));
+        });
+        egui::Panel::left("crewcraft-rooms").resizable(true).default_size(220.0).show(ui, |ui| {
+            ui.add_space(4.0);
             ui.strong("Rooms");
+            ui.add_space(4.0);
             let mut open = None;
-            for row in self.rooms.rows() {
-                let text = if row.unread > 0 { format!("{}  ({})", row.name, row.unread) } else { row.name.clone() };
-                if ui.selectable_label(row.selected, text).clicked() {
-                    open = Some(row.name);
-                }
+            let rows = visible_rooms(self.rooms.rows(), &self.room_filter);
+            if rows.is_empty() {
+                ui.weak(if self.room_filter.trim().is_empty() { "No rooms yet." } else { "No room matches." });
             }
+            ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                for row in rows {
+                    let text = if row.unread > 0 { format!("{}  ({})", row.name, row.unread) } else { row.name.clone() };
+                    let text = if row.unread > 0 { RichText::new(text).strong() } else { RichText::new(text) };
+                    if ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(row.selected, text)).clicked() {
+                        open = Some(row.name);
+                    }
+                }
+            });
             if let Some(room) = open {
                 self.open_room(&room);
             }
@@ -397,11 +431,18 @@ impl Window {
             });
             return;
         };
+        egui::Panel::top("crewcraft-conversation-header").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading(&room);
+            });
+        });
         egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
+        let me = self.email.clone();
+        let bubbles = self.bubbles;
         egui::CentralPanel::default_margins().show(ui, |ui| {
             ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
                 for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
-                    feed_row_ui(ui, row);
+                    bubble_ui(ui, row, &me, bubbles);
                 }
             });
         });
@@ -438,10 +479,12 @@ impl Window {
                     });
                 });
                 egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
+                let me = self.email.clone();
+                let bubbles = self.bubbles;
                 egui::CentralPanel::default_margins().show(ui, |ui| {
                     ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
                         for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
-                            feed_row_ui(ui, row);
+                            bubble_ui(ui, row, &me, bubbles);
                         }
                     });
                 });
@@ -528,6 +571,77 @@ impl Window {
     }
 }
 
+/// Which side of the feed a row is drawn on: the person's own messages on the right, everyone else's on the left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Mine,
+    Theirs,
+}
+
+/// The side for a feed row, given the signed-in person's email. Pending rows are always the person's own. Authors are
+/// compared ignoring case and surrounding space, as email addresses are.
+pub fn side(row: &FeedRow, me: &str) -> Side {
+    match row {
+        FeedRow::Pending { .. } => Side::Mine,
+        FeedRow::Message { author, .. } if !me.trim().is_empty() && author.trim().eq_ignore_ascii_case(me.trim()) => Side::Mine,
+        FeedRow::Message { .. } => Side::Theirs,
+    }
+}
+
+/// The rooms the list pane shows for the search box's text: those whose name contains it, ignoring case.
+pub fn visible_rooms(rows: Vec<crewcraft_ui_model::RoomRow>, filter: &str) -> Vec<crewcraft_ui_model::RoomRow> {
+    let needle = filter.trim().to_lowercase();
+    if needle.is_empty() {
+        return rows;
+    }
+    rows.into_iter().filter(|row| row.name.to_lowercase().contains(&needle)).collect()
+}
+
+/// One feed row as a bubble (T315): the person's own on the right in `bubble-mine`, others on the left in
+/// `bubble-other` with the author's name above the first of a run.
+fn bubble_ui(ui: &mut Ui, row: &FeedRow, me: &str, colors: Option<appearance::BubbleColors>) {
+    let mine = side(row, me) == Side::Mine;
+    let fill = match colors {
+        Some(colors) => colors.pick(mine, ui.visuals().dark_mode),
+        None if mine => ui.visuals().selection.bg_fill,
+        None => ui.visuals().faint_bg_color,
+    };
+    let (text, pending, failed) = match row {
+        FeedRow::Message { author, html, edited, first_of_group, .. } => {
+            let mut text = text::html_to_text(html);
+            if *edited {
+                text.push_str("  (edited)");
+            }
+            if *first_of_group {
+                ui.add_space(6.0);
+                if !mine {
+                    ui.strong(author);
+                }
+            }
+            (text, false, false)
+        }
+        FeedRow::Pending { body, failed, .. } => (format!("{body}  ({})", if *failed { "Not sent" } else { "Sending" }), true, *failed),
+    };
+    let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
+    ui.with_layout(layout, |ui| {
+        let max = (ui.available_width() * 0.72).max(120.0);
+        let radius = ui.visuals().window_corner_radius;
+        egui::Frame::new().fill(fill).corner_radius(radius).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+            ui.set_max_width(max);
+            let rich = RichText::new(text);
+            let rich = if failed {
+                rich.color(ui.visuals().error_fg_color)
+            } else if pending {
+                rich.color(ui.visuals().weak_text_color())
+            } else {
+                rich
+            };
+            ui.add(egui::Label::new(rich).wrap());
+        });
+    });
+    ui.add_space(2.0);
+}
+
 /// A labelled one-line field whose text is zeroed when dropped. `hidden` draws it as a password field.
 fn secret_field(ui: &mut Ui, label: &str, value: &mut Zeroizing<String>, hidden: bool) {
     let label = ui.label(label);
@@ -538,28 +652,4 @@ fn secret_field(ui: &mut Ui, label: &str, value: &mut Zeroizing<String>, hidden:
 fn is_code(code: &str) -> bool {
     let code = code.trim();
     (6..=8).contains(&code.len()) && code.bytes().all(|byte| byte.is_ascii_digit())
-}
-
-fn feed_row_ui(ui: &mut Ui, row: &FeedRow) {
-    match row {
-        FeedRow::Message { author, html, edited, first_of_group, .. } => {
-            if *first_of_group {
-                ui.add_space(6.0);
-                ui.strong(author);
-            }
-            let mut text = text::html_to_text(html);
-            if *edited {
-                text.push_str("  (edited)");
-            }
-            ui.label(text);
-        }
-        FeedRow::Pending { body, failed, .. } => {
-            let status = if *failed { "Not sent" } else { "Sending" };
-            ui.label(RichText::new(format!("{body}  ({status})")).color(if *failed {
-                Color32::from_rgb(200, 60, 60)
-            } else {
-                ui.visuals().weak_text_color()
-            }));
-        }
-    }
 }

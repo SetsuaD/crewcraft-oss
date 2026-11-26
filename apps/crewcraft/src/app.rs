@@ -594,6 +594,9 @@ impl DesktopApp {
         let (controller, updates) = start(wake);
         let mut window = Window::new();
         window.set_title(appearance.title());
+        if let Some(colors) = appearance.bubble_colors() {
+            window.set_bubble_colors(colors);
+        }
         for update in updates {
             window.apply(update);
         }

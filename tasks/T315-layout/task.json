@@ -1,0 +1,22 @@
+{
+  "id": "T315-layout",
+  "title": "Wide chat screen in the familiar team-chat layout, with bubbles in the theme's colours",
+  "crate": "crewcraft-desktop-ui",
+  "files": [
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/src/appearance.rs",
+    "apps/crewcraft/src/app.rs"
+  ],
+  "test_path": "crates/desktop-ui/tests/t315_layout.rs",
+  "test_cmd": "cargo test -p crewcraft-desktop-ui --test t315_layout",
+  "depends_on": [
+    "T305-desktop-window",
+    "T314-themes"
+  ],
+  "spec": "The wide chat screen (REQUIREMENTS 2.20) has a title bar (organization name, a 'Search rooms' box, the unread total, the server, the person's email, Sign out), an app bar down the left with Chat and its unread badge (other areas join as they ship, so no button does nothing), the room list pane ('Rooms', filtered by the search box ignoring case, 'No room matches.' when nothing does, unread rooms in bold), and a main pane with a conversation header (the room's name), the feed and the composer. The feed draws bubbles: the person's own messages and pending sends on the right, everyone else's on the left with the author's name above the first of a run; side() compares the author with the signed-in email ignoring case and spaces. Bubble fills are the theme's bubble-mine and bubble-other in the current light or dark variant (appearance::BubbleColors), handed to the window by the app; without them the window derives fills from egui's visuals. The phone layout uses the same bubbles. Labels used by T305 and T402 are unchanged.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md",
+    "crates/ui-model/src/lib.rs"
+  ]
+}
