@@ -19,6 +19,14 @@
 //! client-certificate = "media-client.pem" # this server's certificate for the control connection
 //! client-key = "media-client-key.pem"    # its key, owner-only
 //! ```
+//!
+//! The certificates can come from the operator (any CA) or from `crewcraft-server media-link-cert` ([`issue_link`],
+//! task T360b5), which writes all six files with the names above and in the media server's `media.toml`. It makes a
+//! link CA of its own for each issue and throws its key away: the chat server's device CA is not used, because every
+//! enrolled device holds a client certificate from it and must not be able to reach the control port. The
+//! certificates last `crewcraft_pki::LINK_LIFETIME_SECS` (30 days); rotate by running the command again (it replaces
+//! the files), copying the media server's three files across and restarting both servers. Until both have the new
+//! files the link refuses to connect and the chat server keeps the events waiting.
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
@@ -37,6 +45,11 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, StreamOwned};
 
 use crate::server_install::{hex, read_file, write_new};
+
+/// The files `issue_link` writes into the chat server's data directory: the link CA, its client certificate and key.
+pub const CHAT_LINK_FILES: [&str; 3] = ["media-ca.pem", "media-client.pem", "media-client-key.pem"];
+/// The files `issue_link` writes for the media server: its certificate chain and key, and the link CA.
+pub const MEDIA_LINK_FILES: [&str; 3] = ["media.pem", "media-key.pem", "chat-ca.pem"];
 
 /// The media settings file in the data directory.
 pub const MEDIA_FILE: &str = "media.toml";
@@ -231,4 +244,52 @@ impl MediaLink {
             std::thread::sleep(TICK);
         }
     }
+}
+
+/// `der` as PEM with `label`.
+fn pem(label: &str, der: &[u8]) -> String {
+    use base64::Engine;
+    let text = base64::engine::general_purpose::STANDARD.encode(der);
+    let lines: Vec<&str> = text.as_bytes().chunks(64).filter_map(|line| std::str::from_utf8(line).ok()).collect();
+    format!("-----BEGIN {label}-----
+{}
+-----END {label}-----
+", lines.join("
+"))
+}
+
+/// Write `bytes` to `dir/name`, owner-only, replacing what is there in one step (a new file, then a rename).
+fn replace(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    let fresh = dir.join(format!("{name}.new"));
+    let _ = std::fs::remove_file(&fresh);
+    write_new(&fresh, bytes)?;
+    std::fs::rename(&fresh, dir.join(name))
+}
+
+/// Issue the media control link's certificates (task T360b5): a new link CA, a server certificate for the media server
+/// named `media_name` and a client certificate for this chat server, each good for `crewcraft_pki::LINK_LIFETIME_SECS`
+/// from `now_ms`. Writes `CHAT_LINK_FILES` into `data` and `MEDIA_LINK_FILES` into `media_out` (made if missing),
+/// owner-only, replacing earlier ones; the link CA's key is never written. Returns when the certificates expire, in
+/// Unix seconds.
+pub fn issue_link(data: &Path, media_out: &Path, media_name: &str, now_ms: u64) -> io::Result<i64> {
+    if ServerName::try_from(media_name.to_owned()).is_err() || media_name.is_empty() {
+        return Err(invalid(format!("{media_name} is not a server name")));
+    }
+    let failed = |_| io::Error::other("could not issue the media link certificates");
+    let ca = crewcraft_pki::Authority::create_root("media link CA", now_ms).map_err(failed)?;
+    let media = ca.server_certificate_for(media_name, now_ms, crewcraft_pki::LINK_LIFETIME_SECS).map_err(failed)?;
+    let chat = ca.client_certificate("chat server", now_ms, crewcraft_pki::LINK_LIFETIME_SECS).map_err(failed)?;
+    let chain = |chain: &[Vec<u8>]| chain.iter().map(|der| pem("CERTIFICATE", der)).collect::<String>();
+    let ca_pem = pem("CERTIFICATE", ca.certificate());
+    std::fs::create_dir_all(media_out)?;
+    let [media_ca, client_certificate, client_key] = CHAT_LINK_FILES;
+    replace(data, media_ca, ca_pem.as_bytes())?;
+    replace(data, client_certificate, chain(&chat.chain).as_bytes())?;
+    replace(data, client_key, pem("PRIVATE KEY", &chat.key_pkcs8).as_bytes())?;
+    let [certificate, key, chat_ca] = MEDIA_LINK_FILES;
+    replace(media_out, certificate, chain(&media.chain).as_bytes())?;
+    replace(media_out, key, pem("PRIVATE KEY", &media.key_pkcs8).as_bytes())?;
+    replace(media_out, chat_ca, ca_pem.as_bytes())?;
+    let seconds = i64::try_from(now_ms / 1000).map_err(|_| invalid("the clock is out of range".to_owned()))?;
+    Ok(seconds.saturating_add(crewcraft_pki::LINK_LIFETIME_SECS))
 }

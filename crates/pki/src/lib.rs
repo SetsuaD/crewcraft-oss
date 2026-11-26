@@ -35,6 +35,9 @@ use x509_parser::prelude::{FromDer, X509CertificationRequest};
 pub const DEVICE_LIFETIME_SECS: i64 = 90 * 86_400;
 /// The server certificate's life.
 pub const SERVER_LIFETIME_SECS: i64 = 365 * 86_400;
+/// The life of the media control link's certificates (task T360b5): short, so a copied key stops working soon;
+/// they are issued again for rotation.
+pub const LINK_LIFETIME_SECS: i64 = 30 * 86_400;
 /// The root authority's life.
 pub const ROOT_LIFETIME_SECS: i64 = 10 * 365 * 86_400;
 /// The issuing authority's life.
@@ -92,9 +95,9 @@ pub struct Issued {
     pub not_after: i64,
 }
 
-/// The server's own certificate and key.
+/// A certificate with its key: the server's own, or one end of the media control link (task T360b5).
 pub struct ServerIdentity {
-    /// The server certificate followed by the issuing authority's certificate.
+    /// The certificate followed by the certificate of the authority that signed it.
     pub chain: Vec<Vec<u8>>,
     /// The private key, PKCS#8 DER.
     pub key_pkcs8: Vec<u8>,
@@ -238,14 +241,31 @@ impl Authority {
     /// The server's certificate for `dns_name`, with a fresh P-256 key. The subject is the name alone: nothing in it says
     /// what product answers (docs/SECURITY-DESIGN.md section 1).
     pub fn server_certificate(&self, dns_name: &str, now_ms: u64) -> Result<ServerIdentity, PkiError> {
-        let from = secs(now_ms)?;
+        self.server_certificate_for(dns_name, now_ms, SERVER_LIFETIME_SECS)
+    }
+
+    /// As `server_certificate`, good for `lifetime_secs` (the media control link uses `LINK_LIFETIME_SECS`, T360b5).
+    pub fn server_certificate_for(&self, dns_name: &str, now_ms: u64, lifetime_secs: i64) -> Result<ServerIdentity, PkiError> {
         let mut params = CertificateParams::new(vec![dns_name.to_string()]).map_err(PkiError::Build)?;
         params.distinguished_name = name(&[(DnType::CommonName, dns_name.to_string())]);
+        self.leaf(params, ExtendedKeyUsagePurpose::ServerAuth, now_ms, lifetime_secs)
+    }
+
+    /// A client certificate named `common_name`, for client authentication only, with a fresh P-256 key, good for
+    /// `lifetime_secs` (task T360b5: the chat server's end of the media control link).
+    pub fn client_certificate(&self, common_name: &str, now_ms: u64, lifetime_secs: i64) -> Result<ServerIdentity, PkiError> {
+        let mut params = CertificateParams::new(Vec::<String>::new()).map_err(PkiError::Build)?;
+        params.distinguished_name = name(&[(DnType::CommonName, common_name.to_string())]);
+        self.leaf(params, ExtendedKeyUsagePurpose::ClientAuth, now_ms, lifetime_secs)
+    }
+
+    fn leaf(&self, mut params: CertificateParams, usage: ExtendedKeyUsagePurpose, now_ms: u64, lifetime_secs: i64) -> Result<ServerIdentity, PkiError> {
+        let from = secs(now_ms)?;
         params.is_ca = IsCa::ExplicitNoCa;
         params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        params.extended_key_usages = vec![usage];
         params.not_before = at(from)?;
-        params.not_after = at(from.checked_add(SERVER_LIFETIME_SECS).ok_or(PkiError::Time)?)?;
+        params.not_after = at(from.checked_add(lifetime_secs).ok_or(PkiError::Time)?)?;
         params.serial_number = Some(SerialNumber::from_slice(&random_serial()?));
         let key = KeyPair::generate().map_err(PkiError::Build)?;
         let certificate = params.signed_by(&key, &self.issuer).map_err(PkiError::Build)?;

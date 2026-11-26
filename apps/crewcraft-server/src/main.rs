@@ -72,6 +72,12 @@ crewcraft-server rebind <data-directory> <email> --issuer <issuer> --subject <su
     was recreated), with the server stopped. Every re-bind is written to the audit log first-hand.
 crewcraft-server audit <data-directory>
     Show the audit log of administrative actions and check its hash chain; exits non-zero if it does not check out.
+crewcraft-server media-link-cert <data-directory> <media-server-name> <media-output-directory>
+    Issue the certificates for the control connection to the media server (docs/CALLS.md): a new link CA of their
+    own, the media server's certificate for <media-server-name> and this server's client certificate, good for 30
+    days. Writes media-ca.pem, media-client.pem and media-client-key.pem into the data directory, and media.pem,
+    media-key.pem and chat-ca.pem into the output directory for the media server, keys owner-only. Run it again to
+    rotate: it replaces the files; copy the three new ones to the media server and restart both servers.
 crewcraft-server lab init <new-state-directory>
 crewcraft-server lab invite <state-directory> <trusted-root.der> <email>
 crewcraft-server lab serve <state-directory> <trusted-root.der> <port>
@@ -106,6 +112,11 @@ fn run(args: &[OsString]) -> io::Result<()> {
             rebind(Path::new(data), &lab_email(email)?, text_arg(issuer)?, text_arg(subject)?)?
         }
         [command, data] if command == "audit" => show_audit(Path::new(data))?,
+        [command, data, name, out] if command == "media-link-cert" => {
+            let until = crewcraft_server::media_link::issue_link(Path::new(data), Path::new(out), text_arg(name)?, now_ms())?;
+            println!("Media link certificates issued, good until {until} (Unix seconds); rotate before then.");
+            println!("Copy media.pem, media-key.pem and chat-ca.pem from {} to the media server.", Path::new(out).display());
+        }
         [command, rest @ ..] if command == "export-teams" => export_teams(rest)?,
         [command, f1, export, f2, out] if command == "import-teams" && f1 == "--export" && f2 == "--out" => {
             import_teams(Path::new(export), Path::new(out))?

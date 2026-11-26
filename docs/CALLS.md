@@ -137,6 +137,19 @@ end of the call closes everyone, and a certificate from another CA cannot drop a
 intake: how a client's offer reaches the media server (through the chat server, or straight to the media server) is
 the next decision.
 
+**Built (T360b4).** Withdrawn access takes the person out of the call too: when the authorizer's re-check (T611j)
+refuses someone and their session ends, the server calls `drop_from_calls` for them, so the media server drops them at
+once (`DeviceAuth::revoked`). An ordinary end (signing out, an expired certificate) leaves calls to the heartbeat.
+
+**Built (T360b5).** `crewcraft-server media-link-cert <data-directory> <media-server-name> <media-output-directory>`
+issues the control link's certificates instead of an operator making them: a new link CA of their own for each issue
+(made with `crewcraft-pki`, its key thrown away), the media server's certificate and the chat server's client
+certificate, each good for 30 days, written owner-only under the names both `media.toml`s use. It does not use the chat
+server's device CA, because every enrolled device holds a client certificate from it and must not reach the control
+port. To rotate, run it again (it replaces the files), copy the media server's three files across and restart both;
+until both have the new files the link refuses to connect and the chat server keeps its events waiting.
+Operator-supplied PEM files still work.
+
 ## Audio (T360e) and video (T360f): decisions first
 
 These need native code or young crates; each is decided when its task starts and recorded in NON-RUST-DEPENDENCIES.md.

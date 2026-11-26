@@ -206,6 +206,10 @@ impl<A: DeviceAuth> DeviceAuth for BeforeSignIn<A> {
         self.inner.device()
     }
 
+    fn revoked(&self) -> bool {
+        self.inner.revoked()
+    }
+
     fn sign_in(&self, credentials: SignIn<'_>, now_ms: u64) -> Result<Option<CommittedSignIn<Self::Session>>, AuthError> {
         if Instant::now() >= self.deadline {
             return Err(AuthError::Unavailable);

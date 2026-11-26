@@ -46,6 +46,10 @@ crewcraft-desktop-ui.workspace = true
 crewcraft-ui-model.workspace = true
 crewcraft-client-core.workspace = true
 rcgen.workspace = true
+# T360b4: the media core and real WebRTC offers, to show a revoked person is dropped from the media.
+crewcraft-media = { path = "../crewcraft-media" }
+crewcraft-media-crypto = { path = "../../crates/media-crypto" }
+str0m = { version = "0.26", default-features = false }
 # T611e: ID tokens signed in the test (ES256) and their key set.
 ring = "0.17"
 

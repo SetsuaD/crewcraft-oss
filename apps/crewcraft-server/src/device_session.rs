@@ -79,6 +79,12 @@ pub trait DeviceAuth {
     fn device(&self) -> Option<u64> {
         None
     }
+
+    /// Whether a session ended because the person's access was withdrawn (the authorizer refused them, task T611j),
+    /// rather than for an ordinary reason such as signing out or an expired certificate (task T360b4).
+    fn revoked(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,13 +184,23 @@ pub fn serve<S: Read + Write, A: DeviceAuth>(
             return Ok(());
         };
         let received_at = now_ms();
-        let output = auth
+        let live = auth
             .with_live_session(&handle, received_at, || {
                 let mut rooms = rooms.lock().map_err(|_| DeviceSessionError::RoomsUnavailable)?;
                 session.receive_durable(&mut rooms, request.as_bytes(), received_at).map_err(DeviceSessionError::Chat)
             })
-            .map_err(DeviceSessionError::Auth)?
-            .ok_or(DeviceSessionError::SessionEnded)??;
+            .map_err(DeviceSessionError::Auth)?;
+        let Some(output) = live else {
+            // Withdrawn access also means out of every call now, so the media server drops this person at once (task
+            // T360b4). A storage failure here is reported by the next request that needs the store.
+            if auth.revoked()
+                && let Ok(mut rooms) = rooms.lock()
+            {
+                let _ = rooms.drop_from_calls(&user, received_at);
+            }
+            return Err(DeviceSessionError::SessionEnded);
+        };
+        let output = output?;
         if !output.is_empty() {
             reset_deadline(stream)?;
             stream.write_all(&output)?;
