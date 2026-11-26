@@ -1156,6 +1156,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "crewcraft-sframe"
+version = "0.1.0-beta.1"
+dependencies = [
+ "ring",
+]
+
+[[package]]
 name = "crewcraft-strict-toml"
 version = "0.1.0-beta.1"
 

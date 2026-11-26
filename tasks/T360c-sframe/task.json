@@ -1,0 +1,19 @@
+{
+  "id": "T360c-sframe",
+  "title": "SFrame (RFC 9605): end-to-end encryption of media frames",
+  "crate": "crewcraft-sframe",
+  "files": [
+    "crates/sframe/Cargo.toml",
+    "crates/sframe/src/lib.rs",
+    "Cargo.lock",
+    "docs/NON-RUST-DEPENDENCIES.md"
+  ],
+  "test_path": "crates/sframe/tests/t360c_sframe.rs",
+  "test_cmd": "cargo test -p crewcraft-sframe --test t360c_sframe",
+  "depends_on": [],
+  "spec": "docs/CALLS.md 'End-to-end encryption', from RFC 9605 alone. Header { kid, ctr }: config byte X K(3) Y C(3); values below 8 inline, others in the fewest big-endian bytes (length minus one in K or C), key id before counter; decode refuses non-minimal encodings and cut headers. derive(suite, kid, base_key): sframe_secret = HKDF-Extract(empty salt, base_key); key and salt = HKDF-Expand with the labels 'SFrame 1.0 Secret key ' / 'SFrame 1.0 Secret salt ' followed by the 8-byte big-endian key id and the 2-byte cipher suite id, Nk and Nn bytes. Suites 0x0004 AES_128_GCM_SHA256_128 and 0x0005 AES_256_GCM_SHA512_128. Nonce = salt XOR big-endian counter; AAD = header + metadata; frame = header + ciphertext + 16-byte tag. Key::encrypt/decrypt, decrypt by key id, and Sender, which never reuses a counter (CounterExhausted at the end). Matches the RFC's Appendix C.1 header rows and C.3 vector for 0x0004; changed frames, metadata or headers fail authentication; unknown key ids are reported. AES-GCM and HKDF from ring.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}
