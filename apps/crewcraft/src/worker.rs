@@ -97,6 +97,8 @@ pub enum Event {
     Attachments { room: String, files: Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)> },
     /// A file was saved at `path` (task T330e).
     Saved { path: std::path::PathBuf },
+    /// Each reply's parent in `room`, by the reply's cursor, whenever they change (task T340b).
+    Threads { room: String, parents: Vec<(u64, u64)> },
     /// A post that was not acknowledged; `text` is returned so the window can restore the draft. After
     /// `Problem::Lost` the post may still have arrived: the room's next snapshot shows it if so.
     PostFailed { room: String, text: String, problem: Problem },
@@ -391,6 +393,7 @@ impl Worker {
             seen: BTreeMap::new(),
             unread: BTreeMap::new(),
             files_sent: BTreeMap::new(),
+            threads_sent: BTreeMap::new(),
             next_poll: Instant::now(),
             retry,
             keeper,
@@ -473,6 +476,8 @@ struct Run {
     unread: BTreeMap<String, u32>,
     /// The last attachments sent, per room (task T330e).
     files_sent: BTreeMap<String, Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)>>,
+    /// The last threads sent, per room (task T340b).
+    threads_sent: BTreeMap<String, Vec<(u64, u64)>>,
     next_poll: Instant,
     retry: Option<Retry>,
     keeper: Box<dyn TicketKeeper>,
@@ -541,6 +546,7 @@ impl Run {
                 Some(Input::Command(Command::Delete { room, target })) => self.change(room, |session, room| session.delete(room, target)),
                 Some(Input::Command(Command::Search { query })) => self.search(query),
                 Some(Input::Command(Command::Attach { room, path })) => self.attach(room, path),
+                Some(Input::Command(Command::Reply { room, parent, text })) => self.reply(room, parent, text),
                 Some(Input::Command(Command::PostFiles { room, text, files })) => self.post_files(room, text, files),
                 Some(Input::Command(Command::Save { file, size, name, to })) => self.save(file, size, &name, to),
                 Some(Input::SignOut) => {
@@ -799,6 +805,29 @@ impl Run {
         }
     }
 
+    /// A reply in a thread (task T340b): as `post`.
+    fn reply(&mut self, room: String, parent: u64, text: String) {
+        if let Err(problem) = self.follow(&room) {
+            return self.emit(Event::PostFailed { room, text, problem });
+        }
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::PostFailed { room, text, problem: Problem::NotSignedIn });
+        };
+        match session.reply(&room, parent, &text) {
+            Ok(cursor) => {
+                self.emit(Event::Posted { room: room.clone(), cursor });
+                self.sync_room(&room, false);
+            }
+            Err(error) => {
+                let problem = problem(error);
+                self.emit(Event::PostFailed { room, text, problem });
+                if problem.ends_session() {
+                    self.fail_connection(problem, true);
+                }
+            }
+        }
+    }
+
     /// A post with files (task T330e): as `post`.
     fn post_files(&mut self, room: String, text: String, files: Vec<[u8; 16]>) {
         if let Err(problem) = self.follow(&room) {
@@ -926,6 +955,14 @@ impl Run {
             if !files.is_empty() && self.files_sent.get(room) != Some(&files) {
                 self.files_sent.insert(room.to_owned(), files.clone());
                 self.emit(Event::Attachments { room: room.to_owned(), files });
+            }
+        }
+        // The room's threads, when they change (task T340b).
+        if let Some(session) = self.session.as_mut() {
+            let parents: Vec<(u64, u64)> = session.parents(room).into_iter().collect();
+            if !parents.is_empty() && self.threads_sent.get(room) != Some(&parents) {
+                self.threads_sent.insert(room.to_owned(), parents.clone());
+                self.emit(Event::Threads { room: room.to_owned(), parents });
             }
         }
         if is_open {

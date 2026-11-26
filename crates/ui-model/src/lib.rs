@@ -30,6 +30,9 @@ pub enum Command {
     Delete { room: String, target: u64 },
     /// Find messages in every room the person is in (task T320c). `query` is trimmed, 1 to 200 bytes.
     Search { query: String },
+    /// Reply to the message at `parent` in `room`, in its thread (task T340b). `text` is trimmed and within
+    /// `MAX_DRAFT_CHARS`.
+    Reply { room: String, parent: u64, text: String },
     /// Upload the file at `path` to `room`, to attach to the next post there (task T330e).
     Attach { room: String, path: std::path::PathBuf },
     /// Post `text` (may be empty) with `files`, uploads made with `Attach` (task T330e).

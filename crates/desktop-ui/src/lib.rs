@@ -135,6 +135,11 @@ pub enum Update {
         room: String,
         files: Vec<(u64, Vec<FileChip>)>,
     },
+    /// Each reply's parent in `room`, by the reply's cursor (task T340b).
+    Threads {
+        room: String,
+        parents: Vec<(u64, u64)>,
+    },
     /// The app was opened from an invitation link (task T405): fill in the enrollment form's link field. Ignored
     /// unless the enrollment screen is showing. `Debug` does not show the link, which holds a one-time secret.
     InvitationLink(Zeroizing<String>),
@@ -159,6 +164,7 @@ impl fmt::Debug for Update {
             Self::SearchResults { query, results } => f.debug_struct("SearchResults").field("query", query).field("results", &results.len()).finish(),
             Self::Uploaded { room, file } => f.debug_struct("Uploaded").field("room", room).field("name", &file.name).finish(),
             Self::Attachments { room, files } => f.debug_struct("Attachments").field("room", room).field("messages", &files.len()).finish(),
+            Self::Threads { room, parents } => f.debug_struct("Threads").field("room", room).field("replies", &parents.len()).finish(),
             Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
             Self::WaitingForBrowser => f.write_str("WaitingForBrowser"),
             Self::Failed(text) => f.debug_tuple("Failed").field(text).finish(),
@@ -257,6 +263,25 @@ pub struct Window {
     pending_files: HashMap<String, Vec<FileChip>>,
     /// The files each message carries, per room and cursor (T330e).
     message_files: HashMap<String, std::collections::BTreeMap<u64, Vec<FileChip>>>,
+    /// Each reply's parent, per room, by the reply's cursor (T340b).
+    threads: HashMap<String, std::collections::BTreeMap<u64, u64>>,
+    /// The thread shown beside the conversation: `(room, parent)` (T340b).
+    open_thread: Option<(String, u64)>,
+    /// The thread composer's text (T340b).
+    thread_draft: String,
+}
+
+/// What a message is drawn with (T340b): who is reading, the theme's colours, which message is selected, the files and
+/// the reply counts of the room.
+struct Bubbles<'a> {
+    me: &'a str,
+    colors: Option<appearance::BubbleColors>,
+    selected: Option<u64>,
+    confirming: bool,
+    files: &'a std::collections::BTreeMap<u64, Vec<FileChip>>,
+    replies: &'a std::collections::BTreeMap<u64, usize>,
+    /// Whether messages can be selected and threads opened from here (not inside the thread pane).
+    actions: bool,
 }
 
 /// What the person did to a message in the feed (T316).
@@ -265,6 +290,8 @@ enum MessageAction {
     Select(u64),
     /// Save a message's file (T330e).
     Save(FileChip),
+    /// Open the thread of the message at this cursor (T340b).
+    OpenThread(u64),
     Edit(u64, String),
     AskDelete,
     Delete(u64),
@@ -384,6 +411,9 @@ impl Window {
             Update::Attachments { room, files } => {
                 self.message_files.insert(room, files.into_iter().collect());
             }
+            Update::Threads { room, parents } => {
+                self.threads.insert(room, parents.into_iter().collect());
+            }
             Update::LastEmail(email) => {
                 if self.email.is_empty() {
                     self.email = email;
@@ -399,6 +429,9 @@ impl Window {
                 self.message_query.clear();
                 self.pending_files.clear();
                 self.message_files.clear();
+                self.threads.clear();
+                self.open_thread = None;
+                self.thread_draft.clear();
                 self.feeds.clear();
                 self.rooms = RoomList::new();
                 self.composer = Composer::new();
@@ -620,15 +653,32 @@ impl Window {
             });
         });
         egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
+        // A thread opens beside the conversation (T340b).
+        if let Some(parent) = self.open_thread.as_ref().filter(|(thread_room, _)| *thread_room == room).map(|(_, parent)| *parent) {
+            egui::Panel::right("crewcraft-thread").resizable(true).default_size(340.0).show(ui, |ui| self.thread_ui(ui, &room, parent));
+        }
         let me = self.email.clone();
-        let bubbles = self.bubbles;
-        let (selected, confirming) = (self.selected_message, self.confirm_delete);
         let mut action = None;
         let files = self.message_files.get(&room).cloned().unwrap_or_default();
+        let replies = self.reply_counts(&room);
+        let threads = self.threads.get(&room).cloned().unwrap_or_default();
+        let look = Bubbles {
+            me: &me,
+            colors: self.bubbles,
+            selected: self.selected_message,
+            confirming: self.confirm_delete,
+            files: &files,
+            replies: &replies,
+            actions: true,
+        };
         egui::CentralPanel::default_margins().show(ui, |ui| {
             ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
+                // Replies live in their thread, not in the conversation (T340b).
                 for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
-                    action = bubble_ui(ui, row, &me, bubbles, selected, confirming, &files).or(action.take());
+                    if matches!(row, FeedRow::Message { cursor, .. } if threads.contains_key(cursor)) {
+                        continue;
+                    }
+                    action = bubble_ui(ui, row, &look).or(action.take());
                 }
             });
         });
@@ -679,15 +729,32 @@ impl Window {
                     });
                 });
                 egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
+                // On a phone an open thread takes the conversation's place (T340b).
+                if let Some(parent) = self.open_thread.as_ref().filter(|(thread_room, _)| *thread_room == room).map(|(_, parent)| *parent) {
+                    egui::CentralPanel::default_margins().show(ui, |ui| self.thread_ui(ui, &room, parent));
+                    return;
+                }
                 let me = self.email.clone();
-                let bubbles = self.bubbles;
-                let (selected, confirming) = (self.selected_message, self.confirm_delete);
                 let mut action = None;
                 let files = self.message_files.get(&room).cloned().unwrap_or_default();
+                let replies = self.reply_counts(&room);
+                let threads = self.threads.get(&room).cloned().unwrap_or_default();
+                let look = Bubbles {
+                    me: &me,
+                    colors: self.bubbles,
+                    selected: self.selected_message,
+                    confirming: self.confirm_delete,
+                    files: &files,
+                    replies: &replies,
+                    actions: true,
+                };
                 egui::CentralPanel::default_margins().show(ui, |ui| {
                     ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
                         for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
-                            action = bubble_ui(ui, row, &me, bubbles, selected, confirming, &files).or(action.take());
+                            if matches!(row, FeedRow::Message { cursor, .. } if threads.contains_key(cursor)) {
+                                continue;
+                            }
+                            action = bubble_ui(ui, row, &look).or(action.take());
                         }
                     });
                 });
@@ -765,6 +832,62 @@ impl Window {
         }
     }
 
+    /// The thread shown beside the conversation, `(room, parent)` (T340b).
+    pub fn open_thread(&self) -> Option<(&str, u64)> {
+        self.open_thread.as_ref().map(|(room, parent)| (room.as_str(), *parent))
+    }
+
+    /// The reply counts of `room`'s messages, by the parent's cursor.
+    fn reply_counts(&self, room: &str) -> std::collections::BTreeMap<u64, usize> {
+        let mut counts = std::collections::BTreeMap::new();
+        for parent in self.threads.get(room).map(|threads| threads.values()).into_iter().flatten() {
+            *counts.entry(*parent).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// The thread of `parent` in `room`, beside the conversation (T340b): the message, its replies, and a composer.
+    fn thread_ui(&mut self, ui: &mut Ui, room: &str, parent: u64) {
+        let threads = self.threads.get(room).cloned().unwrap_or_default();
+        let rows: Vec<FeedRow> = self
+            .feeds
+            .get(room)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .filter(|row| matches!(row, FeedRow::Message { cursor, .. } if *cursor == parent || threads.get(cursor) == Some(&parent)))
+            .cloned()
+            .collect();
+        ui.horizontal(|ui| {
+            ui.strong("Thread");
+            if ui.button("Close thread").clicked() {
+                self.open_thread = None;
+            }
+        });
+        let me = self.email.clone();
+        let files = self.message_files.get(room).cloned().unwrap_or_default();
+        let replies = std::collections::BTreeMap::new();
+        let look = Bubbles { me: &me, colors: self.bubbles, selected: None, confirming: false, files: &files, replies: &replies, actions: false };
+        let mut action = None;
+        ScrollArea::vertical().max_height(ui.available_height() - 90.0).auto_shrink(false).show(ui, |ui| {
+            for row in &rows {
+                action = bubble_ui(ui, row, &look).or(action.take());
+            }
+        });
+        self.message_action(room, action);
+        let label = ui.label("Reply in thread");
+        ui.add(TextEdit::multiline(&mut self.thread_draft).desired_rows(2).desired_width(f32::INFINITY)).labelled_by(label.id);
+        if ui.button("Send reply").clicked() {
+            let text = self.thread_draft.trim().to_owned();
+            if text.chars().count() > crewcraft_ui_model::MAX_DRAFT_CHARS {
+                self.notice = Some(format!("Messages can be up to {} characters.", crewcraft_ui_model::MAX_DRAFT_CHARS));
+            } else if !text.is_empty() {
+                self.thread_draft.clear();
+                self.actions.push(Action::Room(Command::Reply { room: room.to_owned(), parent, text }));
+            }
+        }
+    }
+
     /// The files waiting to be attached to the next post in `room` (T330e).
     pub fn pending_files(&self, room: &str) -> &[FileChip] {
         self.pending_files.get(room).map_or(&[], Vec::as_slice)
@@ -795,6 +918,10 @@ impl Window {
                 self.confirm_delete = false;
             }
             Some(MessageAction::Keep) => self.confirm_delete = false,
+            Some(MessageAction::OpenThread(parent)) => {
+                self.open_thread = Some((room.to_owned(), parent));
+                self.selected_message = None;
+            }
             Some(MessageAction::Save(chip)) => {
                 self.actions.push(Action::Room(Command::Save { file: chip.file, size: chip.size, name: chip.name, to: None }));
             }
@@ -925,16 +1052,14 @@ pub fn visible_rooms(rows: Vec<crewcraft_ui_model::RoomRow>, filter: &str) -> Ve
 /// `bubble-other` with the author's name above the first of a run.
 /// One message. The person's own messages can be clicked to select them; a selected one shows Edit and Delete (with a
 /// confirmation) under it (T316). Returns what the person did, if anything.
-fn bubble_ui(
-    ui: &mut Ui,
-    row: &FeedRow,
-    me: &str,
-    colors: Option<appearance::BubbleColors>,
-    selected: Option<u64>,
-    confirming: bool,
-    files: &std::collections::BTreeMap<u64, Vec<FileChip>>,
-) -> Option<MessageAction> {
+fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAction> {
+    let (me, colors, selected, confirming, files) = (look.me, look.colors, look.selected, look.confirming, look.files);
     let mine = side(row, me) == Side::Mine;
+    // Any message can be selected to reply to it; one's own also to edit or delete it (T340b).
+    let message_cursor = match row {
+        FeedRow::Message { cursor, .. } if look.actions => Some(*cursor),
+        _ => None,
+    };
     let chips = match row {
         FeedRow::Message { cursor, .. } => files.get(cursor).cloned().unwrap_or_default(),
         FeedRow::Pending { .. } => Vec::new(),
@@ -980,11 +1105,11 @@ fn bubble_ui(
                 rich
             };
             let label = egui::Label::new(rich).wrap();
-            let label = if own_message.is_some() { label.sense(egui::Sense::click()) } else { label };
+            let label = if message_cursor.is_some() { label.sense(egui::Sense::click()) } else { label };
             if ui.add(label).clicked()
-                && let Some((cursor, _)) = &own_message
+                && let Some(cursor) = message_cursor
             {
-                action = Some(MessageAction::Select(*cursor));
+                action = Some(MessageAction::Select(cursor));
             }
         });
     });
@@ -998,7 +1123,29 @@ fn bubble_ui(
             ui.label(chip.label());
         });
     }
-    if let Some((cursor, text)) = own_message.filter(|(cursor, _)| Some(*cursor) == selected) {
+    // The thread under a message that has replies (T340b).
+    if let Some(cursor) = message_cursor
+        && let Some(&count) = look.replies.get(&cursor)
+    {
+        let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
+        ui.with_layout(layout, |ui| {
+            let text = if count == 1 { "1 reply".to_owned() } else { format!("{count} replies") };
+            if ui.small_button(text).clicked() {
+                action = Some(MessageAction::OpenThread(cursor));
+            }
+        });
+    }
+    // Reply, for any selected message (T340b).
+    if let Some(cursor) = message_cursor.filter(|cursor| Some(*cursor) == selected)
+        && own_message.is_none()
+    {
+        ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+            if ui.button("Reply").clicked() {
+                action = Some(MessageAction::OpenThread(cursor));
+            }
+        });
+    }
+    if let Some((cursor, text)) = own_message.filter(|(cursor, _)| Some(*cursor) == selected && look.actions) {
         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
             if confirming {
                 if ui.button("Keep").clicked() {
@@ -1014,6 +1161,9 @@ fn bubble_ui(
                 }
                 if ui.button("Edit").clicked() {
                     action = Some(MessageAction::Edit(cursor, text));
+                }
+                if ui.button("Reply").clicked() {
+                    action = Some(MessageAction::OpenThread(cursor));
                 }
             }
         });

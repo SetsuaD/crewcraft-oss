@@ -17,7 +17,7 @@ use crewcraft_client_core::room_view::Shown;
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
-use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_SEARCH, MAX_CHUNK, SearchHit};
+use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, SearchHit};
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -128,7 +128,7 @@ pub(crate) fn valid_room(room: &str) -> bool {
 /// Sign in over a verified device connection and negotiate the chat protocol, all within one operation deadline. The
 /// client offers `FEATURE_LIST_ROOMS`; a server that does not agree to it is still used, without the room list.
 pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str) -> Result<SignedInSession, LabError> {
-    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES, client: client.into() };
+    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS, client: client.into() };
     let settings = Settings::new(credentials.email);
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
@@ -139,7 +139,7 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
 /// As `sign_in`, reopening the session `ticket` names instead (task T240). A ticket the server no longer accepts is
 /// `LabError::Chat(ChatError::SignInRefused)`.
 pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> Result<SignedInSession, LabError> {
-    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES, client: client.into() };
+    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS, client: client.into() };
     let settings = Settings::new(ticket.email());
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
@@ -165,7 +165,7 @@ pub(crate) fn finish_external(
     redirect_uri: &str,
     client: &str,
 ) -> Result<SignedInSession, LabError> {
-    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES, client: client.into() };
+    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS, client: client.into() };
     let settings = Settings::new(email);
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
@@ -277,6 +277,19 @@ impl SignedInSession {
             let _ = std::fs::remove_file(to);
         }
         result
+    }
+
+    /// Reply to the message at `parent` in `room`, in its thread (task T340b).
+    pub fn reply(&mut self, room: &str, parent: u64, text: &str) -> Result<u64, LabError> {
+        if !valid_room(room) || parent == 0 {
+            return Err(LabError::Usage);
+        }
+        self.chat.reply(room, parent, text, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// Each reply's parent in `room`, by the reply's cursor, as the server pushed them (task T340b).
+    pub fn parents(&mut self, room: &str) -> BTreeMap<u64, u64> {
+        self.chat.view(room).map(|view| view.parents().clone()).unwrap_or_default()
     }
 
     /// The files each message in `room` carries, as the server pushed them (task T330e).
