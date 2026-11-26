@@ -14,6 +14,7 @@
 //! - tag 10 `UploadBegin`: `str room | str name (1 to MAX_FILE_NAME) | u64 size | 32 SHA-256` (task T330b)
 //! - tag 11 `UploadChunk`: `16 upload id | u64 offset | u32 length | bytes (1 to MAX_CHUNK)`
 //! - tag 12 `UploadFinish`: `16 upload id`
+//! - tag 13 `Download`: `16 file id | u64 offset | u32 length (1 to MAX_CHUNK)` (task T330d)
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
@@ -32,6 +33,9 @@
 //! `UploadBegin` and `UploadFinish` are answered `Ok { cursor: 0 }`, and then by one id frame (`encode_id`): `u8 tag
 //! (133) | u32 id | 16 value`, the new upload's id or the finished file's id. `UploadChunk` is answered `Ok` with the
 //! number of bytes the upload has received so far. All three are announced by `FEATURE_FILES` (docs/FILES.md).
+//!
+//! `Download` is answered `Ok { cursor: n }` and then by one bytes frame (`encode_bytes`): `u8 tag (134) | u32 id |
+//! u32 n | n bytes`, the file's bytes from `offset`, at most `length` (fewer at the end of the file, none past it).
 //!
 //! `room` is 1 to `message::MAX_NAME` bytes, `text` 0 to `message::MAX_BODY` bytes, `detail` 0 to `MAX_DETAIL` bytes.
 //!
@@ -60,6 +64,8 @@ pub const MAX_HITS: usize = 100;
 pub const FEATURE_FILES: u32 = 4;
 /// The first byte of an id frame.
 pub const ID_TAG: u8 = 133;
+/// The first byte of a bytes frame (task T330d).
+pub const BYTES_TAG: u8 = 134;
 /// The longest file name, in bytes.
 pub const MAX_FILE_NAME: usize = 255;
 /// The most bytes one upload chunk carries.
@@ -74,6 +80,7 @@ const SEARCH: u8 = 9;
 const UPLOAD_BEGIN: u8 = 10;
 const UPLOAD_CHUNK: u8 = 11;
 const UPLOAD_FINISH: u8 = 12;
+const DOWNLOAD: u8 = 13;
 
 /// A request. `ListRooms` asks for the rooms the signed-in person is a member of.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,6 +128,12 @@ pub enum Request {
     /// Finish an upload: the file is recorded once its bytes check out.
     UploadFinish {
         upload: [u8; 16],
+    },
+    /// Up to `length` bytes of file `file` from `offset` (task T330d).
+    Download {
+        file: [u8; 16],
+        offset: u64,
+        length: u32,
     },
 }
 
@@ -275,6 +288,16 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.extend_from_slice(&id.to_be_bytes());
             out.extend_from_slice(upload);
         }
+        Request::Download { file, offset, length } => {
+            if *length == 0 || *length as usize > MAX_CHUNK {
+                return Err(CodecError::FieldLength);
+            }
+            out.push(DOWNLOAD);
+            out.extend_from_slice(&id.to_be_bytes());
+            out.extend_from_slice(file);
+            out.extend_from_slice(&offset.to_be_bytes());
+            out.extend_from_slice(&length.to_be_bytes());
+        }
     }
     Ok(out)
 }
@@ -287,7 +310,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(1..=6).contains(&tag) && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag) {
+    if !(1..=6).contains(&tag) && !(LIST_ROOMS..=DOWNLOAD).contains(&tag) {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -342,6 +365,15 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
             Request::UploadChunk { upload, offset, bytes: chunk }
         }
         UPLOAD_FINISH => Request::UploadFinish { upload: read_array::<16>(bytes, &mut pos)? },
+        DOWNLOAD => {
+            let file = read_array::<16>(bytes, &mut pos)?;
+            let offset = read_u64(bytes, &mut pos)?;
+            let length = read_u32(bytes, &mut pos)?;
+            if length == 0 || length as usize > MAX_CHUNK {
+                return Err(CodecError::FieldLength);
+            }
+            Request::Download { file, offset, length }
+        }
         _ => return Err(CodecError::BadKind(tag)),
     };
     if pos != bytes.len() {
@@ -524,4 +556,40 @@ pub fn decode_id(bytes: &[u8]) -> Result<(u32, [u8; 16]), CodecError> {
         return Err(CodecError::TrailingBytes);
     }
     Ok((id, value))
+}
+
+/// Encode the bytes frame that follows the `Ok` answering `Download` request `id` (task T330d). `FieldLength` for more
+/// than `MAX_CHUNK` bytes.
+pub fn encode_bytes(id: u32, bytes: &[u8]) -> Result<Vec<u8>, CodecError> {
+    if bytes.len() > MAX_CHUNK {
+        return Err(CodecError::FieldLength);
+    }
+    let mut out = vec![BYTES_TAG];
+    out.extend_from_slice(&id.to_be_bytes());
+    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(bytes);
+    Ok(out)
+}
+
+/// Decode exactly one bytes frame: its request id and the bytes. `BadKind` for any tag but `BYTES_TAG`, `FieldLength`
+/// for a count over `MAX_CHUNK`, `Truncated`, then `TrailingBytes`.
+pub fn decode_bytes(bytes: &[u8]) -> Result<(u32, Vec<u8>), CodecError> {
+    let Some(&tag) = bytes.first() else {
+        return Err(CodecError::Truncated);
+    };
+    if tag != BYTES_TAG {
+        return Err(CodecError::BadKind(tag));
+    }
+    let mut pos: usize = 1;
+    let id = read_u32(bytes, &mut pos)?;
+    let count = read_u32(bytes, &mut pos)? as usize;
+    if count > MAX_CHUNK {
+        return Err(CodecError::FieldLength);
+    }
+    let end = pos.checked_add(count).filter(|end| *end <= bytes.len()).ok_or(CodecError::Truncated)?;
+    let data = bytes[pos..end].to_vec();
+    if end != bytes.len() {
+        return Err(CodecError::TrailingBytes);
+    }
+    Ok((id, data))
 }

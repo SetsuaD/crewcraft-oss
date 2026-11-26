@@ -6,7 +6,9 @@
 use crewcraft_proto::frame::{Decoder, FrameError, encode};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{MAX_MENTIONS, Push, encode_push};
-use crewcraft_proto::request::{Request, Response, SearchHit, decode_request, encode_hits, encode_id, encode_response, encode_rooms};
+use crewcraft_proto::request::{
+    Request, Response, SearchHit, decode_request, encode_bytes, encode_hits, encode_id, encode_response, encode_rooms,
+};
 
 use crate::cursor_log::Since;
 use crate::dispatch::{Backend, handle, handle_backend, listed_rooms};
@@ -125,9 +127,14 @@ impl Connection {
             let resp_bytes = encode_response(id, &response).map_err(ConnError::Request)?;
             let framed_resp = encode(&resp_bytes).map_err(ConnError::Frame)?;
             out.extend_from_slice(&framed_resp);
-            // An upload's answer carries the new upload's id or the finished file's (task T330b).
-            if let Some(value) = follow {
-                out.extend_from_slice(&encode(&encode_id(id, &value)).map_err(ConnError::Frame)?);
+            // An upload's answer carries the new upload's id or the finished file's (task T330b); a download's, the bytes
+            // (task T330d).
+            match follow {
+                Some(Follow::Id(value)) => out.extend_from_slice(&encode(&encode_id(id, &value)).map_err(ConnError::Frame)?),
+                Some(Follow::Bytes(data)) => {
+                    out.extend_from_slice(&encode(&encode_bytes(id, &data).map_err(ConnError::Request)?).map_err(ConnError::Frame)?);
+                }
+                None => {}
             }
 
             // After a successful Sync, append the room's events as push frames.
@@ -167,9 +174,19 @@ impl Connection {
 fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64) -> Option<Result<Answered, DurableConnError>> {
     use crate::durable::UploadError;
     let answer = match request {
-        Request::UploadBegin { room, name, size, sha256 } => server.begin_upload(user, room, name, *size, *sha256, now_ms).map(|id| (0, Some(id))),
+        Request::UploadBegin { room, name, size, sha256 } => {
+            server.begin_upload(user, room, name, *size, *sha256, now_ms).map(|id| (0, Some(Follow::Id(id))))
+        }
         Request::UploadChunk { upload, offset, bytes } => server.upload_chunk(user, upload, *offset, bytes, now_ms).map(|received| (received, None)),
-        Request::UploadFinish { upload } => server.finish_upload(user, upload, now_ms).map(|file| (0, Some(file))),
+        Request::UploadFinish { upload } => server.finish_upload(user, upload, now_ms).map(|file| (0, Some(Follow::Id(file)))),
+        Request::Download { file, offset, length } => {
+            return Some(Ok(match server.download(user, file, *offset, *length as usize) {
+                Ok(data) => (Response::Ok { cursor: data.len() as u64 }, Some(Follow::Bytes(data))),
+                Err(crate::durable::DownloadError::NotFound) => (refusal_of(crate::dispatch::E_NO_SUCH_FILE), None),
+                Err(crate::durable::DownloadError::NoStorage) => (refusal_of(crate::dispatch::E_NO_STORAGE), None),
+                Err(crate::durable::DownloadError::Storage) => (refusal_of(crate::dispatch::E_OTHER), None),
+            }));
+        }
         _ => return None,
     };
     Some(match answer {
@@ -179,5 +196,16 @@ fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64
     })
 }
 
-/// A request's answer, and the id frame that follows it when there is one (an upload's id or a file's, task T330b).
-type Answered = (Response, Option<[u8; 16]>);
+/// What follows a request's answer, when anything does: an id frame (an upload's id or a file's, task T330b) or a
+/// bytes frame (a download, task T330d).
+enum Follow {
+    Id([u8; 16]),
+    Bytes(Vec<u8>),
+}
+
+/// A request's answer, and what follows it.
+type Answered = (Response, Option<Follow>);
+
+fn refusal_of(code: u16) -> Response {
+    Response::Error { code, detail: String::new() }
+}
