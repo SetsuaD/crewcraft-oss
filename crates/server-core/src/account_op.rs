@@ -25,6 +25,9 @@
 //! - tag 12 `AuthorizationRecorded`: `str email | u8 has grant | [u8 count | count x str capability | u64 revision |
 //!   u64 confirmed_at | u64 fresh_until] | u8 has denial | [u64 denied revision] | u64 highest revision |
 //!   u64 next check`: the person's whole `crewcraft_authz::Record`, replacing the last one (task T611b).
+//! - tag 13 `ActivatedExternal`: the fields of `Activated`, then `str issuer | str subject`: an activation through an
+//!   external provider (task T611i, SECURITY-DESIGN.md section 9) and its binding in ONE record, so a person enrolled
+//!   that way never exists unbound. A new person here has no password.
 //!
 //! A raw session token is never in a record: only its SHA-256.
 //!
@@ -124,6 +127,51 @@ pub enum AccountOp {
         email: String,
         record: Record,
     },
+    /// `Activated` through an external provider, with the person's binding to `(issuer, subject)` (task T611i).
+    ActivatedExternal {
+        bootstrap_pub: [u8; 32],
+        new_person: Option<NewPerson>,
+        device_id: u64,
+        device_name: String,
+        certificate: Vec<u8>,
+        spki_sha256: [u8; 32],
+        counter: u64,
+        now_ms: u64,
+        issuer: String,
+        subject: String,
+    },
+}
+
+impl AccountOp {
+    /// The plain `Activated` an `ActivatedExternal` contains, and its binding; `None` for any other op.
+    pub fn split_external(&self) -> Option<(AccountOp, &str, &str)> {
+        let AccountOp::ActivatedExternal {
+            bootstrap_pub,
+            new_person,
+            device_id,
+            device_name,
+            certificate,
+            spki_sha256,
+            counter,
+            now_ms,
+            issuer,
+            subject,
+        } = self
+        else {
+            return None;
+        };
+        let activated = AccountOp::Activated {
+            bootstrap_pub: *bootstrap_pub,
+            new_person: new_person.clone(),
+            device_id: *device_id,
+            device_name: device_name.clone(),
+            certificate: certificate.clone(),
+            spki_sha256: *spki_sha256,
+            counter: *counter,
+            now_ms: *now_ms,
+        };
+        Some((activated, issuer, subject))
+    }
 }
 
 impl fmt::Debug for AccountOp {
@@ -134,6 +182,9 @@ impl fmt::Debug for AccountOp {
             AccountOp::InviteRevoked { .. } => f.write_str("InviteRevoked { .. }"),
             AccountOp::Activated { new_person, device_id, counter, .. } => {
                 write!(f, "Activated {{ new_person: {}, device_id: {device_id}, counter: {counter}, .. }}", new_person.is_some())
+            }
+            AccountOp::ActivatedExternal { new_person, device_id, issuer, .. } => {
+                write!(f, "ActivatedExternal {{ new_person: {}, device_id: {device_id}, issuer: {issuer:?}, .. }}", new_person.is_some())
             }
             AccountOp::TotpAccepted { email, counter } => write!(f, "TotpAccepted {{ email: {email:?}, counter: {counter} }}"),
             AccountOp::PasswordChanged { email, .. } => write!(f, "PasswordChanged {{ email: {email:?}, .. }}"),
@@ -177,31 +228,24 @@ pub fn encode_account_op(op: &AccountOp) -> Result<Vec<u8>, CodecError> {
         }
         AccountOp::Activated { bootstrap_pub, new_person, device_id, device_name, certificate, spki_sha256, counter, now_ms } => {
             out.push(4);
-            out.extend_from_slice(bootstrap_pub);
-            match new_person {
-                None => out.push(0),
-                Some(person) => {
-                    out.push(1);
-                    match &person.password_phc {
-                        None => out.push(0),
-                        Some(phc) => {
-                            out.push(1);
-                            put_str(&mut out, phc)?;
-                        }
-                    }
-                    put_sealed(&mut out, &person.totp)?;
-                }
-            }
-            out.extend_from_slice(&device_id.to_be_bytes());
-            put_str(&mut out, device_name)?;
-            if certificate.is_empty() || certificate.len() > MAX_CERT {
-                return Err(CodecError::FieldLength);
-            }
-            out.extend_from_slice(&(certificate.len() as u32).to_be_bytes());
-            out.extend_from_slice(certificate);
-            out.extend_from_slice(spki_sha256);
-            out.extend_from_slice(&counter.to_be_bytes());
-            out.extend_from_slice(&now_ms.to_be_bytes());
+            put_activation(&mut out, bootstrap_pub, new_person, *device_id, device_name, certificate, spki_sha256, *counter, *now_ms)?;
+        }
+        AccountOp::ActivatedExternal {
+            bootstrap_pub,
+            new_person,
+            device_id,
+            device_name,
+            certificate,
+            spki_sha256,
+            counter,
+            now_ms,
+            issuer,
+            subject,
+        } => {
+            out.push(13);
+            put_activation(&mut out, bootstrap_pub, new_person, *device_id, device_name, certificate, spki_sha256, *counter, *now_ms)?;
+            put_str(&mut out, issuer)?;
+            put_str(&mut out, subject)?;
         }
         AccountOp::TotpAccepted { email, counter } => {
             out.push(5);
@@ -274,6 +318,74 @@ pub fn encode_account_op(op: &AccountOp) -> Result<Vec<u8>, CodecError> {
     Ok(out)
 }
 
+/// The fields `Activated` and `ActivatedExternal` share, in their order on disk.
+#[allow(clippy::too_many_arguments)]
+fn put_activation(
+    out: &mut Vec<u8>,
+    bootstrap_pub: &[u8; 32],
+    new_person: &Option<NewPerson>,
+    device_id: u64,
+    device_name: &str,
+    certificate: &[u8],
+    spki_sha256: &[u8; 32],
+    counter: u64,
+    now_ms: u64,
+) -> Result<(), CodecError> {
+    out.extend_from_slice(bootstrap_pub);
+    match new_person {
+        None => out.push(0),
+        Some(person) => {
+            out.push(1);
+            match &person.password_phc {
+                None => out.push(0),
+                Some(phc) => {
+                    out.push(1);
+                    put_str(out, phc)?;
+                }
+            }
+            put_sealed(out, &person.totp)?;
+        }
+    }
+    out.extend_from_slice(&device_id.to_be_bytes());
+    put_str(out, device_name)?;
+    if certificate.is_empty() || certificate.len() > MAX_CERT {
+        return Err(CodecError::FieldLength);
+    }
+    out.extend_from_slice(&(certificate.len() as u32).to_be_bytes());
+    out.extend_from_slice(certificate);
+    out.extend_from_slice(spki_sha256);
+    out.extend_from_slice(&counter.to_be_bytes());
+    out.extend_from_slice(&now_ms.to_be_bytes());
+    Ok(())
+}
+
+/// Read the fields `put_activation` wrote, as an `Activated`.
+fn read_activation(r: &mut Reader<'_>) -> Result<AccountOp, CodecError> {
+    let bootstrap_pub = r.array()?;
+    let new_person = match r.u8()? {
+        0 => None,
+        1 => {
+            let password_phc = match r.u8()? {
+                0 => None,
+                1 => Some(r.str()?),
+                other => return Err(CodecError::BadKind(other)),
+            };
+            Some(NewPerson { password_phc, totp: r.sealed()? })
+        }
+        other => return Err(CodecError::BadKind(other)),
+    };
+    Ok(AccountOp::Activated {
+        bootstrap_pub,
+        new_person,
+        device_id: r.u64()?,
+        device_name: r.str()?,
+        certificate: r.cert()?,
+        spki_sha256: r.array()?,
+        counter: r.u64()?,
+        now_ms: r.u64()?,
+    })
+}
+
 pub fn decode_account_op(bytes: &[u8]) -> Result<AccountOp, CodecError> {
     let mut r = Reader { bytes, pos: 0 };
     let tag = r.u8()?;
@@ -281,31 +393,24 @@ pub fn decode_account_op(bytes: &[u8]) -> Result<AccountOp, CodecError> {
         1 => AccountOp::Created { format: r.u32()?, key_id: r.array()? },
         2 => AccountOp::InviteIssued { email: r.str()?, bootstrap_pub: r.array()?, expires_ms: r.u64()?, now_ms: r.u64()? },
         3 => AccountOp::InviteRevoked { bootstrap_pub: r.array()? },
-        4 => {
-            let bootstrap_pub = r.array()?;
-            let new_person = match r.u8()? {
-                0 => None,
-                1 => {
-                    let password_phc = match r.u8()? {
-                        0 => None,
-                        1 => Some(r.str()?),
-                        other => return Err(CodecError::BadKind(other)),
-                    };
-                    Some(NewPerson { password_phc, totp: r.sealed()? })
+        4 => read_activation(&mut r)?,
+        13 => match read_activation(&mut r)? {
+            AccountOp::Activated { bootstrap_pub, new_person, device_id, device_name, certificate, spki_sha256, counter, now_ms } => {
+                AccountOp::ActivatedExternal {
+                    bootstrap_pub,
+                    new_person,
+                    device_id,
+                    device_name,
+                    certificate,
+                    spki_sha256,
+                    counter,
+                    now_ms,
+                    issuer: r.str()?,
+                    subject: r.str()?,
                 }
-                other => return Err(CodecError::BadKind(other)),
-            };
-            AccountOp::Activated {
-                bootstrap_pub,
-                new_person,
-                device_id: r.u64()?,
-                device_name: r.str()?,
-                certificate: r.cert()?,
-                spki_sha256: r.array()?,
-                counter: r.u64()?,
-                now_ms: r.u64()?,
             }
-        }
+            _ => return Err(CodecError::BadKind(13)),
+        },
         5 => AccountOp::TotpAccepted { email: r.str()?, counter: r.u64()? },
         6 => AccountOp::PasswordChanged { email: r.str()?, phc: r.str()? },
         7 => AccountOp::DeviceRevoked { email: r.str()?, device_id: r.u64()? },
