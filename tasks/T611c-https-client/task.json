@@ -1,0 +1,19 @@
+{
+  "id": "T611c-https-client",
+  "title": "A small, strict HTTPS client for the server's outgoing calls",
+  "crate": "crewcraft-https",
+  "files": [
+    "crates/https/Cargo.toml",
+    "crates/https/src/lib.rs",
+    "Cargo.lock"
+  ],
+  "test_path": "crates/https/tests/t611c_https_client.rs",
+  "test_cmd": "cargo test -p crewcraft-https --test t611c_https_client",
+  "depends_on": [],
+  "spec": "Client::new trusts either the public web roots (webpki-roots) or only the CAs of a PEM bundle (refusing a bundle with none), and presents an optional client certificate for mutual TLS. get and post accept only https URLs without credentials, with a valid host and port; they connect with a timeout, send one HTTP/1.1 request (Host with the URL's authority, Accept: application/json, Connection: close, and for POST the Content-Type and Content-Length), and read the answer strictly: HTTP/1.0 or 1.1 status line, headers at most 16 KiB, a body by Content-Length (conflicting values refused) or chunked encoding (extensions and trailers allowed, bare LF refused), never both, any other transfer encoding refused, and never more than the body limit. 3xx answers are Error::Redirect and never followed. Response::ok gives a 2xx body or Error::Status. An untrusted server certificate or a refused client certificate fails; a silent server times out.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md",
+    "crates/tls/src/lib.rs"
+  ]
+}
