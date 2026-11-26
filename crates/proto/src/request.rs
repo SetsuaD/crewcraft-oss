@@ -10,6 +10,7 @@
 //! - tag 5 `MarkRead`: `str room | u64 cursor`
 //! - tag 6 `Ping`: no fields
 //! - tag 8 `ListRooms`: no fields (task T233; tag 7 is unassigned)
+//! - tag 9 `Search`: `str query` (1 to `MAX_QUERY` bytes; task T320b)
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
@@ -19,11 +20,17 @@
 //! (`encode_rooms`): `u8 tag (131) | u32 id | u16 n | n × str room`, where `id` repeats the request's and `n` is 0 to
 //! `MAX_ROOMS`. Tag 130 is unassigned.
 //!
+//! `Search` is answered `Ok { cursor: n }`, and then by one hits frame (`encode_hits`): `u8 tag (132) | u32 id | u16 n |
+//! n × (str room | u64 cursor | str author | str snippet)`, where `n` is 0 to `MAX_HITS`, newest first: the messages the
+//! signed-in person can read whose words begin with every word of the query. `cursor` is the message's own (the key for
+//! opening it), `author` 0 to `MAX_AUTHOR` bytes (empty when the server no longer knows it), `snippet` 0 to
+//! `MAX_SNIPPET` bytes of the message's current plain text.
+//!
 //! `room` is 1 to `message::MAX_NAME` bytes, `text` 0 to `message::MAX_BODY` bytes, `detail` 0 to `MAX_DETAIL` bytes.
 //!
 //! `ListRooms` is an addition to protocol version 1, announced by the handshake feature bit `FEATURE_LIST_ROOMS`. A
 //! client sends it only when the server's `Welcome` carries that bit: an older server does not know the tag and
-//! would close the connection.
+//! would close the connection. `Search` is announced the same way by `FEATURE_SEARCH`.
 
 use crate::message::{CodecError, MAX_BODY, MAX_NAME};
 
@@ -34,8 +41,21 @@ pub const MAX_ROOMS: usize = 512;
 pub const FEATURE_LIST_ROOMS: u32 = 1;
 /// The first byte of a room-list frame.
 pub const ROOMS_TAG: u8 = 131;
+/// The handshake feature bit for `Search` and its hits frame (task T320b).
+pub const FEATURE_SEARCH: u32 = 2;
+/// The first byte of a hits frame.
+pub const HITS_TAG: u8 = 132;
+/// The longest search query, in bytes.
+pub const MAX_QUERY: usize = 200;
+/// The most hits one hits frame carries.
+pub const MAX_HITS: usize = 100;
+/// The longest author in a hit, in bytes (an email address).
+pub const MAX_AUTHOR: usize = 320;
+/// The longest snippet in a hit, in bytes.
+pub const MAX_SNIPPET: usize = 400;
 
 const LIST_ROOMS: u8 = 8;
+const SEARCH: u8 = 9;
 
 /// A request. `ListRooms` asks for the rooms the signed-in person is a member of.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +67,19 @@ pub enum Request {
     MarkRead { room: String, cursor: u64 },
     Ping,
     ListRooms,
+    /// Messages the signed-in person can read, by the words they begin with (task T320b).
+    Search { query: String },
+}
+
+/// One message a search found (task T320b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchHit {
+    pub room: String,
+    /// The message's own cursor.
+    pub cursor: u64,
+    pub author: String,
+    /// The start of the message's current plain text.
+    pub snippet: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +185,11 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.push(LIST_ROOMS);
             out.extend_from_slice(&id.to_be_bytes());
         }
+        Request::Search { query } => {
+            out.push(SEARCH);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, query, 1, MAX_QUERY)?;
+        }
     }
     Ok(out)
 }
@@ -164,7 +202,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(1..=6).contains(&tag) && tag != LIST_ROOMS {
+    if !(1..=6).contains(&tag) && tag != LIST_ROOMS && tag != SEARCH {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -198,6 +236,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         }
         6 => Request::Ping,
         LIST_ROOMS => Request::ListRooms,
+        SEARCH => Request::Search { query: read_string(bytes, &mut pos, 1, MAX_QUERY)? },
         _ => return Err(CodecError::BadKind(tag)),
     };
     if pos != bytes.len() {
@@ -300,4 +339,57 @@ pub fn decode_rooms(bytes: &[u8]) -> Result<(u32, Vec<String>), CodecError> {
         return Err(CodecError::TrailingBytes);
     }
     Ok((id, rooms))
+}
+
+/// Encode the hits frame that follows the `Ok` answering `Search` request `id` (task T320b). `FieldLength` if there are
+/// more than `MAX_HITS` hits or a field is out of its range (room 1 to `message::MAX_NAME` bytes, author up to
+/// `MAX_AUTHOR`, snippet up to `MAX_SNIPPET`).
+pub fn encode_hits(id: u32, hits: &[SearchHit]) -> Result<Vec<u8>, CodecError> {
+    if hits.len() > MAX_HITS {
+        return Err(CodecError::FieldLength);
+    }
+    let mut out = vec![HITS_TAG];
+    out.extend_from_slice(&id.to_be_bytes());
+    out.extend_from_slice(&(hits.len() as u16).to_be_bytes());
+    for hit in hits {
+        write_str(&mut out, &hit.room, 1, MAX_NAME)?;
+        out.extend_from_slice(&hit.cursor.to_be_bytes());
+        write_str(&mut out, &hit.author, 0, MAX_AUTHOR)?;
+        write_str(&mut out, &hit.snippet, 0, MAX_SNIPPET)?;
+    }
+    Ok(out)
+}
+
+/// Decode exactly one hits frame: its request id and the hits. Errors in the order the bytes are read, as
+/// `decode_rooms`: the tag (`BadKind` for anything but `HITS_TAG`), the id, the count (`FieldLength` above `MAX_HITS`),
+/// each hit's fields, then `TrailingBytes`.
+pub fn decode_hits(bytes: &[u8]) -> Result<(u32, Vec<SearchHit>), CodecError> {
+    let Some(&tag) = bytes.first() else {
+        return Err(CodecError::Truncated);
+    };
+    if tag != HITS_TAG {
+        return Err(CodecError::BadKind(tag));
+    }
+    let mut pos: usize = 1;
+    let id = read_u32(bytes, &mut pos)?;
+    if pos + 2 > bytes.len() {
+        return Err(CodecError::Truncated);
+    }
+    let count = u16::from_be_bytes([bytes[pos], bytes[pos + 1]]) as usize;
+    pos += 2;
+    if count > MAX_HITS {
+        return Err(CodecError::FieldLength);
+    }
+    let mut hits = Vec::with_capacity(count);
+    for _ in 0..count {
+        let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+        let cursor = read_u64(bytes, &mut pos)?;
+        let author = read_string(bytes, &mut pos, 0, MAX_AUTHOR)?;
+        let snippet = read_string(bytes, &mut pos, 0, MAX_SNIPPET)?;
+        hits.push(SearchHit { room, cursor, author, snippet });
+    }
+    if pos != bytes.len() {
+        return Err(CodecError::TrailingBytes);
+    }
+    Ok((id, hits))
 }

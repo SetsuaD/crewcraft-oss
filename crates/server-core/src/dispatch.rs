@@ -51,6 +51,9 @@ pub fn error_code(error: ServerError) -> u16 {
 /// - `Ping`: `Ok { cursor: 0 }`; it needs no room and never fails.
 /// - `ListRooms`: `Ok { cursor }` is how many rooms `listed_rooms` gives for `user`. The names themselves go out as
 ///   one room-list frame after this response (`request::encode_rooms`), as `Sync`'s events do. It never fails.
+/// - `Search` (task T320b): `Ok { cursor }` is how many hits `DurableServer::found` gives for `user`; the hits go out as
+///   one hits frame after this response (`request::encode_hits`). A server without a journal has no index and finds
+///   nothing. It never fails.
 ///
 /// Any error is `Error { code: error_code(e), detail: "" }`.
 pub fn handle(server: &mut Server, user: &str, request: &Request, now_ms: u64) -> Response {
@@ -67,6 +70,14 @@ impl Backend<'_> {
         match self {
             Self::Memory(server) => server,
             Self::Durable(server) => server.server(),
+        }
+    }
+
+    /// What `Search` finds for `user` (task T320b): nothing without a journal.
+    pub(crate) fn found(&self, user: &str, query: &str) -> Vec<crewcraft_proto::request::SearchHit> {
+        match self {
+            Self::Memory(_) => Vec::new(),
+            Self::Durable(server) => server.found(user, query),
         }
     }
 
@@ -97,6 +108,7 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
     let result = match request {
         Request::Ping => return Ok(Response::Ok { cursor: 0 }),
         Request::ListRooms => return Ok(Response::Ok { cursor: listed_rooms(backend.server(), user).len() as u64 }),
+        Request::Search { query } => return Ok(Response::Ok { cursor: backend.found(user, query).len() as u64 }),
         Request::Post { room, text } => backend.change(|s| s.post(room, user, text, now_ms), |s| s.post(room, user, text, now_ms)),
         Request::Edit { room, target, text } => {
             backend.change(|s| s.edit(room, user, *target, text, now_ms), |s| s.edit(room, user, *target, text, now_ms))

@@ -8,7 +8,14 @@
 
 use std::path::Path;
 
+use std::collections::HashMap;
+
+use crewcraft_proto::message::MAX_NAME;
+use crewcraft_proto::request::{MAX_AUTHOR, MAX_HITS, MAX_SNIPPET, SearchHit};
+
 use crate::cursor_log::Since;
+use crate::html_text::html_text;
+use crate::room_service::EventKind;
 use crate::journal::{Journal, JournalError};
 use crate::op::{Op, decode_op, encode_op};
 use crate::room::Role;
@@ -34,6 +41,8 @@ pub struct DurableServer {
     poisoned: bool,
     /// Every message's searchable text, by room (task T320a).
     search: RoomSearch,
+    /// Every live message's author and current plain text, by room and cursor, for search results (task T320b).
+    previews: HashMap<String, HashMap<u64, (String, String)>>,
 }
 
 /// The most hits one search returns (task T320a).
@@ -48,15 +57,29 @@ impl DurableServer {
         let (journal, records) = Journal::open(path).map_err(DurableError::Journal)?;
         let mut server = Server::new();
         let mut search = RoomSearch::new();
+        let mut previews = HashMap::new();
         for (index, record) in records.iter().enumerate() {
             let op = decode_op(record).map_err(|_| DurableError::Corrupt { index })?;
             let indexed = searchable(&op);
             let cursor = replay(&mut server, op).map_err(|_| DurableError::Corrupt { index })?;
             if let Some((slug, actor)) = indexed {
-                index_event(&server, &mut search, &slug, &actor, cursor);
+                index_event(&server, &mut search, &mut previews, &slug, &actor, cursor);
             }
         }
-        Ok(Self { server, journal, poisoned: false, search })
+        Ok(Self { server, journal, poisoned: false, search, previews })
+    }
+
+    /// `search`, with each hit's author and the start of its current plain text (task T320b): what a hits frame
+    /// carries (`proto::request::encode_hits`), at most `request::MAX_HITS`.
+    pub fn found(&self, user: &str, query: &str) -> Vec<SearchHit> {
+        self.search(user, query, MAX_HITS)
+            .into_iter()
+            .filter(|hit| !hit.slug.is_empty() && hit.slug.len() <= MAX_NAME)
+            .map(|hit| {
+                let (author, text) = self.previews.get(&hit.slug).and_then(|room| room.get(&hit.cursor)).cloned().unwrap_or_default();
+                SearchHit { room: hit.slug, cursor: hit.cursor, author: clip(&author, MAX_AUTHOR), snippet: clip(&text, MAX_SNIPPET) }
+            })
+            .collect()
     }
 
     /// Up to `limit` (at most `MAX_SEARCH_HITS`) messages matching `query` in the rooms `user` is a member of, newest
@@ -100,7 +123,7 @@ impl DurableServer {
         self.check_alive()?;
         let cursor = self.server.post(slug, author, text, now_ms).map_err(DurableError::Server)?;
         self.record(&Op::Post { slug: slug.to_string(), author: author.to_string(), text: text.to_string(), now_ms })?;
-        index_event(&self.server, &mut self.search, slug, author, cursor);
+        index_event(&self.server, &mut self.search, &mut self.previews, slug, author, cursor);
         Ok(cursor)
     }
 
@@ -108,7 +131,7 @@ impl DurableServer {
         self.check_alive()?;
         let cursor = self.server.edit(slug, actor, target, text, now_ms).map_err(DurableError::Server)?;
         self.record(&Op::Edit { slug: slug.to_string(), actor: actor.to_string(), target, text: text.to_string(), now_ms })?;
-        index_event(&self.server, &mut self.search, slug, actor, cursor);
+        index_event(&self.server, &mut self.search, &mut self.previews, slug, actor, cursor);
         Ok(cursor)
     }
 
@@ -116,7 +139,7 @@ impl DurableServer {
         self.check_alive()?;
         let cursor = self.server.delete(slug, actor, target).map_err(DurableError::Server)?;
         self.record(&Op::Delete { slug: slug.to_string(), actor: actor.to_string(), target })?;
-        index_event(&self.server, &mut self.search, slug, actor, cursor);
+        index_event(&self.server, &mut self.search, &mut self.previews, slug, actor, cursor);
         Ok(cursor)
     }
 
@@ -173,11 +196,41 @@ fn searchable(op: &Op) -> Option<(String, String)> {
 }
 
 /// Index the event the change by `actor` just made at `cursor` in room `slug`, read back from the room's log (the
-/// actor is a member: the change was accepted).
-fn index_event(server: &Server, search: &mut RoomSearch, slug: &str, actor: &str, cursor: u64) {
+/// actor is a member: the change was accepted), and keep the message's preview: its author and current text.
+fn index_event(
+    server: &Server,
+    search: &mut RoomSearch,
+    previews: &mut HashMap<String, HashMap<u64, (String, String)>>,
+    slug: &str,
+    actor: &str,
+    cursor: u64,
+) {
     let Ok(room) = server.room(slug) else { return };
     let Ok(Since::Events(events)) = room.sync(actor, cursor.saturating_sub(1)) else { return };
-    if let Some((at, event)) = events.iter().find(|(at, _)| *at == cursor) {
-        search.index(slug, *at, event);
+    let Some((at, event)) = events.iter().find(|(at, _)| *at == cursor) else { return };
+    search.index(slug, *at, event);
+    let room = previews.entry(slug.to_owned()).or_default();
+    match &event.kind {
+        EventKind::Posted => {
+            room.insert(*at, (event.actor.clone(), html_text(&event.html)));
+        }
+        EventKind::Edited { target } => {
+            if let Some((_, text)) = room.get_mut(target) {
+                *text = html_text(&event.html);
+            }
+        }
+        EventKind::Deleted { target } => {
+            room.remove(target);
+        }
+        EventKind::Joined { .. } | EventKind::Left { .. } => {}
     }
+}
+
+/// At most `max` bytes of `text`, cut at a character boundary.
+fn clip(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
 }
