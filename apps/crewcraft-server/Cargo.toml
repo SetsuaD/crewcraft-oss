@@ -12,8 +12,12 @@ publish.workspace = true
 ctrlc = { version = "3.4", features = ["termination"] }
 crewcraft-accounts.workspace = true
 crewcraft-admission.workspace = true
+# External sign-in (T611e): the authorizer rules, the OIDC checks and the outgoing HTTPS client.
+crewcraft-authz.workspace = true
 crewcraft-bootstrap.workspace = true
 crewcraft-enroll.workspace = true
+crewcraft-https.workspace = true
+crewcraft-oidc.workspace = true
 crewcraft-pki.workspace = true
 crewcraft-proto.workspace = true
 crewcraft-server-core.workspace = true
@@ -21,6 +25,8 @@ crewcraft-tls.workspace = true
 crewcraft-totp.workspace = true
 rand_core.workspace = true
 rustls.workspace = true
+# The authorizer's and the token endpoint's JSON answers (T611e).
+serde_json = "1"
 sha2.workspace = true
 x509-parser.workspace = true
 
@@ -31,6 +37,9 @@ crewcraft-ui-model.workspace = true
 zeroize.workspace = true
 crewcraft-client-core.workspace = true
 rcgen.workspace = true
+# T611e: ID tokens signed in the test (ES256) and their key set.
+base64.workspace = true
+ring = "0.17"
 
 [lints]
 workspace = true

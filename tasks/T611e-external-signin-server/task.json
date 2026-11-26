@@ -1,0 +1,29 @@
+{
+  "id": "T611e-external-signin-server",
+  "title": "The server's sign-in through an external OpenID Connect provider",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/external_signin.rs",
+    "apps/crewcraft-server/src/device_session.rs",
+    "apps/crewcraft-server/src/stored_device_auth.rs",
+    "apps/crewcraft-server/src/lib.rs",
+    "apps/crewcraft-server/Cargo.toml",
+    "Cargo.toml",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t611e_external_signin.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t611e_external_signin",
+  "depends_on": [
+    "T600-authorizer-rules",
+    "T610-oidc-checks",
+    "T611a-external-signin-wire",
+    "T611b-external-binding",
+    "T611c-https-client"
+  ],
+  "spec": "ExternalSignIn::begin issues a nonce for one device (replacing any earlier one), valid 10 minutes and usable once. finish takes the device's nonce out first, refuses a redirect URI that is not http://127.0.0.1:<port> or http://[::1]:<port>, exchanges the code at the provider, verifies the ID token with crewcraft_oidc (issuer, client, that nonce, require-mfa), fetching the provider's keys once more for an unknown key id but not again within a minute, requires the (issuer, subject) to be bound to this device's own person, asks the external authorizer if configured (purpose sign-in) and commits its decision durably before granting (no fresh allow with use, no session; a stored denial is lifted only by a newer allow), then creates an ordinary session for the device. HttpsProvider caches discovery and keys and exchanges the code as a public client (PKCE, no secret); HttpsAuthorizer posts the docs/AUTHORIZER.md request; parse_answer reads only a well-formed api 1 allow or deny with an unsigned revision, everything else NoAnswer. DeviceAuth gains begin_external and finish_external (default: refuse); device_session answers BeginExternal with ExternalStart or Refused and ends that connection, and treats FinishExternal as a sign-in; the sign-in frame limit covers the largest FinishExternal. StoredDeviceAuth::with_external enables it for the bound device only, with the sign-in throttle.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md",
+    "docs/AUTHORIZER.md"
+  ]
+}
