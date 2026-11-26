@@ -597,9 +597,16 @@ fn a_complete_multipage_capture_replaces_cached_state_and_syncs_from_the_capture
         replies.push(encode_response(4, &Response::Ok { cursor: 0 }).unwrap());
         replies.push(encode_response(5, &Response::Ok { cursor: final_head }).unwrap());
         if tail_files {
-            replies.push(encode_push(&Push::Posted {
-                room: SCRIPT_ROOM.into(), cursor: final_head, author: BOB.into(), html: "a post-capture attached message".into(), mentions: Vec::new(),
-            }).unwrap());
+            replies.push(
+                encode_push(&Push::Posted {
+                    room: SCRIPT_ROOM.into(),
+                    cursor: final_head,
+                    author: BOB.into(),
+                    html: "a post-capture attached message".into(),
+                    mentions: Vec::new(),
+                })
+                .unwrap(),
+            );
             replies.push(encode_push(&Push::Attached { room: SCRIPT_ROOM.into(), cursor: final_head, files: vec![tail_file.clone()] }).unwrap());
         }
         script_metadata(&mut replies, final_head, features);
@@ -627,7 +634,11 @@ fn a_complete_multipage_capture_replaces_cached_state_and_syncs_from_the_capture
         assert_eq!(view.attachments().len(), if tail_files { 2 } else { 1 });
         assert_eq!(view.attachments().get(&10), Some(&vec![script_file(true)]));
         if tail_files {
-            assert_eq!(view.attachments().get(&final_head), Some(&vec![tail_file]), "the post-capture attachment is present immediately when sync returns");
+            assert_eq!(
+                view.attachments().get(&final_head),
+                Some(&vec![tail_file]),
+                "the post-capture attachment is present immediately when sync returns"
+            );
         }
         assert!(view.parents().is_empty() && view.reactions().is_empty());
         assert_eq!(view.recovery_epoch(), 1);
@@ -699,7 +710,11 @@ fn interrupted_or_inconsistent_current_pages_preserve_the_cached_view_and_explic
         assert!(after.gap_notice().is_some_and(|notice| !notice.recovered && notice.after == 3 && notice.head == SCRIPT_HEAD), "{label}");
         let requests = session.requests();
         assert_eq!(requests.iter().filter(|request| matches!(request, Request::Current { .. })).count(), 1, "{label}");
-        assert_eq!(requests.iter().filter(|request| matches!(request, Request::Sync { .. })).count(), 2, "no fresh sync follows a refused capture: {label}");
+        assert_eq!(
+            requests.iter().filter(|request| matches!(request, Request::Sync { .. })).count(),
+            2,
+            "no fresh sync follows a refused capture: {label}"
+        );
         assert_eq!(requests.len(), if ends_capture { 4 } else { 3 }, "{label}");
     }
 }
