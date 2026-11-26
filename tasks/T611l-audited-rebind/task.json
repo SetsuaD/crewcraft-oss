@@ -1,0 +1,20 @@
+{
+  "id": "T611l-audited-rebind",
+  "title": "Audited re-bind of a person's organization identity, and the audit log on disk",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/audit_file.rs",
+    "apps/crewcraft-server/src/lib.rs",
+    "apps/crewcraft-server/src/main.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t611l_audited_rebind.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t611l_audited_rebind",
+  "depends_on": [
+    "T611b-binding"
+  ],
+  "spec": "audit_file: the data directory's audit.log holds the server-core audit hash chain (T125), one line per entry (seq TAB at_ms TAB prev hex TAB hash hex TAB actor TAB action), appended with O_APPEND, owner-only, synced; read checks the chain and refuses an edited, removed or reordered entry; append refuses fields that are empty, longer than MAX_FIELD or have control characters, refuses to build on a broken log, and never goes back in time. `crewcraft-server rebind <data> <email> --issuer <issuer> --subject <subject>` (offline) re-binds an enrolled person (no one enrolled under that address, or an identity bound to someone else, is refused and records nothing), then appends 'identity.rebind <email> to <issuer> <subject> was <old or none>' by 'operator <OS user>'; a failed append after the binding is an error saying so. `crewcraft-server audit <data>` prints every entry and the head hash, and exits non-zero when the chain does not check out.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

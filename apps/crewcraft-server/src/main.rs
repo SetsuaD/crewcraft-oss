@@ -60,6 +60,11 @@ crewcraft-server import <data-directory> --bundle <bundle-directory> [--map-doma
 crewcraft-server import-teams --export <teams-export-directory> --out <new-bundle-directory>
     Turn saved Microsoft Graph chat and channel pages into an import bundle (docs/IMPORT.md). Exits non-zero, after
     writing the bundle, when messages were left out because users.json does not name their sender.
+crewcraft-server rebind <data-directory> <email> --issuer <issuer> --subject <subject>
+    Bind an enrolled person to another identity at the organization's provider (for example after their account there
+    was recreated), with the server stopped. Every re-bind is written to the audit log first-hand.
+crewcraft-server audit <data-directory>
+    Show the audit log of administrative actions and check its hash chain; exits non-zero if it does not check out.
 crewcraft-server lab init <new-state-directory>
 crewcraft-server lab invite <state-directory> <trusted-root.der> <email>
 crewcraft-server lab serve <state-directory> <trusted-root.der> <port>
@@ -90,6 +95,10 @@ fn run(args: &[OsString]) -> io::Result<()> {
             invite(Path::new(data), text_arg(email)?, Some(Path::new(path)))?
         }
         [command, data, rest @ ..] if command == "import" => import(Path::new(data), rest)?,
+        [command, data, email, f1, issuer, f2, subject] if command == "rebind" && f1 == "--issuer" && f2 == "--subject" => {
+            rebind(Path::new(data), &lab_email(email)?, text_arg(issuer)?, text_arg(subject)?)?
+        }
+        [command, data] if command == "audit" => show_audit(Path::new(data))?,
         [command, f1, export, f2, out] if command == "import-teams" && f1 == "--export" && f2 == "--out" => {
             import_teams(Path::new(export), Path::new(out))?
         }
@@ -321,6 +330,46 @@ fn create_room(data: &Path, owner: &OsString, name: &OsString) -> io::Result<Str
     }
     let (mut installation, _) = open_offline(data)?;
     installation.rooms.create_room(&lab_email(owner)?, text_arg(name)?).map_err(lab_error)
+}
+
+/// Who is acting at this terminal, for the audit log (task T611l): the operating system's user name, or "operator".
+fn operator_name() -> String {
+    let name = env::var("USER").or_else(|_| env::var("USERNAME")).unwrap_or_default();
+    let name: String = name.chars().filter(|c| !c.is_control()).take(64).collect();
+    if name.is_empty() { "operator".to_owned() } else { format!("operator {name}") }
+}
+
+/// `rebind` (task T611l): bind `email`'s person to `(issuer, subject)`, offline, and record it in the audit log.
+fn rebind(data: &Path, email: &str, issuer: &str, subject: &str) -> io::Result<()> {
+    let (mut installation, _) = open_offline(data)?;
+    if installation.accounts.person(email).is_none() {
+        return Err(usage_owned(format!("no one has enrolled as {email}")));
+    }
+    let before = installation.accounts.external_of(email).map(|(i, s)| format!("{i} {s}")).unwrap_or_else(|| "none".to_owned());
+    installation.accounts.bind_external(email, issuer, subject).map_err(|error| match error {
+        crewcraft_server_core::account_store::StoreError::ExternalInUse => {
+            usage_owned("that identity is already bound to another person".to_owned())
+        }
+        other => lab_error(other),
+    })?;
+    let action = crewcraft_server_core::admin::action_text(&["identity.rebind", email, "to", issuer, subject, "was", &before]);
+    crewcraft_server::audit_file::append(data, &operator_name(), &action, now_ms())
+        .map_err(|error| io::Error::other(format!("{email} was re-bound, but the audit entry could not be written: {error}")))?;
+    println!("{email} now signs in as {subject} at {issuer} (was {before}). Recorded in {}.", crewcraft_server::audit_file::AUDIT_FILE);
+    Ok(())
+}
+
+/// `audit` (task T611l): print the audit log and check its chain.
+fn show_audit(data: &Path) -> io::Result<()> {
+    let entries = crewcraft_server::audit_file::read(data)?;
+    for entry in &entries {
+        println!("{} {} {}: {}", entry.seq, entry.at_ms, entry.actor, entry.action);
+    }
+    match entries.last() {
+        Some(last) => println!("{} entries; the chain checks out; head {}", entries.len(), server_install::hex(&last.hash)),
+        None => println!("The audit log is empty."),
+    }
+    Ok(())
 }
 
 /// `import-teams` (docs/IMPORT.md, task T350c): read a Teams export into a new bundle directory.
