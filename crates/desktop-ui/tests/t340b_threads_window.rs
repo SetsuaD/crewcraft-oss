@@ -25,7 +25,11 @@ fn chat(size: [f32; 2]) -> Harness<'static, Window> {
     h.state_mut().apply(Update::SignedIn { email: ME.to_owned(), rooms: vec![ROOM.to_owned()] });
     h.state_mut().apply(Update::Snapshot {
         room: ROOM.to_owned(),
-        shown: vec![line(5, "bo@example.org", "<p>the plan</p>"), line(6, ME, "<p>first reply</p>"), line(7, "cy@example.org", "<p>second reply</p>")],
+        shown: vec![
+            line(5, "bo@example.org", "<p>the plan</p>"),
+            line(6, ME, "<p>first reply</p>"),
+            line(7, "cy@example.org", "<p>second reply</p>"),
+        ],
     });
     h.run();
     h.state_mut().take_actions();

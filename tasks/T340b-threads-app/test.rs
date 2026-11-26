@@ -298,7 +298,8 @@ fn a_reply_reaches_the_other_person_in_its_thread() {
 
     // Bob replies in its thread.
     assert!(bob.act(Action::Room(Command::Reply { room: room.clone(), parent: plan, text: "works for me".into() })).is_empty());
-    let updates = poll_until(&mut bob, "his own thread", |update| matches!(update, Update::Threads { parents, .. } if parents.iter().any(|(_, p)| *p == plan)));
+    let updates =
+        poll_until(&mut bob, "his own thread", |update| matches!(update, Update::Threads { parents, .. } if parents.iter().any(|(_, p)| *p == plan)));
     let reply = cursor_of(&updates, "works for me").or_else(|| {
         updates.iter().find_map(|update| match update {
             Update::Threads { parents, .. } => parents.iter().find(|(_, p)| *p == plan).map(|(r, _)| *r),
@@ -309,7 +310,8 @@ fn a_reply_reaches_the_other_person_in_its_thread() {
     assert!(reply > plan);
 
     // Alice's app learns the reply's parent.
-    let updates = poll_until(&mut alice, "the thread", |update| matches!(update, Update::Threads { parents, .. } if parents.contains(&(reply, plan))));
+    let updates =
+        poll_until(&mut alice, "the thread", |update| matches!(update, Update::Threads { parents, .. } if parents.contains(&(reply, plan))));
     assert!(updates.iter().any(|update| matches!(update, Update::Threads { room: r, .. } if *r == room)));
 
     // A reply to a reply is refused, and says so.

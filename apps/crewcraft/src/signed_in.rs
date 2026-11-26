@@ -128,7 +128,12 @@ pub(crate) fn valid_room(room: &str) -> bool {
 /// Sign in over a verified device connection and negotiate the chat protocol, all within one operation deadline. The
 /// client offers `FEATURE_LIST_ROOMS`; a server that does not agree to it is still used, without the room list.
 pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str) -> Result<SignedInSession, LabError> {
-    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS, client: client.into() };
+    let hello = Hello {
+        min_version: 1,
+        max_version: 1,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS,
+        client: client.into(),
+    };
     let settings = Settings::new(credentials.email);
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
@@ -139,7 +144,12 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
 /// As `sign_in`, reopening the session `ticket` names instead (task T240). A ticket the server no longer accepts is
 /// `LabError::Chat(ChatError::SignInRefused)`.
 pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> Result<SignedInSession, LabError> {
-    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS, client: client.into() };
+    let hello = Hello {
+        min_version: 1,
+        max_version: 1,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS,
+        client: client.into(),
+    };
     let settings = Settings::new(ticket.email());
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
@@ -165,7 +175,12 @@ pub(crate) fn finish_external(
     redirect_uri: &str,
     client: &str,
 ) -> Result<SignedInSession, LabError> {
-    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS, client: client.into() };
+    let hello = Hello {
+        min_version: 1,
+        max_version: 1,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS,
+        client: client.into(),
+    };
     let settings = Settings::new(email);
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
