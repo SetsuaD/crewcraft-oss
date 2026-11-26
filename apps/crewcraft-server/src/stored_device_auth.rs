@@ -63,7 +63,16 @@ impl StoredDeviceAuth {
             let mut store = store.lock().map_err(|_| AuthError::Unavailable)?;
             enrolled_device(&mut store, verified_peer_der, now_ms)?
         };
-        Ok(Self { store, throttle, leaf_der: verified_peer_der.to_vec(), validity, user: device.user, device_id: device.id, external: None, revoked: AtomicBool::new(false) })
+        Ok(Self {
+            store,
+            throttle,
+            leaf_der: verified_peer_der.to_vec(),
+            validity,
+            user: device.user,
+            device_id: device.id,
+            external: None,
+            revoked: AtomicBool::new(false),
+        })
     }
 }
 

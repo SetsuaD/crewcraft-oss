@@ -251,11 +251,16 @@ fn pem(label: &str, der: &[u8]) -> String {
     use base64::Engine;
     let text = base64::engine::general_purpose::STANDARD.encode(der);
     let lines: Vec<&str> = text.as_bytes().chunks(64).filter_map(|line| std::str::from_utf8(line).ok()).collect();
-    format!("-----BEGIN {label}-----
+    format!(
+        "-----BEGIN {label}-----
 {}
 -----END {label}-----
-", lines.join("
-"))
+",
+        lines.join(
+            "
+"
+        )
+    )
 }
 
 /// Write `bytes` to `dir/name`, owner-only, replacing what is there in one step (a new file, then a rename).

@@ -160,11 +160,13 @@ fn alice_in_a_call(name: &str, answer: Answer) -> (Result<(), DeviceSessionError
     let scratch = Scratch::new(name);
     let (store, leaf) = alice_enrolled(&scratch.0.join("accounts"));
     let external = Arc::new(ExternalSignIn::new(Arc::new(NoProvider), Some(Arc::new(Fixed(answer))), false));
-    let auth = StoredDeviceAuth::bind(Arc::new(Mutex::new(store)), Arc::new(Mutex::new(Throttle::new())), &leaf, NOW_MS).unwrap().with_external(external);
+    let auth =
+        StoredDeviceAuth::bind(Arc::new(Mutex::new(store)), Arc::new(Mutex::new(Throttle::new())), &leaf, NOW_MS).unwrap().with_external(external);
     assert_eq!(auth.device(), Some(1));
 
     let media_key = Issuer::from_pkcs8(&Issuer::generate().unwrap()).unwrap();
-    let mut media = MediaServer::new(Config { server_name: MEDIA.to_owned(), trusted_key: media_key.public_key(), address: MEDIA_ADDRESS.parse().unwrap() });
+    let mut media =
+        MediaServer::new(Config { server_name: MEDIA.to_owned(), trusted_key: media_key.public_key(), address: MEDIA_ADDRESS.parse().unwrap() });
     let mut rooms = DurableServer::open(&scratch.0.join("rooms")).unwrap();
     rooms.set_media(MediaIssuer::new(media_key, MEDIA, MEDIA_ADDRESS));
     let room = rooms.create_room(ALICE, "Project").unwrap();
@@ -182,10 +184,17 @@ fn alice_in_a_call(name: &str, answer: Answer) -> (Result<(), DeviceSessionError
     let signed_in_at = NOW_MS + 30_000;
     let mut clock = signed_in_at;
     let server = ServerSide { min_version: 1, max_version: 1, features: 0, name: "server".into() };
-    let served = serve(&mut script(signed_in_at), &auth, &rooms, server, |_| Ok(()), || {
-        clock += 1;
-        clock
-    });
+    let served = serve(
+        &mut script(signed_in_at),
+        &auth,
+        &rooms,
+        server,
+        |_| Ok(()),
+        || {
+            clock += 1;
+            clock
+        },
+    );
     (served, rooms, call, media, scratch)
 }
 

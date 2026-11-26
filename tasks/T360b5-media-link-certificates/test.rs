@@ -62,9 +62,9 @@ fn control_settings() -> ControlSettings {
     }
 }
 
-/// Wait until `intake` has a request, and return it.
-fn next_request(intake: &mut impl Intake) -> Option<Request> {
-    let until = Instant::now() + Duration::from_secs(10);
+/// Wait up to `wait` until `intake` has a request, and return it.
+fn next_request(intake: &mut impl Intake, wait: Duration) -> Option<Request> {
+    let until = Instant::now() + wait;
     let mut requests = Vec::new();
     while Instant::now() < until {
         intake.take(&mut requests);
@@ -125,7 +125,7 @@ fn the_issued_pair_completes_the_link_and_another_ca_is_refused() {
         let (rooms, chat_stop) = (rooms.clone(), chat_stop.clone());
         std::thread::spawn(move || link.run(&|| chat_stop.load(Ordering::Acquire), &rooms, &now_ms))
     };
-    match next_request(&mut requests) {
+    match next_request(&mut requests, Duration::from_secs(10)) {
         Some(Request::DropPerson { call: dropped, person }) => assert_eq!((dropped, person.as_str()), (call, BO)),
         _ => panic!("the event did not cross the link made of the issued certificates"),
     }
@@ -137,14 +137,16 @@ fn the_issued_pair_completes_the_link_and_another_ca_is_refused() {
     media_link::issue_link(&other.path("chat"), &other.path("media"), MEDIA, now_ms()).unwrap();
     let read = |dir: &Path, name: &str| std::fs::read(dir.join(name)).unwrap();
     let roots = crewcraft_tls::pem::roots(&read(&chat, CHAT_LINK_FILES[0])).unwrap();
-    let identity = crewcraft_tls::pem::identity(&read(&other.path("chat"), CHAT_LINK_FILES[1]), &read(&other.path("chat"), CHAT_LINK_FILES[2])).unwrap();
+    let identity =
+        crewcraft_tls::pem::identity(&read(&other.path("chat"), CHAT_LINK_FILES[1]), &read(&other.path("chat"), CHAT_LINK_FILES[2])).unwrap();
     let tcp = TcpStream::connect(control_address).unwrap();
     tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut stranger = crewcraft_tls::connect(tcp, crewcraft_tls::client_config(roots, Some(identity)).unwrap(), MEDIA.try_into().unwrap()).unwrap();
     let message = encode_control(&ControlMessage::EndCall { seq: 1, call }).unwrap();
-    let answer = stranger.write_all(&encode(&message).unwrap()).and_then(|()| stranger.flush()).and_then(|()| read_frame(&mut stranger, MAX_CONTROL_MESSAGE));
+    let answer =
+        stranger.write_all(&encode(&message).unwrap()).and_then(|()| stranger.flush()).and_then(|()| read_frame(&mut stranger, MAX_CONTROL_MESSAGE));
     assert!(!matches!(answer, Ok(Some(_))), "the media server answered a certificate from another link CA");
-    assert!(next_request(&mut requests).is_none(), "a certificate from another link CA ended a call");
+    assert!(next_request(&mut requests, Duration::from_secs(1)).is_none(), "a certificate from another link CA ended a call");
 
     // Running it again (rotation) replaces the files with new certificates.
     let before = read(&media, MEDIA_LINK_FILES[0]);

@@ -259,7 +259,13 @@ impl Authority {
         self.leaf(params, ExtendedKeyUsagePurpose::ClientAuth, now_ms, lifetime_secs)
     }
 
-    fn leaf(&self, mut params: CertificateParams, usage: ExtendedKeyUsagePurpose, now_ms: u64, lifetime_secs: i64) -> Result<ServerIdentity, PkiError> {
+    fn leaf(
+        &self,
+        mut params: CertificateParams,
+        usage: ExtendedKeyUsagePurpose,
+        now_ms: u64,
+        lifetime_secs: i64,
+    ) -> Result<ServerIdentity, PkiError> {
         let from = secs(now_ms)?;
         params.is_ca = IsCa::ExplicitNoCa;
         params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
