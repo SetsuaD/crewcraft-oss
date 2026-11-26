@@ -114,9 +114,10 @@ on loopback UDP with two str0m clients.
 
 These need native code or young crates; each is decided when its task starts and recorded in NON-RUST-DEPENDENCIES.md.
 
-- **Opus audio (decided 2026-11-26).** A pure-Rust Opus crate (`opus-rs`, a port of libopus 1.6; `ruopus` and `opus1`,
-  implementations of RFC 6716): the one that passes the official Opus conformance vectors and encodes in real time on
-  the smallest target (a phone), proved in T360e's test. libopus through `cc` is only the fallback.
+- **Opus audio (decided 2026-11-26, crate chosen 2026-11-26).** A pure-Rust Opus crate: the one that passes the
+  official Opus conformance vectors and encodes in real time on the smallest target (a phone). libopus through `cc` is
+  only the fallback. **The vectors chose `opus-pure`**; the results are in "Opus: the crate, chosen by the conformance
+  vectors" below. Real time on a phone is still proved in T360e's own test.
 - **Audio input and output.** `cpal` is the usual Rust audio library; on Linux it needs the ALSA development files at
   build time (`alsa-sys` through `pkg-config`), even with PipeWire or PulseAudio. Windows (WASAPI), macOS and iOS
   (CoreAudio) and Android (AAudio) are reached through system bindings. The Linux row is the decision.
@@ -127,6 +128,63 @@ These need native code or young crates; each is decided when its task starts and
   hardware first, `rav1e`/`rav1d` as the software path. Browser support for AV1 in WebRTC differs by browser and device
   (Safari needs AV1 hardware), so guest meetings may need a second, browser-friendly codec (VP8); that is checked when
   guest meetings start.
+
+## Opus: the crate, chosen by the conformance vectors (T360e)
+
+**Decision: `opus-pure` 0.2.5** (BSD-3-Clause, no dependencies, no build script, no C). It is one of the two
+candidates that pass all 12 RFC 8251 test vectors on both checks, and the only one of those two that is also fast and
+actively maintained. `ruopus` passes too, but decodes at about 4 times real time and encodes at about 8 times on a
+server core (not measured on a phone), which leaves a phone little headroom when a call decodes one stream per
+participant. libopus is not needed.
+
+The test is the one libopus runs on itself (`tests/run_vectors.sh`): decode each vector to 48 kHz once as mono and once
+as stereo, and
+
+- **final range:** after every packet the decoder's range-coder state must equal the encoder's, stored next to the
+  packet in the `.bit` file (checked on every packet, including the first, which `opus_demo` skips);
+- **opus_compare:** the output must score at least 0 on libopus's quality metric against `testvectorNN.dec` or
+  `testvectorNNm.dec` (`-s` for the stereo output), with a Rust port of libopus's `opus_compare.c` (BSD license, the
+  algorithm ported, nothing vendored). Float output becomes 16-bit samples as libopus's `FLOAT2INT16` does.
+
+A vector passes a check only when the mono and the stereo decode both pass it. As a check on the port, libopus 1.5.2's
+own `opus_compare.c`, compiled on the side, scored all 120 decodes below against both references and agreed with
+the port on all 240 verdicts and on every error value to six decimals.
+
+| Crate | License | Final range | opus_compare | Encode, complexity 10 | Encode, complexity 5 | Decode | `unsafe` sites | Maintenance (2026-11-26) |
+|---|---|---|---|---|---|---|---|---|
+| **opus-pure** 0.2.5 | BSD-3-Clause | **12/12** | **12/12** | 324 µs/frame (62x) | 268 µs/frame (75x) | 258x | 132 | released 2026-11-23; 29 commits in 90 days, 3 contributors |
+| ruopus 0.1.2 | MIT | **12/12** | **12/12** | 2500 µs/frame (8x) | 2516 µs/frame (8x) | 4x | 39 | released 2026-07-01; no commits since 2026-07-07, 1 contributor |
+| opus-rs 0.1.42 | BSD-3-Clause | 12/12 | 11/12 | 400 µs/frame (50x) | 302 µs/frame (66x) | 225x | 251 | released 2026-11-10; 100+ commits in 90 days, 11 contributors |
+| rusty-opus 1.2.1 | BSD-3-Clause | 12/12 | 6/12 | 286 µs/frame (70x) | 248 µs/frame (81x) | 220x | 187 | released 2026-11-23; 98 commits in 90 days, 5 contributors |
+| mousiki 0.2.1 | MIT | 4/12 | 0/12 | 476 µs/frame (42x) | 349 µs/frame (57x) | 210x | 29 | released 2026-03-26; its repository is no longer public |
+
+- **Failures.** `opus-rs` fails vector 07 (mono and stereo) and only just passes 08 and 09 (scores 7 and 12 of 100);
+  its range coder is right, so the error is in the synthesis. `rusty-opus` decodes stereo correctly but fails the mono
+  output of vectors 02, 04, 07, 08, 09 and 10. `mousiki` loses the range state on 8 vectors and fails the quality
+  metric on all 12, through both its float and its 16-bit decode calls.
+- **Encoding.** 48 kHz mono, 20 ms frames, VoIP application, 32 kbit/s target; the input is the mono downmix of the 12
+  reference decodes (321 s of speech and music), best of 3 runs, one crate at a time, on one core of a 2.4 GHz Xeon
+  Gold 6148 (x86-64, release build, no `target-cpu` flag). "62x" means 62 times faster than real time; a 20 ms frame
+  has a 20 000 µs budget. `ruopus`'s complexity setting does not change its speed.
+- **The encoders' output is valid Opus.** Each encoder's complexity-10 stream (16 031 packets) was decoded by
+  `opus-pure`, `ruopus` and `opus-rs`: no final-range mismatch in any of the 15 combinations.
+- **Decode** is the 641 s of audio in the 24 conformance decodes divided by the decoding time (five crates running at
+  once, one core each).
+- **`unsafe` sites** count code lines in `src/` that open an `unsafe` block, function, impl or extern block (command
+  in the probe doc linked below). In `opus-pure` they are SIMD kernels (SSE, AVX2 with FMA, NEON) chosen at run time by CPU-feature detection,
+  plus one `get_unchecked`. CrewCraft's own crates stay free of `unsafe`; a dependency's is reviewed, as here.
+- **Ruled out before the run:** `opus1` (needs Rust 1.98), `symphonia-opus` (MPL-2.0, decode only), `opus-decoder`
+  (decode only), `audio-codec` (no final range). `ruopus` is tested with its default features off (the default
+  `spectrograms` feature pulls in `pkg-config`) and `std` on.
+
+**Risks we accept with `opus-pure`.** It is young (first release 2026-08-27) and has few maintainers; its 132 `unsafe`
+sites are SIMD code; its encoder speed on a phone is not measured yet. If it stalls, `ruopus` is the conformant
+fallback (after its speed is fixed) and `opus-rs` the nearest fast one (after vector 07 is fixed); libopus through `cc`
+stays the last resort. The audio pipeline task adds the dependency, its entry in `tools/rust-only.sh`'s list of crates
+that must stay pure Rust, and a phone encode test.
+
+The program, the commands to rerun all of this and the cross-check against the original `opus_compare.c` are in
+[probes/opus-conformance.md](probes/opus-conformance.md).
 
 ## The app (T360g)
 
