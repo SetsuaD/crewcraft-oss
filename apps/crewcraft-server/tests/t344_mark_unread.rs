@@ -473,7 +473,11 @@ fn an_open_worker_observes_another_devices_rewind_until_a_deliberate_read() {
 
     alice.mark_unread(room, target).unwrap();
     // No new command is sent to the worker here: its normal background poll must observe the other device's change.
-    wait_for_event(&events, "background unread count after remote rewind", |event| matches!(event, Event::Unread { room: reported, count } if reported == room && *count > 0));
+    wait_for_event(
+        &events,
+        "background unread count after remote rewind",
+        |event| matches!(event, Event::Unread { room: reported, count } if reported == room && *count > 0),
+    );
     wait_for_event(
         &events,
         "background read state after remote rewind",
