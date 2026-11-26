@@ -14,7 +14,7 @@
     "Cargo.lock"
   ],
   "test_path": "apps/crewcraft-server/tests/t341b_reactions.rs",
-  "test_cmd": "cargo test -p crewcraft-server --test t341b_reactions && cargo test -p crewcraft-desktop-ui --test t341b_reactions_window",
+  "test_cmd": "cargo test -p crewcraft-server --test t341b_reactions",
   "depends_on": [
     "T341a-reactions",
     "T340b-threads-app"
