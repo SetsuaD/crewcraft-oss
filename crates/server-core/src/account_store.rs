@@ -95,6 +95,10 @@ pub enum StoreError {
     Session,
     /// This provider identity is already bound to another person (T611b).
     ExternalInUse,
+    /// An activation through a provider for a person bound to another provider identity, or to none (T611i).
+    ExternalMismatch,
+    /// A person enrolled through a provider would have a CrewCraft password (T611i): an external person has none.
+    ExternalPassword,
 }
 
 impl fmt::Display for StoreError {
@@ -294,7 +298,12 @@ impl<L: AppendLog> AccountStore<L> {
 
     /// Whether `op` applies to the current state. Used both before journaling a change and while replaying one.
     fn check(&self, op: &AccountOp) -> Result<(), StoreError> {
+        if let Some((activated, issuer, subject)) = op.split_external() {
+            return self.check_external_activation(&activated, issuer, subject);
+        }
         match op {
+            // Handled above, through the `Activated` it contains.
+            AccountOp::ActivatedExternal { .. } => Err(StoreError::BadField),
             AccountOp::ExternalBound { email, issuer, subject } => {
                 canonical(email)?;
                 field(issuer)?;
@@ -396,9 +405,42 @@ impl<L: AppendLog> AccountStore<L> {
         }
     }
 
+    /// `ActivatedExternal` (T611i): everything `Activated` checks, and the binding. A new person is bound to a provider
+    /// identity no one else holds and has no password; a person who already exists (another device) must already be
+    /// bound to exactly that identity.
+    fn check_external_activation(&self, activated: &AccountOp, issuer: &str, subject: &str) -> Result<(), StoreError> {
+        field(issuer)?;
+        field(subject)?;
+        let AccountOp::Activated { bootstrap_pub, new_person, now_ms, .. } = activated else {
+            return Err(StoreError::BadField);
+        };
+        if new_person.as_ref().is_some_and(|person| person.password_phc.is_some()) {
+            return Err(StoreError::ExternalPassword);
+        }
+        self.check(activated)?;
+        let email = &self.invites.pending(bootstrap_pub, *now_ms).ok_or(StoreError::NoInvite)?.email;
+        let owner = self.external.get(&(issuer.to_string(), subject.to_string()));
+        match new_person {
+            Some(_) if owner.is_some() => Err(StoreError::ExternalInUse),
+            Some(_) => Ok(()),
+            None if self.external_of(email) == Some((issuer, subject)) => Ok(()),
+            None => Err(StoreError::ExternalMismatch),
+        }
+    }
+
     /// Apply a checked op. An error here after `check` passed is a bug (the caller poisons the store).
     fn apply(&mut self, op: &AccountOp) -> Result<(), StoreError> {
+        if let Some((activated, issuer, subject)) = op.split_external() {
+            let AccountOp::Activated { bootstrap_pub, now_ms, .. } = &activated else {
+                return Err(StoreError::BadField);
+            };
+            let email = self.invites.pending(bootstrap_pub, *now_ms).ok_or(StoreError::NoInvite)?.email.clone();
+            self.apply(&activated)?;
+            let bound = AccountOp::ExternalBound { email, issuer: issuer.to_string(), subject: subject.to_string() };
+            return self.apply(&bound);
+        }
         match op {
+            AccountOp::ActivatedExternal { .. } => Err(StoreError::BadField),
             AccountOp::ExternalBound { email, issuer, subject } => {
                 if let Some(old) = self.bound.remove(email) {
                     self.external.remove(&old);
@@ -501,6 +543,18 @@ impl<L: AppendLog> AccountStore<L> {
     /// Commit an activation as ONE record and return the new device id. The person is the invitation's email: the
     /// client cannot choose it. Only after `Ok` may the server answer the client with success (or its certificate).
     pub fn activate(&mut self, activation: Activation<'_>, now_ms: u64) -> Result<u64, StoreError> {
+        self.activate_with(activation, None, now_ms)
+    }
+
+    /// `activate` through an external provider (T611i): the activation and the person's binding to `(issuer, subject)`
+    /// in ONE record. A first device makes a person with no password (`first_device.password_phc` must be `None`;
+    /// `ExternalPassword` otherwise) bound to an identity no one holds (`ExternalInUse`); another device needs the
+    /// person to be bound to exactly this identity already (`ExternalMismatch`). Check the ID token before calling.
+    pub fn activate_external(&mut self, activation: Activation<'_>, issuer: &str, subject: &str, now_ms: u64) -> Result<u64, StoreError> {
+        self.activate_with(activation, Some((issuer, subject)), now_ms)
+    }
+
+    fn activate_with(&mut self, activation: Activation<'_>, external: Option<(&str, &str)>, now_ms: u64) -> Result<u64, StoreError> {
         if self.poisoned {
             return Err(StoreError::Poisoned);
         }
@@ -519,16 +573,25 @@ impl<L: AppendLog> AccountStore<L> {
         {
             return Err(StoreError::DeviceIdMoved { expected, next: device_id });
         }
-        self.commit(AccountOp::Activated {
-            bootstrap_pub: activation.bootstrap_pub,
-            new_person,
-            device_id,
-            device_name: activation.device_name.trim().to_string(),
-            certificate: activation.certificate.to_vec(),
-            spki_sha256: activation.spki_sha256,
-            counter: activation.counter,
-            now_ms,
-        })?;
+        let (bootstrap_pub, device_name, certificate) =
+            (activation.bootstrap_pub, activation.device_name.trim().to_string(), activation.certificate.to_vec());
+        let (spki_sha256, counter) = (activation.spki_sha256, activation.counter);
+        let op = match external {
+            None => AccountOp::Activated { bootstrap_pub, new_person, device_id, device_name, certificate, spki_sha256, counter, now_ms },
+            Some((issuer, subject)) => AccountOp::ActivatedExternal {
+                bootstrap_pub,
+                new_person,
+                device_id,
+                device_name,
+                certificate,
+                spki_sha256,
+                counter,
+                now_ms,
+                issuer: issuer.to_string(),
+                subject: subject.to_string(),
+            },
+        };
+        self.commit(op)?;
         Ok(device_id)
     }
 

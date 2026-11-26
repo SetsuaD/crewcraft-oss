@@ -1,0 +1,21 @@
+{
+  "id": "T611i-store",
+  "title": "Activation through a provider and its binding in one account-store record",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/account_op.rs",
+    "crates/server-core/src/account_store.rs",
+    "crates/bootstrap/src/store.rs"
+  ],
+  "test_path": "crates/server-core/tests/t611i_activate_external.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t611i_activate_external",
+  "depends_on": [
+    "T611b-external-binding",
+    "T205-activation"
+  ],
+  "spec": "AccountStore::activate_external(activation, issuer, subject, now) commits AccountOp::ActivatedExternal (tag 13: the Activated fields, then issuer and subject) as one record and applies both the activation and the binding. A first device makes a person with no password (ExternalPassword otherwise) bound to an identity no one holds (ExternalInUse otherwise); another device needs the person bound to exactly that identity (ExternalMismatch otherwise, also for a person bound to nothing). Empty identity fields are BadField; a dead invitation is NoInvite. Every refusal writes nothing and leaves the invitation live; a replay rebuilds the person, device and binding. The record round-trips, refuses truncation and trailing bytes, its Debug shows no subject, and split_external gives the plain Activated it contains. The bootstrap crate classifies the three new refusals as proven before any write.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

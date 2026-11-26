@@ -122,6 +122,9 @@ fn proven_before_write(error: &StoreError) -> bool {
             | StoreError::KeyInUse
             | StoreError::NotActiveLeaf
             | StoreError::Session
+            | StoreError::ExternalInUse
+            | StoreError::ExternalMismatch
+            | StoreError::ExternalPassword
             | StoreError::Codec(_)
             | StoreError::Append(AppendError::TooLarge)
     )
