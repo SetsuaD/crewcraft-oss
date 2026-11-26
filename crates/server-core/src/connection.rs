@@ -115,6 +115,7 @@ impl Connection {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn receive_with<S, E: From<ConnError>>(
         &mut self,
         server: &mut S,

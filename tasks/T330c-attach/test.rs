@@ -64,7 +64,7 @@ fn the_request_and_the_push_have_exact_bytes() {
         files: vec![attached([3; 16], "a.txt", 5), AttachedFile { file: [4; 16], name: "p.png".into(), size: 7, image: Some((2, 1)) }],
     };
     let bytes = encode_push(&push).unwrap();
-    let mut expected = vec![68, 0, 1, b'r'];
+    let mut expected = vec![70, 0, 1, b'r'];
     expected.extend_from_slice(&9u64.to_be_bytes());
     expected.push(2);
     expected.extend_from_slice(&[3; 16]);

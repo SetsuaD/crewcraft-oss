@@ -7,7 +7,7 @@
 //! - tag 65 `Edited`: `u64 target | str html | u8 count | count × str mention`
 //! - tag 66 `Deleted`: `u64 target`
 //! - tag 67 `Other` (membership and settings changes): no fields
-//! - tag 68 `Attached` (task T330c): `u8 count (1 to MAX_ATTACHMENTS) | count × (16 file id | str name | u64 size |
+//! - tag 70 `Attached` (task T330c; 68 and 69 stay unassigned): `u8 count (1 to MAX_ATTACHMENTS) | count × (16 file id | str name | u64 size |
 //!   u8 has image size | [u32 width | u32 height])`. Its `cursor` is the message's own; it follows that message's
 //!   `Posted` and advances nothing. Only a client that agreed to `request::FEATURE_FILES` is sent it.
 //!
@@ -20,6 +20,8 @@ use crate::message::{CodecError, MAX_NAME};
 /// 24 KB even when every character is escaped.
 pub const MAX_HTML: usize = 60 * 1024;
 pub const MAX_MENTIONS: usize = 32;
+/// The tag of `Push::Attached` (task T330c).
+pub const ATTACHED: u8 = 70;
 /// The most files one message carries (task T330c).
 pub const MAX_ATTACHMENTS: usize = 10;
 /// The longest file name, in bytes (as `request::MAX_FILE_NAME`).
@@ -146,7 +148,7 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
             if files.is_empty() || files.len() > MAX_ATTACHMENTS {
                 return Err(CodecError::FieldLength);
             }
-            out.push(68);
+            out.push(ATTACHED);
             write_str(&mut out, room, 1, MAX_NAME)?;
             out.extend_from_slice(&cursor.to_be_bytes());
             out.push(files.len() as u8);
@@ -176,7 +178,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(64..=68).contains(&tag) {
+    if !(64..=67).contains(&tag) && tag != ATTACHED {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -215,7 +217,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
             Push::Deleted { room, cursor, target }
         }
         67 => Push::Other { room, cursor },
-        68 => {
+        ATTACHED => {
             let count = usize::from(*bytes.get(pos).ok_or(CodecError::Truncated)?);
             pos += 1;
             if count == 0 || count > MAX_ATTACHMENTS {

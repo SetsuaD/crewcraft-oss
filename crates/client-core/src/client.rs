@@ -89,7 +89,7 @@ impl Client {
                     Reply::Malformed(e) => return Err(ClientError::Malformed(e)),
                     _ => events.push(ClientEvent::Reply(reply)),
                 }
-            } else if (64..=68).contains(&first) {
+            } else if (64..=67).contains(&first) || first == crewcraft_proto::push::ATTACHED {
                 let push = decode_push(&payload).map_err(ClientError::Malformed)?;
                 let room = match &push {
                     Push::Posted { room, .. } => room.clone(),
