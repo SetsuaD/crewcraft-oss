@@ -18,7 +18,7 @@ use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
 use crewcraft_proto::request::{
-    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, Request,
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, Request,
     SearchHit,
 };
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
@@ -134,7 +134,7 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS | FEATURE_FILE_LIST,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -150,7 +150,7 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS | FEATURE_FILE_LIST,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -181,7 +181,7 @@ pub(crate) fn finish_external(
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS | FEATURE_FILE_LIST,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -404,6 +404,14 @@ impl SignedInSession {
 
     /// The messages the person can read that match `query`, newest first (task T320c). `None` when the server did not
     /// agree to `FEATURE_SEARCH` (nothing is sent then). `query` must be 1 to `request::MAX_QUERY` bytes.
+    /// The files in the person's rooms (task T331b); `None` when the server does not list files.
+    pub fn list_files(&mut self) -> Result<Option<Vec<crewcraft_proto::request::ListedFile>>, LabError> {
+        if !self.chat.lists_files() {
+            return Ok(None);
+        }
+        self.chat.list_files(0, Instant::now() + OPERATION_TIMEOUT).map(Some).map_err(LabError::Chat)
+    }
+
     pub fn search(&mut self, query: &str) -> Result<Option<Vec<SearchHit>>, LabError> {
         if query.is_empty() || query.len() > crewcraft_proto::request::MAX_QUERY {
             return Err(LabError::Usage);

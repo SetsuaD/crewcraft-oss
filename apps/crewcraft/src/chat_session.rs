@@ -12,7 +12,7 @@ use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
 use crewcraft_proto::request::{
-    FEATURE_CALLS, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, Request, Response, SearchHit,
+    FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, Request, Response, SearchHit,
 };
 use crewcraft_proto::signin::{self, Opening, SignIn};
 use zeroize::Zeroizing;
@@ -201,6 +201,36 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
     /// Whether the server agreed to `Search` (`request::FEATURE_SEARCH`, task T320c).
     pub fn searches(&self) -> bool {
         self.features() & FEATURE_SEARCH != 0
+    }
+
+    /// Whether the server agreed to the file list (`request::FEATURE_FILE_LIST`, task T331b).
+    pub fn lists_files(&self) -> bool {
+        self.features() & FEATURE_FILE_LIST != 0
+    }
+
+    /// The files on messages in the signed-in person's rooms, as the server lists them (task T331b). `Unsupported`,
+    /// with nothing sent, without the feature; a files frame of another length than the answer said closes the session.
+    pub fn list_files(&mut self, now_ms: u64, deadline: Instant) -> Result<Vec<crewcraft_proto::request::ListedFile>, ChatError> {
+        if !self.lists_files() {
+            return Err(ChatError::Unsupported);
+        }
+        let (id, count) = match self.exchange(Request::ListFiles, now_ms, 0, deadline)? {
+            (id, Response::Ok { cursor }) => (id, cursor),
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        loop {
+            for event in self.receive(now_ms, 0, deadline)? {
+                if let ClientEvent::Files { id: answered, files } = event
+                    && answered == id
+                {
+                    if u64::try_from(files.len()).ok() != Some(count) {
+                        self.closed = true;
+                        return Err(ChatError::UnexpectedResponse);
+                    }
+                    return Ok(files);
+                }
+            }
+        }
     }
 
     /// The messages the signed-in person can read that match `query`, newest first, as the server finds them (task

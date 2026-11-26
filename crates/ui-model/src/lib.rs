@@ -33,6 +33,8 @@ pub enum Command {
     /// Reply to the message at `parent` in `room`, in its thread (task T340b). `text` is trimmed and within
     /// `MAX_DRAFT_CHARS`.
     Reply { room: String, parent: u64, text: String },
+    /// List the files in the person's rooms (task T331b).
+    ListFiles,
     /// Start a call in `room` (with video or not), or join its open one (task T360a2).
     CallStart { room: String, video: bool },
     /// Join the open call `call` of `room` (task T360a2).

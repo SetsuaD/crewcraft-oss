@@ -140,6 +140,10 @@ pub enum Update {
         room: String,
         parents: Vec<(u64, u64)>,
     },
+    /// The files in the person's rooms, newest message first (task T331b).
+    Files {
+        files: Vec<crewcraft_proto::request::ListedFile>,
+    },
     /// `room`'s open call (or none) and its call history lines by cursor (task T360a2).
     Calls {
         room: String,
@@ -196,6 +200,7 @@ impl fmt::Debug for Update {
             Self::Uploaded { room, file } => f.debug_struct("Uploaded").field("room", room).field("name", &file.name).finish(),
             Self::Attachments { room, files } => f.debug_struct("Attachments").field("room", room).field("messages", &files.len()).finish(),
             Self::Threads { room, parents } => f.debug_struct("Threads").field("room", room).field("replies", &parents.len()).finish(),
+            Self::Files { files } => f.debug_struct("Files").field("files", &files.len()).finish(),
             Self::Calls { room, open, lines } => {
                 f.debug_struct("Calls").field("room", room).field("open", &open.as_ref().map(|c| c.call)).field("lines", &lines.len()).finish()
             }
@@ -314,6 +319,8 @@ pub struct Window {
     focus_scrolled: bool,
     /// Who reacted to each message with what, per room and cursor (T341b).
     reactions: HashMap<String, std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>>,
+    /// The Files area (T331b): `Some` while it is open, with the list once it arrived.
+    files_view: Option<Option<Vec<crewcraft_proto::request::ListedFile>>>,
     /// Each room's open call (T360a2).
     open_calls: HashMap<String, crewcraft_client_core::room_view::OpenCall>,
     /// Each room's call history lines by cursor (T360a2).
@@ -482,6 +489,11 @@ impl Window {
             Update::Threads { room, parents } => {
                 self.threads.insert(room, parents.into_iter().collect());
             }
+            Update::Files { files } => {
+                if self.files_view.is_some() {
+                    self.files_view = Some(Some(files));
+                }
+            }
             Update::Calls { room, open, lines } => {
                 // Ring: a call someone else started that this app did not know about (T360a2).
                 if let Some(open) = &open
@@ -542,6 +554,7 @@ impl Window {
                 self.archived.clear();
                 self.sent_times.clear();
                 self.open_calls.clear();
+                self.files_view = None;
                 self.call_lines.clear();
                 self.in_call = None;
                 self.open_thread = None;
@@ -736,8 +749,21 @@ impl Window {
             ui.add_space(8.0);
             let total = self.rooms.total_unread();
             let chat = if total > 0 { format!("Chat ({total})") } else { "Chat".to_owned() };
-            let _ = ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(true, chat));
+            if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.files_view.is_none(), chat)).clicked() {
+                self.files_view = None;
+            }
+            // The Files area (T331b): every file in my rooms.
+            if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.files_view.is_some(), "Files")).clicked()
+                && self.files_view.is_none()
+            {
+                self.files_view = Some(None);
+                self.actions.push(Action::Room(Command::ListFiles));
+            }
         });
+        if self.files_view.is_some() {
+            self.files_ui(ui);
+            return;
+        }
         egui::Panel::left("crewcraft-rooms").resizable(true).default_size(220.0).show(ui, |ui| {
             ui.add_space(4.0);
             ui.strong("Rooms");
@@ -1037,6 +1063,53 @@ impl Window {
     /// The message a search result opened, `(room, cursor)` (T321).
     pub fn focus(&self) -> Option<(&str, u64)> {
         self.focus.as_ref().map(|(room, cursor)| (room.as_str(), *cursor))
+    }
+
+    /// Whether the Files area is open (T331b).
+    pub fn files_open(&self) -> bool {
+        self.files_view.is_some()
+    }
+
+    /// The Files area (T331b): every file in my rooms, newest first, each with Save and the room it is in.
+    fn files_ui(&mut self, ui: &mut Ui) {
+        let mut save = None;
+        let mut refresh = false;
+        egui::Panel::top("crewcraft-files-header").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("Files");
+                if ui.button("Refresh files").clicked() {
+                    refresh = true;
+                }
+            });
+        });
+        let files = self.files_view.clone().flatten();
+        egui::CentralPanel::default_margins().show(ui, |ui| match &files {
+            None => {
+                ui.label("Loading files...");
+            }
+            Some(files) if files.is_empty() => {
+                ui.label("No files in your rooms yet.");
+            }
+            Some(files) => {
+                ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                    for file in files {
+                        ui.horizontal(|ui| {
+                            if ui.small_button(format!("Save {}", file.name)).clicked() {
+                                save = Some(file.clone());
+                            }
+                            ui.label(format!("{} ({})", file.name, short_size(file.size)));
+                            ui.weak(format!("in {}", file.room));
+                        });
+                    }
+                });
+            }
+        });
+        if refresh {
+            self.actions.push(Action::Room(Command::ListFiles));
+        }
+        if let Some(file) = save {
+            self.actions.push(Action::Room(Command::Save { file: file.file, size: file.size, name: file.name, to: None }));
+        }
     }
 
     /// The call this app is in, `(room, call)` (T360a2).

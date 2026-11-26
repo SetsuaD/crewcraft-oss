@@ -1,0 +1,25 @@
+{
+  "id": "T331b-files-app",
+  "title": "The Files area in the app: every file in my rooms, with Save",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/ui-model/src/lib.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t331b_files_window.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t331b_files.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t331b_files",
+  "depends_on": [
+    "T331a-file-list",
+    "T330e-files-app"
+  ],
+  "spec": "The app agrees to FEATURE_FILE_LIST. ChatSession::list_files sends ListFiles and reads the files frame (Unsupported without the feature; a frame of another length than the answer said closes the session); SignedInSession::list_files (None when not offered). Command::ListFiles; the worker emits Event::Files (Update::Files), or FilesNotOffered. The window's app bar has Files under Chat: Files opens the Files area and asks for the list ('Loading files...'), shows each file as 'name (size)' with 'in <room>' and 'Save <name>' (Command::Save), says 'No files in your rooms yet.' when empty, and 'Refresh files' asks again; Chat returns to the conversation. End to end, a file Alice posted is in Bob's list with its room, size and uploader, and saves byte for byte.",
+  "status": "done",
+  "context": [
+    "docs/FILES.md"
+  ]
+}

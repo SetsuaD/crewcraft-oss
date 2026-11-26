@@ -107,6 +107,8 @@ pub enum Event {
     Threads { room: String, parents: Vec<(u64, u64)> },
     /// `room` is an archive room, with its imported messages' original times by cursor (task T350d2).
     Archive { room: String, times: Vec<(u64, u64)> },
+    /// The files in the person's rooms, newest message first (task T331b).
+    Files { files: Vec<crewcraft_proto::request::ListedFile> },
     /// `room`'s open call (or none) and its call history lines by cursor, whenever they change (task T360a2).
     Calls { room: String, open: Option<crewcraft_client_core::room_view::OpenCall>, lines: Vec<(u64, String)> },
     /// This app is now in call `call` of `room` (task T360a2).
@@ -583,6 +585,7 @@ impl Run {
                 }
                 Some(Input::Command(Command::Delete { room, target })) => self.change(room, |session, room| session.delete(room, target)),
                 Some(Input::Command(Command::Search { query })) => self.search(query),
+                Some(Input::Command(Command::ListFiles)) => self.list_files(),
                 Some(Input::Command(Command::Attach { room, path })) => self.attach(room, path),
                 Some(Input::Command(Command::Reply { room, parent, text })) => self.reply(room, parent, text),
                 Some(Input::Command(Command::CallStart { room, video })) => self.call_start(room, video),
@@ -1032,6 +1035,20 @@ impl Run {
                 self.emit(Event::SearchResults { query, hits });
             }
             Ok(None) => self.emit(Event::Failed(Problem::SearchNotOffered)),
+            Err(error) => {
+                self.request_failed(error);
+            }
+        }
+    }
+
+    /// The file list (task T331b).
+    fn list_files(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        match session.list_files() {
+            Ok(Some(files)) => self.emit(Event::Files { files }),
+            Ok(None) => self.emit(Event::Failed(Problem::FilesNotOffered)),
             Err(error) => {
                 self.request_failed(error);
             }
