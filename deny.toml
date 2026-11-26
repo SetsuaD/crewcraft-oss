@@ -31,6 +31,10 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; via accesskit_unix (screen reader on Linux)" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; via accesskit_unix (screen reader on Linux)" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; via accesskit_unix (screen reader on Linux)" },
+  # chrono's maintainer is winding it down (chronotope/chrono#1768), but the Craft time standard (standards/time.md
+  # in storytold/craft-contrib) requires chrono for calendar dates. We use it with default features off, for date
+  # arithmetic only. Drop this line when that standard moves to another crate, and move with it.
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; the Craft time standard requires it; date arithmetic only" },
 ]
 
 [bans]

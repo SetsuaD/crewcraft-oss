@@ -43,6 +43,10 @@ chacha20poly1305 = { version = "0.10", default-features = false, features = ["al
 zeroize = "1"
 ed25519-dalek = { version = "2", default-features = false, features = ["zeroize"] }
 
+# Calendar dates (the Craft time standard: no hand-rolled calendar math). Default features off: no clock, no time
+# zone database, no OS calls; only the date types and their arithmetic.
+chrono = { version = "0.4", default-features = false }
+
 # TLS (docs/NON-RUST-DEPENDENCIES.md): rustls with the ring provider, TLS 1.3 only; rcgen makes test certificates.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "x509-parser"] }

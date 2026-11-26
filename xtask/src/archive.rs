@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 use std::io::Write;
 
+use chrono::{DateTime, Datelike};
 use flate2::write::DeflateEncoder;
 use flate2::{Compression, Crc, GzBuilder};
 
@@ -147,20 +148,17 @@ pub fn tar_gz(files: &[TreeFile], prefix: &str, mtime: u64) -> Result<Vec<u8>> {
 
 /// MS-DOS date and time fields for a Unix time (UTC), clamped to 1980, the earliest a zip can hold.
 pub fn dos_date_time(unix: u64) -> (u16, u16) {
-    let days = unix / 86_400;
-    let seconds = unix % 86_400;
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-    let z = days as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
+    /// Days in 400 Gregorian years, after which the calendar repeats.
+    const CYCLE_DAYS: u64 = 146_097;
+    let earliest = ((1 << 5) | 1, 0);
+    let (days, seconds) = (unix / 86_400, unix % 86_400);
+    // chrono gives the date (Craft standard time.md). A time past chrono's range is first moved back by whole 400-year
+    // cycles, which keeps the month and day, and the cycles go back on the year.
+    let (cycles, rest) = (days / CYCLE_DAYS, days % CYCLE_DAYS);
+    let Some(date) = i64::try_from(rest * 86_400).ok().and_then(|at| DateTime::from_timestamp(at, 0)) else { return earliest };
+    let (year, month, day) = (u64::from(date.year().unsigned_abs()) + 400 * cycles, date.month(), date.day());
     if year < 1980 {
-        return ((1 << 5) | 1, 0);
+        return earliest;
     }
     let year = year.min(2107);
     let date = (((year - 1980) as u16) << 9) | ((month as u16) << 5) | day as u16;
@@ -266,4 +264,27 @@ pub fn ar(members: &[(&str, &[u8])], mtime: u64) -> Result<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dos_date_time;
+
+    /// MS-DOS fields: year since 1980, month and day in the date; hours, minutes and two-second units in the time.
+    fn fields(year: u16, month: u16, day: u16, hour: u16, minute: u16, second: u16) -> (u16, u16) {
+        (((year - 1980) << 9) | (month << 5) | day, (hour << 11) | (minute << 5) | (second / 2))
+    }
+
+    #[test]
+    fn zip_times_follow_the_calendar() {
+        assert_eq!(dos_date_time(315_532_800), fields(1980, 1, 1, 0, 0, 0), "the first day a zip can hold");
+        assert_eq!(dos_date_time(315_532_799), fields(1980, 1, 1, 0, 0, 0), "earlier times are clamped to it");
+        assert_eq!(dos_date_time(1_709_214_330), fields(2024, 2, 29, 13, 45, 30), "a leap day");
+        assert_eq!(dos_date_time(1_709_251_199), fields(2024, 2, 29, 23, 59, 58));
+        assert_eq!(dos_date_time(1_709_251_200), fields(2024, 3, 1, 0, 0, 0));
+        // 2380-01-01, one 400-year cycle on: the year is clamped to 2107, the month and day are kept.
+        assert_eq!(dos_date_time(12_938_313_600), fields(2107, 1, 1, 0, 0, 0));
+        // Far past chrono's range: no panic, the year clamped.
+        assert_eq!(dos_date_time(u64::MAX).0 >> 9, 2107 - 1980);
+    }
 }

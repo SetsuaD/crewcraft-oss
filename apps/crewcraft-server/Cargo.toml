@@ -12,6 +12,8 @@ publish.workspace = true
 ctrlc = { version = "3.4", features = ["termination"] }
 # The Teams exporter (T351): the `/shares` id of a shared file is its address in unpadded base64url.
 base64.workspace = true
+# The calendar under the Teams reader's times (T350c).
+chrono.workspace = true
 crewcraft-accounts.workspace = true
 crewcraft-admission.workspace = true
 # External sign-in (T611e): the authorizer rules, the OIDC checks and the outgoing HTTPS client.
