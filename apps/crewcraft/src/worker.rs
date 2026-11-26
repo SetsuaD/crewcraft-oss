@@ -848,7 +848,8 @@ impl Run {
     }
 
     fn call_join(&mut self, room: String, call: u64) {
-        let result = self.session.as_mut().map(|session| session.call(&room, call, |room, call| crewcraft_proto::request::Request::CallJoin { room, call }));
+        let result =
+            self.session.as_mut().map(|session| session.call(&room, call, |room, call| crewcraft_proto::request::Request::CallJoin { room, call }));
         self.entered_call(room, result);
     }
 
@@ -879,7 +880,8 @@ impl Run {
             self.in_call = None;
         }
         // A refusal means the call already ended or this person had left it: either way they are out.
-        let result = self.session.as_mut().map(|session| session.call(&room, call, |room, call| crewcraft_proto::request::Request::CallLeave { room, call }));
+        let result =
+            self.session.as_mut().map(|session| session.call(&room, call, |room, call| crewcraft_proto::request::Request::CallLeave { room, call }));
         if let Some(Err(error)) = result {
             let problem = problem(error);
             if problem.ends_session() {
@@ -904,11 +906,7 @@ impl Run {
             Err(error) => match problem(error) {
                 Problem::Refused(code) => {
                     self.in_call = None;
-                    let reason = if code == 1 {
-                        "You are no longer in this room, so you left the call."
-                    } else {
-                        "The call ended."
-                    };
+                    let reason = if code == 1 { "You are no longer in this room, so you left the call." } else { "The call ended." };
                     self.emit(Event::LeftCall { room, reason: Some(reason.to_owned()) });
                 }
                 other => {

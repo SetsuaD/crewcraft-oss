@@ -22,13 +22,14 @@ use crewcraft::loopback::parse_query;
 use crewcraft::server_endpoint::ServerEndpoint;
 use crewcraft::worker::{Browser, WorkerConfig};
 use crewcraft_bootstrap::{Environment, ExternalEnrollment};
-use crewcraft_client_core::room_view::Shown;
 use crewcraft_desktop_ui::{Action, Update};
 use crewcraft_enroll::EnrollmentCode;
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_oidc::{Key, parse_jwks};
 use crewcraft_proto::handshake::ServerSide;
-use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS};
+use crewcraft_proto::request::{
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS,
+};
 use crewcraft_server::external_signin::{ExternalSignIn, Provider};
 use crewcraft_server::lab_bootstrap::bootstrap_handler_with;
 use crewcraft_server::lab_installation::LabInstallation;
@@ -242,17 +243,6 @@ fn signed_in(dir: PathBuf, join: Join, seen: &Arc<Mutex<Seen>>, email: &str, sub
     app
 }
 
-/// The cursor of the message whose HTML contains `text`, from the snapshots in `updates`.
-fn cursor_of(updates: &[Update], text: &str) -> Option<u64> {
-    updates.iter().rev().find_map(|update| match update {
-        Update::Snapshot { shown, .. } => shown.iter().find_map(|row| match row {
-            Shown::Line(line) if line.html.contains(text) => Some(line.cursor),
-            _ => None,
-        }),
-        _ => None,
-    })
-}
-
 #[test]
 fn a_call_reaches_the_other_person_and_ends_for_both() {
     let scratch = Scratch::new();
@@ -301,9 +291,11 @@ fn a_call_reaches_the_other_person_and_ends_for_both() {
     let call = call.unwrap();
 
     // Bob's app sees it, and joins.
-    poll_until(&mut bob, "the call", |update| {
-        matches!(update, Update::Calls { open: Some(open), lines, .. } if open.call == call && open.started_by == ALICE && lines.iter().any(|(_, text)| text == "started a call"))
-    });
+    poll_until(
+        &mut bob,
+        "the call",
+        |update| matches!(update, Update::Calls { open: Some(open), lines, .. } if open.call == call && open.started_by == ALICE && lines.iter().any(|(_, text)| text == "started a call")),
+    );
     assert!(bob.act(Action::Room(Command::CallJoin { room: room.clone(), call })).is_empty());
     poll_until(&mut bob, "Bob in the call", |update| matches!(update, Update::InCall { call: Some(c), .. } if *c == call));
     poll_until(&mut alice, "both in it", |update| matches!(update, Update::Calls { open: Some(open), .. } if open.participants.len() == 2));
