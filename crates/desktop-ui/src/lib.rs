@@ -146,9 +146,7 @@ impl fmt::Debug for Update {
             Self::Snapshot { room, shown } => f.debug_struct("Snapshot").field("room", room).field("rows", &shown.len()).finish(),
             Self::Unread { room, unread } => f.debug_struct("Unread").field("room", room).field("unread", unread).finish(),
             Self::LastEmail(email) => f.debug_tuple("LastEmail").field(email).finish(),
-            Self::SearchResults { query, results } => {
-                f.debug_struct("SearchResults").field("query", query).field("results", &results.len()).finish()
-            }
+            Self::SearchResults { query, results } => f.debug_struct("SearchResults").field("query", query).field("results", &results.len()).finish(),
             Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
             Self::WaitingForBrowser => f.write_str("WaitingForBrowser"),
             Self::Failed(text) => f.debug_tuple("Failed").field(text).finish(),
@@ -503,7 +501,8 @@ impl Window {
                 ui.add_space(16.0);
                 // Message search (T320c): Enter or the button sends it; the main pane then shows what it found.
                 let label = ui.label("Search messages");
-                let search = ui.add(TextEdit::singleline(&mut self.message_query).hint_text("Find a message").desired_width(180.0)).labelled_by(label.id);
+                let search =
+                    ui.add(TextEdit::singleline(&mut self.message_query).hint_text("Find a message").desired_width(180.0)).labelled_by(label.id);
                 let enter = search.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
                 if ui.button("Search").clicked() || enter {
                     let query = self.message_query.trim();

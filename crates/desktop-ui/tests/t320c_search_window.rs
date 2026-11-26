@@ -66,5 +66,8 @@ fn results_replace_the_conversation_and_open_their_room() {
     h.run();
     assert_eq!(h.state().search_results(), None);
     assert!(h.query_by_label("No messages match.").is_none());
-    assert_eq!(format!("{:?}", Update::SearchResults { query: "q".into(), results: vec![result("r", 1, "", "s")] }), "SearchResults { query: \"q\", results: 1 }");
+    assert_eq!(
+        format!("{:?}", Update::SearchResults { query: "q".into(), results: vec![result("r", 1, "", "s")] }),
+        "SearchResults { query: \"q\", results: 1 }"
+    );
 }

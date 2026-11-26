@@ -309,13 +309,17 @@ fn a_person_searches_their_messages_and_finds_the_current_text() {
 
     // An edit is found by its new text; a deleted message is not found.
     assert!(app.act(Action::Room(Command::Edit { room: room.clone(), target: first, text: "The kickoff moved to Tuesday".into() })).is_empty());
-    poll_until(&mut app, "the edit", |update| {
-        matches!(update, Update::Snapshot { shown, .. } if shown.iter().any(|line| matches!(line, Shown::Line(line) if line.html.contains("Tuesday"))))
-    });
+    poll_until(
+        &mut app,
+        "the edit",
+        |update| matches!(update, Update::Snapshot { shown, .. } if shown.iter().any(|line| matches!(line, Shown::Line(line) if line.html.contains("Tuesday")))),
+    );
     assert!(app.act(Action::Room(Command::Delete { room: room.clone(), target: second })).is_empty());
-    poll_until(&mut app, "the deletion", |update| {
-        matches!(update, Update::Snapshot { shown, .. } if !shown.iter().any(|line| matches!(line, Shown::Line(line) if line.html.contains("Slides"))))
-    });
+    poll_until(
+        &mut app,
+        "the deletion",
+        |update| matches!(update, Update::Snapshot { shown, .. } if !shown.iter().any(|line| matches!(line, Shown::Line(line) if line.html.contains("Slides")))),
+    );
     assert_eq!(search(&mut app, "kickoff"), vec![expected(first, "The kickoff moved to Tuesday")]);
     assert!(search(&mut app, "nothing-like-this").is_empty());
     drop(app);
