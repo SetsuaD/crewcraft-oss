@@ -3,8 +3,11 @@
 //!
 //! Owns: the SFrame header (key id and counter, minimally encoded), the key schedule (HKDF from a base key, labelled
 //! with the key id and cipher suite), and frame encryption and decryption for the AES-GCM cipher suites. Key
-//! management (who gets which base key) is the caller's (task T360d). AES-GCM and HKDF come from `ring`, which the TLS
-//! stack already brings.
+//! management (who gets which base key) is the caller's; `seal` seals a base key to one participant (task T360d1).
+//! AES-GCM and HKDF come from `ring`, which the TLS stack already brings; X25519 from `curve25519-dalek`, already
+//! in the build through the update signatures.
+
+pub mod seal;
 
 use ring::aead::{AES_128_GCM, AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use ring::hkdf::{HKDF_SHA256, HKDF_SHA512, KeyType, Salt};

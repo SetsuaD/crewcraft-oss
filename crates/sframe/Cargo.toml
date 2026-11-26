@@ -10,6 +10,9 @@ publish.workspace = true
 [dependencies]
 # AES-GCM and HKDF; ring is already the TLS stack's crypto provider (docs/NON-RUST-DEPENDENCIES.md).
 ring = "0.17"
+# X25519 for sealing sender keys (T360d1); already in the build through ed25519-dalek.
+curve25519-dalek = { version = "4.1", default-features = false, features = ["zeroize"] }
+zeroize.workspace = true
 
 [lints]
 workspace = true
