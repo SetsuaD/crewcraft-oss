@@ -13,7 +13,7 @@
   "depends_on": [
     "T330b-upload"
   ],
-  "spec": "Request 13 Download { file, offset, length (1 to MAX_CHUNK) }, under FEATURE_FILES, is answered Ok { cursor: n } then a bytes frame (tag 134: id, u32 n, n bytes): the file's bytes from offset, at most length, fewer at the end, none past it. DurableServer::download checks on every request that the file is recorded and that the person is a member of its room now; otherwise NotFound, answered E_NO_SUCH_FILE alike for a file that does not exist, one in a room the person was never in, and one in a room they left. Without storage it is NoStorage (E_NO_STORAGE), also from the in-memory server.",
+  "spec": "Request 14 Download (13 stays unassigned) { file, offset, length (1 to MAX_CHUNK) }, under FEATURE_FILES, is answered Ok { cursor: n } then a bytes frame (tag 134: id, u32 n, n bytes): the file's bytes from offset, at most length, fewer at the end, none past it. DurableServer::download checks on every request that the file is recorded and that the person is a member of its room now; otherwise NotFound, answered E_NO_SUCH_FILE alike for a file that does not exist, one in a room the person was never in, and one in a room they left. Without storage it is NoStorage (E_NO_STORAGE), also from the in-memory server.",
   "status": "done",
   "context": [
     "docs/FILES.md"

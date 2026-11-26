@@ -14,7 +14,7 @@
 //! - tag 10 `UploadBegin`: `str room | str name (1 to MAX_FILE_NAME) | u64 size | 32 SHA-256` (task T330b)
 //! - tag 11 `UploadChunk`: `16 upload id | u64 offset | u32 length | bytes (1 to MAX_CHUNK)`
 //! - tag 12 `UploadFinish`: `16 upload id`
-//! - tag 13 `Download`: `16 file id | u64 offset | u32 length (1 to MAX_CHUNK)` (task T330d)
+//! - tag 14 `Download`: `16 file id | u64 offset | u32 length (1 to MAX_CHUNK)` (task T330d; tag 13 is unassigned)
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
@@ -80,7 +80,7 @@ const SEARCH: u8 = 9;
 const UPLOAD_BEGIN: u8 = 10;
 const UPLOAD_CHUNK: u8 = 11;
 const UPLOAD_FINISH: u8 = 12;
-const DOWNLOAD: u8 = 13;
+const DOWNLOAD: u8 = 14;
 
 /// A request. `ListRooms` asks for the rooms the signed-in person is a member of.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,7 +310,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(1..=6).contains(&tag) && !(LIST_ROOMS..=DOWNLOAD).contains(&tag) {
+    if !(1..=6).contains(&tag) && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag) && tag != DOWNLOAD {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;

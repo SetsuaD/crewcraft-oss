@@ -42,7 +42,7 @@ fn with_a_file(dir: &Path, bytes: &[u8]) -> (DurableServer, String, [u8; 16]) {
 fn the_request_and_the_bytes_frame_have_exact_bytes() {
     let request = Request::Download { file: [5; 16], offset: 7, length: 100 };
     let bytes = encode_request(3, &request).unwrap();
-    let mut expected = vec![13, 0, 0, 0, 3];
+    let mut expected = vec![14, 0, 0, 0, 3];
     expected.extend_from_slice(&[5; 16]);
     expected.extend_from_slice(&7u64.to_be_bytes());
     expected.extend_from_slice(&100u32.to_be_bytes());
@@ -62,6 +62,7 @@ fn the_request_and_the_bytes_frame_have_exact_bytes() {
     assert_eq!(decode_bytes(&longer).unwrap_err(), CodecError::TrailingBytes);
     assert_eq!(encode_bytes(1, &vec![0; MAX_CHUNK + 1]).unwrap_err(), CodecError::FieldLength);
     assert_eq!(decode_bytes(&[133, 0, 0, 0, 1]).unwrap_err(), CodecError::BadKind(133));
+    assert_eq!(decode_request(&[13, 0, 0, 0, 1]).unwrap_err(), CodecError::BadKind(13), "tag 13 stays unassigned");
 }
 
 #[test]
