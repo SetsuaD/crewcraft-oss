@@ -557,6 +557,8 @@ pub fn worker_update(event: Event) -> Vec<Update> {
         Event::SignedIn { email, rooms } => vec![Update::SignedIn { email, rooms }],
         Event::WaitingForBrowser => vec![Update::WaitingForBrowser],
         Event::Room { room, shown } => vec![Update::Snapshot { room, shown }],
+        Event::Recovered { room } => vec![Update::Recovered { room }],
+        Event::Gap { room, notice } => vec![Update::Gap { room, notice }],
         Event::Unread { room, count } => vec![Update::Unread { room, unread: count }],
         Event::ReadState { room, state } => vec![Update::ReadState { room, unread: state.unread }],
         Event::MarkedUnread { room } => vec![Update::MarkedUnread { room }],

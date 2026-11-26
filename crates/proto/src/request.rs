@@ -42,6 +42,8 @@
 //!   at most `MAX_SAVED_PAGE` rows fit a frame. Continue after the last row while `more` is true. Booleans are 0 or 1.
 //! - tag 29 `MarkUnread` (task T344), announced by `FEATURE_READ_STATE`: `str room | u64 target`. Zero chooses the
 //!   newest live message by someone else. `Ok.cursor` is the resulting personal read position, not the room head.
+//! - tag 30 `Current` (T345), announced by `FEATURE_GAP_REPLAY`: `str room`. `Ok.cursor` is the captured event head,
+//!   followed by bounded `current::CurrentPage` frames until their explicit last flag. See `current` for the codec.
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
@@ -113,6 +115,8 @@ pub const FEATURE_FILE_LIST: u32 = 128;
 pub const FEATURE_PINS_SAVED: u32 = 256;
 /// Authoritative personal read positions and the mark-as-unread request (task T344).
 pub const FEATURE_READ_STATE: u32 = 1024;
+/// Explicit event gaps and bounded, atomic current-message recovery (T345).
+pub const FEATURE_GAP_REPLAY: u32 = 2048;
 /// The first byte of a saved-message page.
 pub const SAVED_TAG: u8 = 136;
 /// Sixteen full rendered bodies, including their metadata, fit inside `frame::MAX_FRAME`.
@@ -167,6 +171,7 @@ const PIN: u8 = 26;
 const SAVE_MESSAGE: u8 = 27;
 const LIST_SAVED: u8 = 28;
 const MARK_UNREAD: u8 = 29;
+const CURRENT: u8 = 30;
 const CALL_OFFER: u8 = 31;
 /// The largest sealed sender key a `CallSeal` carries.
 pub const MAX_SEALED: usize = 256;
@@ -201,6 +206,10 @@ pub enum Request {
     MarkUnread {
         room: String,
         target: u64,
+    },
+    /// The newest bounded current-message window, independent of the retained event tail (T345).
+    Current {
+        room: String,
     },
     Ping,
     ListRooms,
@@ -453,6 +462,11 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             write_str(&mut out, room, 1, MAX_NAME)?;
             out.extend_from_slice(&target.to_be_bytes());
         }
+        Request::Current { room } => {
+            out.push(CURRENT);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+        }
         Request::Ping => {
             out.push(6);
             out.extend_from_slice(&id.to_be_bytes());
@@ -618,7 +632,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
     let tag = bytes[0];
     if !(1..=6).contains(&tag)
         && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag)
-        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT | PIN | SAVE_MESSAGE | LIST_SAVED | MARK_UNREAD | CALL_OFFER)
+        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT | PIN | SAVE_MESSAGE | LIST_SAVED | MARK_UNREAD | CURRENT | CALL_OFFER)
         && !(CALL_START..=STORAGE_USE).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));
@@ -657,6 +671,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
             let target = read_u64(bytes, &mut pos)?;
             Request::MarkUnread { room, target }
         }
+        CURRENT => Request::Current { room: read_string(bytes, &mut pos, 1, MAX_NAME)? },
         6 => Request::Ping,
         LIST_ROOMS => Request::ListRooms,
         SEARCH => Request::Search { query: read_string(bytes, &mut pos, 1, MAX_QUERY)? },
@@ -1267,6 +1282,21 @@ mod read_state_tests {
     use super::*;
 
     #[test]
+    fn current_request_refuses_partial_trailing_and_empty_room_fields() -> Result<(), CodecError> {
+        let request = Request::Current { room: "room".into() };
+        let bytes = encode_request(22, &request)?;
+        assert_eq!(decode_request(&bytes)?, (22, request));
+        for end in 0..bytes.len() {
+            assert!(decode_request(&bytes[..end]).is_err());
+        }
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert_eq!(decode_request(&trailing), Err(CodecError::TrailingBytes));
+        assert!(encode_request(22, &Request::Current { room: String::new() }).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn mark_unread_accepts_default_and_full_cursor_but_rejects_partial_or_extra_fields() -> Result<(), CodecError> {
         for target in [0, 1, u64::MAX] {
             let request = Request::MarkUnread { room: "room".into(), target };
@@ -1314,7 +1344,7 @@ mod pins_saved_tests {
             let request = Request::ListSaved { after_room, after_cursor };
             assert_eq!(decode_request(&encode_request(8, &request).unwrap()).unwrap(), (8, request));
         }
-        for tag in [0, 7, 13, 30, 63, 128, SAVED_TAG, 255] {
+        for tag in [0, 7, 13, 32, 63, 128, SAVED_TAG, 255] {
             assert_eq!(decode_request(&[tag]), Err(CodecError::BadKind(tag)));
         }
         assert!(encode_request(8, &Request::ListSaved { after_room: String::new(), after_cursor: 4 }).is_err());

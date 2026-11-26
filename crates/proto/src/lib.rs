@@ -7,6 +7,7 @@
 pub const PROTOCOL_VERSION: (u16, u16) = (0, 1);
 
 pub mod bootstrap;
+pub mod current;
 pub mod frame;
 pub mod handshake;
 pub mod media_control;

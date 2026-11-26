@@ -51,6 +51,10 @@ impl Inbox {
     /// `mentioned` is whether the push's mentions contain `me` (ASCII case-insensitively) and whose `direct` is the room's
     /// flag; every other push is `Notify::None`.
     pub fn on_push(&mut self, push: Push, now_ms: u64, local_minute: u16) -> Option<(Apply, Notify)> {
+        if let Push::Gap { room, cursor, after, oldest } = push {
+            self.views.get_mut(&room)?.note_gap(cursor, after, oldest);
+            return Some((Apply::Duplicate, Notify::None));
+        }
         if let Push::ReadState { room, cursor, position, revision, unread } = push {
             self.views.get_mut(&room)?.set_read_state(crate::room_view::ReadState { head: cursor, position, revision, unread });
             return Some((Apply::Duplicate, Notify::None));
@@ -134,6 +138,7 @@ impl Inbox {
             | Push::CallSealed { .. }
             | Push::Pinned { .. }
             | Push::ReadState { .. } => return None,
+            Push::Gap { .. } => return None,
         };
 
         let is_direct = self.direct.get(room).copied().unwrap_or(false);

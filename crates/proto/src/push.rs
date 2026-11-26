@@ -37,6 +37,9 @@
 //!   `request::FEATURE_READ_STATE`, the asking person's current read position, personal revision and unread total.
 //!   Its cursor is the room head and advances no timeline. Personal revisions also change when the room head stays
 //!   the same. A legacy MarkRead may have placed the position beyond the head, which this snapshot preserves.
+//! - tag 81 `Gap` (T345): `u64 after | u64 oldest`. With `request::FEATURE_GAP_REPLAY`, the LAST frame of a
+//!   successful Sync whose requested cursor predates the retained tail. Its cursor is the room head; the missing
+//!   event interval is after+1 through oldest-1. It advances no timeline and is not a current-state replacement.
 //!
 //! `room`, `author` and each mention are 1 to `message::MAX_NAME` bytes; `html` is 0 to `MAX_HTML` bytes; at most
 //! `MAX_MENTIONS` mentions.
@@ -64,6 +67,8 @@ pub const CALL_SEALED: u8 = 78;
 pub const PINNED: u8 = 79;
 /// A snapshot of the asking person's read position and unread count (task T344).
 pub const READ_STATE: u8 = 80;
+/// An explicit missing event interval, last after the other Sync metadata (T345).
+pub const GAP: u8 = 81;
 /// The most participants a `CallState` lists.
 pub const MAX_PARTICIPANTS: usize = 255;
 /// The tag of `Push::Reacted` (task T341a).
@@ -94,6 +99,12 @@ pub struct AttachedFile {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Push {
+    Gap {
+        room: String,
+        cursor: u64,
+        after: u64,
+        oldest: u64,
+    },
     /// Personal read metadata at a room head. Revision orders position changes, including a backwards move.
     ReadState {
         room: String,
@@ -263,6 +274,14 @@ fn read_u8(bytes: &[u8], pos: &mut usize) -> Result<u8, CodecError> {
 pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
     let mut out = Vec::new();
     match push {
+        Push::Gap { room, cursor, after, oldest } => {
+            check_gap(*cursor, *after, *oldest)?;
+            out.push(GAP);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&after.to_be_bytes());
+            out.extend_from_slice(&oldest.to_be_bytes());
+        }
         Push::ReadState { room, cursor, position, revision, unread } => {
             out.push(READ_STATE);
             write_str(&mut out, room, 1, MAX_NAME)?;
@@ -449,6 +468,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         && tag != CALL_SEALED
         && tag != PINNED
         && tag != READ_STATE
+        && tag != GAP
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -457,6 +477,12 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
     let cursor = read_u64(bytes, &mut pos)?;
 
     let push = match tag {
+        GAP => {
+            let after = read_u64(bytes, &mut pos)?;
+            let oldest = read_u64(bytes, &mut pos)?;
+            check_gap(cursor, after, oldest)?;
+            Push::Gap { room, cursor, after, oldest }
+        }
         READ_STATE => {
             let position = read_u64(bytes, &mut pos)?;
             let revision = read_u64(bytes, &mut pos)?;
@@ -624,9 +650,30 @@ fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, CodecError> {
     Ok(value)
 }
 
+fn check_gap(head: u64, after: u64, oldest: u64) -> Result<(), CodecError> {
+    if oldest > head || oldest.saturating_sub(after) <= 1 { Err(CodecError::FieldLength) } else { Ok(()) }
+}
+
 #[cfg(test)]
 mod read_state_tests {
     use super::*;
+
+    #[test]
+    fn explicit_gaps_carry_only_a_real_missing_interval_and_refuse_partial_frames() -> Result<(), CodecError> {
+        let gap = Push::Gap { room: "room".into(), cursor: 20, after: 2, oldest: 8 };
+        let bytes = encode_push(&gap)?;
+        assert_eq!(decode_push(&bytes)?, gap);
+        for end in 0..bytes.len() {
+            assert!(decode_push(&bytes[..end]).is_err());
+        }
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert_eq!(decode_push(&trailing), Err(CodecError::TrailingBytes));
+        for (after, oldest) in [(2, 3), (8, 2), (u64::MAX, 20), (0, 21)] {
+            assert!(encode_push(&Push::Gap { room: "room".into(), cursor: 20, after, oldest }).is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     fn read_state_preserves_future_legacy_positions_and_refuses_incomplete_or_trailing_fields() -> Result<(), CodecError> {

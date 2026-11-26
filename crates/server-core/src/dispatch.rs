@@ -140,6 +140,13 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         Request::Ping => return Ok(Response::Ok { cursor: 0 }),
         Request::ListRooms => return Ok(Response::Ok { cursor: listed_rooms(backend.server(), user).len() as u64 }),
         Request::Search { query } => return Ok(Response::Ok { cursor: backend.found(user, query).len() as u64 }),
+        // Current requires a full durable projection and correlated follow frames, supplied by the connection.
+        Request::Current { room } => {
+            return Ok(match backend.server().room(room) {
+                Ok(service) if service.role(user).is_some() => refusal(E_NO_STORAGE),
+                _ => refusal(E_NO_SUCH_ROOM),
+            });
+        }
         // Uploads (task T330b) need a journal; the connection answers them (`connection::Connection::receive_durable`)
         // because their answer carries an id frame. Without a journal there is nowhere to keep files.
         Request::UploadBegin { .. }

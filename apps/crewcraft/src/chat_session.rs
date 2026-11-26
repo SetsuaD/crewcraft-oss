@@ -6,14 +6,14 @@ use std::time::{Duration, Instant};
 use crewcraft_client_core::client::{Client, ClientEvent};
 use crewcraft_client_core::notify::Settings;
 use crewcraft_client_core::requests::Reply as RequestReply;
-use crewcraft_client_core::room_view::RoomView;
+use crewcraft_client_core::room_view::{CurrentWindow, RoomView};
 use crewcraft_client_core::session::{ClientSession, Phase, SessionError};
 use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
 use crewcraft_proto::request::{
-    FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_READ_STATE, FEATURE_SEARCH,
-    FEATURE_THREADS, MAX_SAVED_PAGE, Request, Response, SavedMessage, SavedPage, SearchHit,
+    FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS,
+    FEATURE_READ_STATE, FEATURE_SEARCH, FEATURE_THREADS, MAX_SAVED_PAGE, Request, Response, SavedMessage, SavedPage, SearchHit,
 };
 use crewcraft_proto::signin::{self, Opening, SignIn};
 use zeroize::Zeroizing;
@@ -474,6 +474,28 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
     /// Follow the room and fetch events after its current cursor. Return the acknowledged head
     /// after the timeline reaches it. A gap or incomplete replay leaves the applied prefix visible.
     pub fn sync(&mut self, room: &str, direct: bool, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<u64, ChatError> {
+        let (head, gap) = self.sync_once(room, direct, now_ms, local_minute, deadline)?;
+        if !gap {
+            return Ok(head);
+        }
+        self.current(room, head, now_ms, local_minute, deadline)?;
+        // One recovery attempt per original operation, even when a busy room has lost another tail meanwhile.
+        let (head, gap) = self.sync_once(room, direct, now_ms, local_minute, deadline)?;
+        if gap {
+            let reached = self.view(room).ok_or(ChatError::Closed)?.cursor();
+            Err(ChatError::HistoryGap { reached, head })
+        } else {
+            // Without a terminal pin/read snapshot, Sync can stop at a post before its file, thread or time
+            // sidebands, or at an equal head before call metadata. Ping drains all of them before success.
+            if !self.pins_saved() && !self.read_states() {
+                self.ping(now_ms, deadline)?;
+            }
+            Ok(head)
+        }
+    }
+
+    /// A negotiated explicit gap ends this Sync only after its other metadata has arrived.
+    fn sync_once(&mut self, room: &str, direct: bool, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<(u64, bool), ChatError> {
         if self.closed {
             return Err(ChatError::Closed);
         }
@@ -483,6 +505,7 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         let head = self.request(Request::Sync { room: room.to_owned(), cursor: start }, now_ms, local_minute, deadline)?;
         let pins_saved = self.pins_saved();
         let read_states = self.read_states();
+        let gap_replay = self.features() & FEATURE_GAP_REPLAY != 0;
         if pins_saved {
             // receive() reads exactly one framed payload. Older sideband frames were drained before the matched
             // response, and this response cannot also consume its following pin snapshot.
@@ -502,22 +525,78 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
                 self.closed = true;
                 return Err(ChatError::HistoryGap { reached, head });
             }
-            if view.needs_resync() && metadata_received {
+            if !gap_replay && view.needs_resync() && metadata_received {
                 self.closed = !pins_saved && !read_states;
                 return Err(ChatError::HistoryGap { reached, head });
             }
             if reached >= head && metadata_received {
-                return Ok(head);
+                return Ok((head, false));
             }
             // The pin snapshot ends this sync even when retained history cannot replay its prefix. Keep the
             // authoritative pin and a usable transport for saved messages while reporting the history gap.
-            if (pins_saved || read_states) && metadata_received && reached < head {
+            if !gap_replay && (pins_saved || read_states) && metadata_received && reached < head {
                 return Err(ChatError::HistoryGap { reached, head });
             }
             match self.receive(now_ms, local_minute, deadline) {
                 Err(ChatError::Io(reason)) => return Err(ChatError::SyncIncomplete { reached, head, reason }),
                 Err(error) => return Err(error),
-                Ok(_) => {}
+                Ok(events) => {
+                    for event in events {
+                        if let ClientEvent::Gap { room: of, head: gap_head, after, .. } = event {
+                            if !gap_replay || of != room || gap_head != head || after != start {
+                                self.closed = true;
+                                return Err(ChatError::UnexpectedResponse);
+                            }
+                            let view = self.view(room).ok_or(ChatError::Closed)?;
+                            let pins = !pins_saved || (!view.awaiting_pin() && view.pin_revision().is_some_and(|revision| revision >= head));
+                            let reads = !read_states || (!view.awaiting_read_state() && view.read_state().is_some_and(|state| state.head >= head));
+                            if !pins || !reads {
+                                self.closed = true;
+                                return Err(ChatError::UnexpectedResponse);
+                            }
+                            return Ok((head, true));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn current(&mut self, room: &str, gap_head: u64, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<(), ChatError> {
+        let (id, head) = match self.exchange(Request::Current { room: room.to_owned() }, now_ms, local_minute, deadline)? {
+            (id, Response::Ok { cursor }) => (id, cursor),
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        let reached = self.view(room).ok_or(ChatError::Closed)?.cursor();
+        if head < reached || head < gap_head {
+            self.closed = true;
+            return Err(ChatError::UnexpectedResponse);
+        }
+        let mut window = CurrentWindow::new(room, head);
+        loop {
+            // Capture pages never enter the ordinary push path, so unexpected records cannot change the old view.
+            let frame = self.read_frame(frame::MAX_FRAME, deadline)?;
+            let (answered, page) = crewcraft_proto::current::decode_page(frame.payload()).map_err(|_| {
+                self.closed = true;
+                ChatError::UnexpectedResponse
+            })?;
+            if answered != id {
+                self.closed = true;
+                return Err(ChatError::UnexpectedResponse);
+            }
+            let complete = window.page(page, frame.as_bytes().len()).map_err(|_| {
+                self.closed = true;
+                ChatError::UnexpectedResponse
+            })?;
+            if complete {
+                // Seal the stream before installation. Ordinary receive refuses any page after the last flag;
+                // Ping's matched reply proves no duplicate or surplus capture page was left unread.
+                self.ping(now_ms, deadline)?;
+                let view = self.session.client_mut().inbox_mut().view_mut(room).ok_or(ChatError::Closed)?;
+                return view.install_current(window).map_err(|_| {
+                    self.closed = true;
+                    ChatError::UnexpectedResponse
+                });
             }
         }
     }
@@ -566,10 +645,15 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
 
     fn receive(&mut self, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<Vec<ClientEvent>, ChatError> {
         let frame = self.read_frame(frame::MAX_FRAME, deadline)?;
-        self.session.receive(frame.as_bytes(), now_ms, local_minute).map_err(|error| {
+        let events = self.session.receive(frame.as_bytes(), now_ms, local_minute).map_err(|error| {
             self.closed = true;
             ChatError::Session(error)
-        })
+        })?;
+        if events.iter().any(|event| matches!(event, ClientEvent::Current { .. })) {
+            self.closed = true;
+            return Err(ChatError::UnexpectedResponse);
+        }
+        Ok(events)
     }
 
     fn prepare_frame(&mut self, deadline: Instant) -> Result<(), ChatError> {

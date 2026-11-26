@@ -31,6 +31,10 @@ pub enum ClientEvent {
     Files { id: u32, files: Vec<ListedFile> },
     /// A page of the person's saved messages in their current state (T343).
     Saved { id: u32, page: SavedPage },
+    /// One bounded current-state page; its framed byte count includes the four-byte length prefix (T345).
+    Current { id: u32, page: crewcraft_proto::current::CurrentPage, framed_bytes: usize },
+    /// Explicit missing event history, sent after this Sync's other metadata (T345).
+    Gap { room: String, head: u64, after: u64, oldest: u64 },
     /// The upload or file id that follows the `Ok` answering an upload request `id` (task T330e).
     Id { id: u32, value: [u8; 16] },
     /// The bytes that follow the `Ok` answering `Download` request `id` (task T330e).
@@ -116,8 +120,14 @@ impl Client {
                 || first == crewcraft_proto::push::CALL_SEALED
                 || first == crewcraft_proto::push::PINNED
                 || first == crewcraft_proto::push::READ_STATE
+                || first == crewcraft_proto::push::GAP
             {
                 let push = decode_push(&payload).map_err(ClientError::Malformed)?;
+                if let Push::Gap { room, cursor, after, oldest } = push {
+                    self.inbox.on_push(Push::Gap { room: room.clone(), cursor, after, oldest }, now_ms, local_minute);
+                    events.push(ClientEvent::Gap { room, head: cursor, after, oldest });
+                    continue;
+                }
                 let room = match &push {
                     Push::Posted { room, .. } => room.clone(),
                     Push::Edited { room, .. } => room.clone(),
@@ -129,6 +139,7 @@ impl Client {
                     Push::CallKeys { room, .. } | Push::CallSealed { room, .. } => room.clone(),
                     Push::Pinned { room, .. } => room.clone(),
                     Push::ReadState { room, .. } => room.clone(),
+                    Push::Gap { room, .. } => room.clone(),
                 };
                 match self.inbox.on_push(push, now_ms, local_minute) {
                     Some((apply, notify)) => events.push(ClientEvent::Pushed { room, apply, notify }),
@@ -146,6 +157,9 @@ impl Client {
             } else if first == SAVED_TAG {
                 let (id, page) = decode_saved(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Saved { id, page });
+            } else if first == crewcraft_proto::current::CURRENT_TAG {
+                let (id, page) = crewcraft_proto::current::decode_page(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Current { id, page, framed_bytes: payload.len() + 4 });
             } else if first == ID_TAG {
                 let (id, value) = decode_id(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Id { id, value });

@@ -74,9 +74,9 @@ pub struct DurableServer {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CurrentMessage {
-    author: String,
-    html: String,
-    edited: bool,
+    pub(crate) author: String,
+    pub(crate) html: String,
+    pub(crate) edited: bool,
 }
 
 /// An upload in progress (task T330b).
@@ -255,6 +255,11 @@ impl DurableServer {
                 continue;
             }
             if let Op::Reply { slug, author, parent, text, now_ms } = op {
+                if !live_message(&server, &previews, &slug, &author, parent).is_ok_and(|message| !message.html.is_empty())
+                    || parents.contains_key(&(slug.clone(), parent))
+                {
+                    return Err(DurableError::Corrupt { index });
+                }
                 let cursor = server.post(&slug, &author, &text, now_ms).map_err(|_| DurableError::Corrupt { index })?;
                 index_event(&server, &mut search, &mut previews, &slug, &author, cursor);
                 parents.insert((slug, cursor), parent);
@@ -433,7 +438,7 @@ impl DurableServer {
     }
 
     /// Reply to the message at `parent` in `slug`, in its thread (task T340a). The parent must be a live, top-level
-    /// message held in the room's log (`NoParent` otherwise: missing, deleted, or itself a reply); the reply is then
+    /// message in current state (`NoParent` otherwise: missing, deleted, or itself a reply); the reply is then
     /// posted as `post` would, and recorded with its parent in ONE record.
     pub fn reply(&mut self, slug: &str, author: &str, parent: u64, text: &str, now_ms: u64) -> Result<u64, ReplyError> {
         self.check_alive().map_err(ReplyError::Durable)?;
@@ -458,12 +463,9 @@ impl DurableServer {
         self.parents.iter().filter(|((room, _), of)| room == slug && **of == parent).count()
     }
 
-    /// Whether `cursor` in `slug` is a message that is still there, as `user` (a member) reads the room's log.
+    /// Whether `cursor` is a live current message the person can read, including outside the event tail (T345).
     fn is_live_post(&self, slug: &str, user: &str, cursor: u64) -> bool {
-        let Ok(room) = self.server.room(slug) else { return false };
-        let Ok(Since::Events(events)) = room.sync(user, cursor.saturating_sub(1)) else { return false };
-        events.iter().any(|(at, event)| *at == cursor && matches!(event.kind, EventKind::Posted) && !event.html.is_empty())
-            && !events.iter().any(|(_, event)| matches!(event.kind, EventKind::Deleted { target } if target == cursor))
+        live_message(&self.server, &self.previews, slug, user, cursor).is_ok_and(|message| !message.html.is_empty())
     }
 
     /// The files the message at `cursor` in `slug` carries (task T330c), in the order they were posted.
@@ -676,7 +678,8 @@ impl DurableServer {
     /// `Server::react`, recorded (task T341a).
     pub fn react(&mut self, slug: &str, actor: &str, target: u64, reaction: u8, on: bool, now_ms: u64) -> Result<u64, DurableError> {
         self.check_alive()?;
-        let cursor = self.server.react(slug, actor, target, reaction, on, now_ms).map_err(DurableError::Server)?;
+        let live_target = self.previews.get(slug).is_some_and(|messages| messages.contains_key(&target)).then_some(target);
+        let cursor = self.server.react_validated(slug, actor, live_target, reaction, on, now_ms).map_err(DurableError::Server)?;
         self.record(&Op::React { slug: slug.to_string(), actor: actor.to_string(), target, reaction, on, now_ms })?;
         Ok(cursor)
     }
@@ -838,7 +841,10 @@ fn replay(server: &mut Server, op: Op, messages: &HashMap<String, BTreeMap<u64, 
             live_message(server, messages, &slug, &user, target)?;
             server.mark_unread_validated(&slug, &user, target).map(|_| 0)
         }
-        Op::React { slug, actor, target, reaction, on, now_ms } => server.react(&slug, &actor, target, reaction, on, now_ms),
+        Op::React { slug, actor, target, reaction, on, now_ms } => {
+            let target = messages.get(&slug).is_some_and(|room| room.contains_key(&target)).then_some(target);
+            server.react_validated(&slug, &actor, target, reaction, on, now_ms)
+        }
         // Handled before `replay` is called: a file record changes no room, and a post with files needs the records.
         Op::FileStored { .. } | Op::PostFiles { .. } | Op::Reply { .. } => Ok(0),
         // Handled by `import::replay` (task T350a).
@@ -1046,6 +1052,55 @@ mod pins_saved_tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
+    }
+
+    #[test]
+    fn missing_reaction_targets_preserve_token_and_validation_order() {
+        let journal = TestJournal::new();
+        let mut server = DurableServer::open(&journal.0).unwrap();
+        let room = server.create_room("owner", "Room").unwrap();
+        server.add_member(&room, "owner", "guest", Role::Guest).unwrap();
+        let target = server.post(&room, "owner", "message", 10_000).unwrap();
+        assert_eq!(
+            server.react(&room, "guest", u64::MAX, 0, true, 10_000),
+            Err(DurableError::Server(ServerError::Service(ServiceError::NotAllowed)))
+        );
+        assert_eq!(
+            server.react(&room, "outsider", u64::MAX, 0, true, 10_000),
+            Err(DurableError::Server(ServerError::Service(ServiceError::Room(RoomError::NotMember))))
+        );
+        assert_eq!(
+            server.react(&room, "owner", u64::MAX, 0, true, 10_000),
+            Err(DurableError::Server(ServerError::Service(ServiceError::BadReaction)))
+        );
+        for _ in 2..crate::server::POST_BURST {
+            assert_eq!(
+                server.react(&room, "owner", u64::MAX, 1, true, 10_000),
+                Err(DurableError::Server(ServerError::Service(ServiceError::NoSuchMessage)))
+            );
+        }
+        assert_eq!(server.react(&room, "owner", target, 1, true, 10_000), Err(DurableError::Server(ServerError::RateLimited)));
+        assert!(server.server().room(&room).unwrap().reactions(target).is_empty());
+    }
+
+    #[test]
+    fn reply_parent_validation_and_replay_refuse_deleted_nested_or_inaccessible_targets() {
+        let journal = TestJournal::new();
+        let mut server = DurableServer::open(&journal.0).unwrap();
+        let room = server.create_room("owner", "Room").unwrap();
+        let parent = server.post(&room, "owner", "parent", 10_000).unwrap();
+        let child = server.reply(&room, "owner", parent, "child", 10_000).unwrap();
+        assert_eq!(server.reply(&room, "owner", child, "nested", 10_000), Err(ReplyError::NoParent));
+        assert_eq!(server.reply(&room, "outsider", parent, "unseen", 10_000), Err(ReplyError::NoParent));
+        server.delete(&room, "owner", parent).unwrap();
+        assert_eq!(server.reply(&room, "owner", parent, "deleted", 10_000), Err(ReplyError::NoParent));
+        let corrupt_index = server.journal.len();
+        drop(server);
+        let (mut stored, _) = Journal::open(&journal.0).unwrap();
+        let op = Op::Reply { slug: room, author: "owner".into(), parent, text: "invalid recorded reply".into(), now_ms: 10_000 };
+        stored.append(&encode_op(&op).unwrap()).unwrap();
+        drop(stored);
+        assert!(matches!(DurableServer::open(&journal.0), Err(DurableError::Corrupt { index }) if index == corrupt_index));
     }
 
     #[test]
