@@ -54,11 +54,11 @@ pub const MAX_FOLLOWED: usize = 64;
 /// test's or a phone's own.
 pub type Browser = Arc<dyn Fn(&str) -> io::Result<()> + Send + Sync>;
 
-/// How often the worker polls, and how it backs off while the server cannot be reached.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// How often a call heartbeat is sent (REQUIREMENTS 2.5).
 pub const CALL_HEARTBEAT: Duration = Duration::from_secs(20);
 
+/// How often the worker polls, and how it backs off while the server cannot be reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerConfig {
     /// Time between polls of the followed rooms while signed in.
     pub poll_interval: Duration,

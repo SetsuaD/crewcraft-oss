@@ -80,6 +80,7 @@ fn a_call_rings_offers_join_and_leave_and_leaves_its_lines() {
 fn an_archive_room_has_no_calls() {
     let mut h = chat();
     h.state_mut().apply(Update::Archive { room: "old-team".into(), times: Vec::new() });
+    h.run();
     h.get_by_label("old-team").click();
     h.run();
     assert!(h.query_by_label("Call").is_none() && h.query_by_label("Video call").is_none());
