@@ -74,15 +74,23 @@ top-level, and every refusal with its bundle position. It exits non-zero when an
 
 ## Reading a Teams export (T350c)
 
-A reader, `crewcraft-import teams --export <dir> --out <bundle-dir>`, built only from Microsoft's public Graph API
-documentation of `chatMessage`, `chat` and `channel`. Its input is what the documented Graph calls return, saved as
-JSON pages: one file per conversation holding `{"value": [chatMessage, ...]}` pages (a chat's messages, or a
-channel's messages with their replies), the conversation's metadata, and a `users.json` mapping user ids to email
-addresses (a message names its sender by id and display name, not by email). It maps:
+A reader, `crewcraft-server import-teams --export <dir> --out <new-bundle-dir>` (`import_teams.rs`), built only from
+Microsoft's public Graph API documentation of `chatMessage`, `chat`, `channel`, `conversationMember` and `user`. Its
+input is what the documented Graph calls return, saved as JSON:
+
+- `users.json`: `GET /users` pages, mapping each user `id` to its `mail` (or `userPrincipalName`). A message names its
+  sender by id and display name, not by email.
+- `conversations/*.json`, one file per conversation: `{"chat": chat}` or `{"team": team, "channel": channel}`, with
+  `"members"` (conversationMember list) and `"pages"` (the conversation's `{"value": [chatMessage, ...]}` pages; a
+  channel message's expanded `replies` are read too).
+- `files/<message id>/<attachment name>`: an attachment's bytes, when the export captured them.
+
+It maps:
 
 - `id` to the message key, `replyToId` to `reply_to`, `createdDateTime` to `sent_ms`, `lastModifiedDateTime` to
   `edited_ms` when it differs, `deletedDateTime` to `deleted`;
-- `from.user.id` through `users.json` to `author`, reporting senders it cannot map (and skipping their messages);
+- `from.user.id` through `users.json` to `author`; senders it cannot map are reported, their messages left out, and the
+  command exits non-zero after writing the bundle;
 - `body` to `text`, turning HTML into plain text (paragraphs, line breaks and list items kept; everything else
   dropped);
 - `attachments` to `files`, marked captured only when the export folder holds the bytes;
