@@ -6,16 +6,16 @@
 
 use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Cursor, Read, Write};
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crewcraft::chat_session::ChatError;
+use crewcraft::chat_session::{ChatError, ChatSession};
 use crewcraft::enroll_client::{EnrollmentRequest, FirstTotpCode};
 use crewcraft::lab_client::LabError;
 use crewcraft::server_endpoint::ServerEndpoint;
@@ -26,9 +26,10 @@ use crewcraft_client_core::notify::Settings;
 use crewcraft_enroll::EnrollmentCode;
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_proto::frame::{Decoder, encode};
-use crewcraft_proto::handshake::ServerSide;
+use crewcraft_proto::handshake::{self, Hello, ServerSide};
 use crewcraft_proto::push::{Push, decode_push, encode_push};
-use crewcraft_proto::request::{FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, MAX_SAVED_PAGE, Request, encode_request};
+use crewcraft_proto::request::{FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, MAX_SAVED_PAGE, Request, Response, encode_request, encode_response};
+use crewcraft_proto::signin::{self, SignIn};
 use crewcraft_server::lab_bootstrap::bootstrap_handler;
 use crewcraft_server::lab_installation::LabInstallation;
 use crewcraft_server::lab_runtime::LabRuntime;
@@ -217,6 +218,63 @@ impl Fixture {
     fn reopen(&self) -> LabInstallation {
         LabInstallation::open(&self.directory.0.join("server"), self.fingerprint, wall_ms()).unwrap()
     }
+}
+
+/// A deterministic already-authenticated transport, following the ChatSession test harness. Reads supply exactly
+/// the scripted protocol frames. The matching reply ids ensure each real request has completed before its result.
+struct PinScript {
+    input: Cursor<Vec<u8>>,
+}
+
+impl Read for PinScript {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.input.read(bytes)
+    }
+}
+
+impl Write for PinScript {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_second_sync_at_the_same_head_consumes_its_own_pin_snapshot() {
+    let room = "project";
+    let token = "A".repeat(signin::TOKEN_LEN);
+    let pinned = |html: &str| Push::Pinned {
+        room: room.into(), cursor: 1, target: 1, author: ALICE.into(), html: html.into(), edited: false,
+    };
+    // The fake peer deliberately distinguishes same-head snapshots. The test observes each one immediately on
+    // returning from sync, without allowing a later request to drain an unread trailing frame and mask the bug.
+    let replies = [
+        signin::encode_reply(&signin::Reply::Accepted { token: &token }).unwrap(),
+        handshake::encode_reply(&handshake::Reply::Welcome { version: 1, features: FEATURE_PINS_SAVED, server: "pin snapshot test".into() }).unwrap(),
+        encode_response(1, &Response::Ok { cursor: 1 }).unwrap(),
+        encode_push(&Push::Posted { room: room.into(), cursor: 1, author: ALICE.into(), html: "a plan".into(), mentions: Vec::new() }).unwrap(),
+        encode_push(&pinned("first snapshot")).unwrap(),
+        encode_response(2, &Response::Ok { cursor: 1 }).unwrap(),
+        encode_push(&pinned("second snapshot")).unwrap(),
+        encode_response(3, &Response::Ok { cursor: 0 }).unwrap(),
+    ];
+    let bytes = replies.iter().flat_map(|reply| encode(reply).unwrap()).collect();
+    let stream = PinScript { input: Cursor::new(bytes) };
+    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_PINS_SAVED, client: "pin snapshot client".into() };
+    let credentials = SignIn { email: ALICE, password: PASSWORD, code: "123456" };
+    let deadline = Instant::now() + WAIT;
+    let mut session = ChatSession::connect(stream, |_, _| {}, &credentials, hello, Settings::new(ALICE), WAIT, deadline).unwrap();
+
+    assert_eq!(session.sync(room, false, 0, 0, deadline), Ok(1));
+    let view = session.view(room).unwrap();
+    assert_eq!(view.pin_revision(), Some(1), "the first snapshot is already cached");
+    assert_eq!(view.pinned_message().unwrap().html, "first snapshot");
+    assert_eq!(session.sync(room, false, 0, 0, deadline), Ok(1));
+    assert_eq!(session.view(room).unwrap().pinned_message().unwrap().html, "second snapshot");
+    assert_eq!(session.ping(0, deadline), Ok(()), "the stream is aligned for the following operation");
 }
 
 #[test]
