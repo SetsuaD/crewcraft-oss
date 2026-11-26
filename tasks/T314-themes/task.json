@@ -1,0 +1,26 @@
+{
+  "id": "T314-themes",
+  "title": "The desktop window takes its look from a theme; organization theme and name from the data folder",
+  "crate": "crewcraft",
+  "files": [
+    "crates/desktop-ui/src/appearance.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/Cargo.toml",
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/Cargo.toml",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft/tests/t314_themes.rs",
+  "test_cmd": "cargo test -p crewcraft --test t314_themes",
+  "depends_on": [
+    "T305-desktop-window",
+    "T309-desktop-app"
+  ],
+  "spec": "crewcraft_desktop_ui::appearance::style(theme, variant) maps every theme token to egui's style: text and muted text, bg-pane (panels), surface (windows, idle widgets), surface-hover, bg-canvas (text fields), link, warning, danger, accent-soft (selection), accent-pressed and on-accent (pressed widgets), focus-ring, stroke and stroke-strong; radius-s for widgets, radius-m for menus, radius-l for windows; size-small, size-body (body, buttons, monospace) and size-title (headings); compact density tightens spacing. A theme without a dark palette draws its light one in dark mode. Appearance::install sets the light and dark styles and the mode (system, light or dark). parse_settings reads appearance.toml ([appearance] theme, mode, organization of 1 to 64 printable characters), refusing unknown sections and keys and bad values with the line. Appearance::resolve takes the settings text and an optional theme addon (crewcraft_theme::load_addon: format, contrast, not a built-in id); anything refused is reported in words and the default theme applies, never part of a file. The desktop app reads appearance.toml and theme-addon.toml from its data folder (regular files only, size limits, UTF-8), installs the look, shows the organization's name instead of CrewCraft in the title bar and on the sign-in heading, and shows the problems as the window's notice.",
+  "status": "done",
+  "context": [
+    "crates/theme/src/lib.rs",
+    "crates/theme/themes/crewcraft.toml",
+    "docs/REQUIREMENTS.md"
+  ]
+}

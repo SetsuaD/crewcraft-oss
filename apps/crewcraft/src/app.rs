@@ -8,7 +8,8 @@
 //! moved joining off the window's thread. Task T313 seals the saved device with the key store (`key_vault`; tests
 //! pass an in-memory one), unless the person has opted out with `PLAIN_RECORD_SETTING`. Task T403 adds phones: with
 //! a hardware key store (`Controller::start_with_hardware_keys`) each enrollment makes its device key inside that
-//! store and the record only names it.
+//! store and the record only names it. Task T314 applies the appearance (`load_appearance`): a theme, light or dark,
+//! and the organization's name in the title bar.
 //!
 //! Everything that does not need a window is in `Controller`, so it is tested without one.
 
@@ -18,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crewcraft_desktop_ui::appearance::Appearance;
 use crewcraft_desktop_ui::{Action, Update, Window};
 use crewcraft_enroll::{EnrollmentCode, InvitationLink};
 use zeroize::Zeroizing;
@@ -41,6 +43,56 @@ pub const PROFILE: &str = "default";
 /// protected only by its permissions (docs/SECURITY-DESIGN.md section 2). Only for a computer with no key store; the
 /// person creates it by hand, and nothing in CrewCraft ever does.
 pub const PLAIN_RECORD_SETTING: &str = "plain-device-record";
+
+/// The appearance settings file in the data folder (crewcraft-desktop-ui `appearance::parse_settings`): the theme,
+/// light or dark, and the organization's name. Optional; written by the person or an organization's installer.
+pub const APPEARANCE_FILE: &str = "appearance.toml";
+
+/// A theme addon in the data folder (REQUIREMENTS 2.19), checked like any addon (format, contrast, not a built-in
+/// id) before it may be chosen in `APPEARANCE_FILE`. Until servers hand addons to clients (M4), this is how an
+/// organization's theme reaches a desktop.
+pub const THEME_ADDON_FILE: &str = "theme-addon.toml";
+
+/// The appearance from the data folder `dir` (`APPEARANCE_FILE`, `THEME_ADDON_FILE`), and anything refused, in words
+/// for the person. A missing folder or file is not a problem: the defaults apply.
+pub fn load_appearance(dir: Option<&Path>) -> (Appearance, Vec<String>) {
+    let read = |name: &str, max: usize| -> Result<Option<Vec<u8>>, String> {
+        let Some(dir) = dir else { return Ok(None) };
+        let path = dir.join(name);
+        match std::fs::symlink_metadata(&path) {
+            Err(_) => Ok(None),
+            Ok(meta) if !meta.is_file() => Err(format!("{name} is not a regular file, so it was not used.")),
+            Ok(meta) if meta.len() > max as u64 => Err(format!("{name} is larger than {max} bytes, so it was not used.")),
+            Ok(_) => std::fs::read(&path).map(Some).map_err(|error| format!("{name} could not be read ({error}).")),
+        }
+    };
+    let mut problems = Vec::new();
+    let settings = match read(APPEARANCE_FILE, crewcraft_desktop_ui::appearance::MAX_SETTINGS_BYTES) {
+        Ok(bytes) => bytes,
+        Err(problem) => {
+            problems.push(problem);
+            None
+        }
+    };
+    let addon = match read(THEME_ADDON_FILE, crewcraft_desktop_ui::appearance::MAX_ADDON_BYTES) {
+        Ok(bytes) => bytes,
+        Err(problem) => {
+            problems.push(problem);
+            None
+        }
+    };
+    let settings_text = match settings.map(String::from_utf8) {
+        Some(Ok(text)) => Some(text),
+        Some(Err(_)) => {
+            problems.push(format!("{APPEARANCE_FILE} is not UTF-8 text, so it was not used."));
+            None
+        }
+        None => None,
+    };
+    let (appearance, more) = Appearance::resolve(settings_text.as_deref(), addon.as_deref());
+    problems.extend(more);
+    (appearance, problems)
+}
 
 /// Whether the person has opted out of the key store for the data folder `dir` (`PLAIN_RECORD_SETTING`).
 pub fn plain_record_chosen(dir: &Path) -> bool {
@@ -519,23 +571,35 @@ impl DesktopApp {
 
     /// The app with its enrollment in `dir`: on Android, a folder in the app's private storage (T401).
     pub fn with_data_dir(context: &eframe::egui::Context, join: Join, dir: Option<PathBuf>) -> Self {
-        Self::with_controller(context, |wake| Controller::start(dir, join, wake, WorkerConfig::default()))
+        let look = load_appearance(dir.as_deref());
+        Self::with_controller(context, look, |wake| Controller::start(dir, join, wake, WorkerConfig::default()))
     }
 
     /// The app with its enrollment in `dir` and its device key in the hardware key store `keys` (the Android
     /// Keystore, T403).
     pub fn with_hardware_keys(context: &eframe::egui::Context, join: Join, dir: Option<PathBuf>, keys: Arc<dyn HardwareKeys>) -> Self {
-        Self::with_controller(context, |wake| Controller::start_with_hardware_keys(dir, keys, join, wake, WorkerConfig::default()))
+        let look = load_appearance(dir.as_deref());
+        Self::with_controller(context, look, |wake| Controller::start_with_hardware_keys(dir, keys, join, wake, WorkerConfig::default()))
     }
 
-    fn with_controller(context: &eframe::egui::Context, start: impl FnOnce(Wake) -> (Controller, Vec<Update>)) -> Self {
+    fn with_controller(
+        context: &eframe::egui::Context,
+        (appearance, problems): (Appearance, Vec<String>),
+        start: impl FnOnce(Wake) -> (Controller, Vec<Update>),
+    ) -> Self {
         context.set_fonts(crewcraft_desktop_ui::fonts());
+        appearance.install(context);
         let repaint = context.clone();
         let wake: Wake = Arc::new(move || repaint.request_repaint());
         let (controller, updates) = start(wake);
         let mut window = Window::new();
+        window.set_title(appearance.title());
         for update in updates {
             window.apply(update);
+        }
+        // After the start-up updates, which may change the screen and so clear the notice.
+        if !problems.is_empty() {
+            window.apply(Update::Failed(problems.join(" ")));
         }
         Self { window, controller }
     }

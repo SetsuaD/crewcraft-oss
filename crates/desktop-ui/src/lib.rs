@@ -8,6 +8,7 @@
 //! Secrets typed into the window (password, invitation link, authenticator code) live in `Zeroizing` buffers, are
 //! moved into the `Action` that needs them, and are cleared from the form when it is submitted.
 
+pub mod appearance;
 pub mod text;
 
 use std::collections::HashMap;
@@ -154,6 +155,8 @@ pub struct Window {
     actions: Vec<Action>,
     /// Which pane a phone-width window shows (one at a time, T402).
     phone_pane: PhonePane,
+    /// The title-bar name: the organization's, or empty for "CrewCraft" (T314).
+    title: String,
 }
 
 /// The panes of the phone layout (REQUIREMENTS 2.9): the room list, one conversation, and the account.
@@ -174,6 +177,17 @@ impl Window {
     /// The enrollment screen until the app says otherwise.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Show `name` in the title bar and on the sign-in screen instead of "CrewCraft" (an organization's name, T314).
+    /// Empty restores "CrewCraft".
+    pub fn set_title(&mut self, name: &str) {
+        self.title = name.trim().to_owned();
+    }
+
+    /// The title-bar name.
+    pub fn title(&self) -> &str {
+        if self.title.is_empty() { "CrewCraft" } else { &self.title }
     }
 
     /// The pane the phone layout shows.
@@ -326,7 +340,7 @@ impl Window {
     }
 
     fn sign_in_ui(&mut self, ui: &mut Ui) {
-        ui.heading("Sign in to CrewCraft");
+        ui.heading(format!("Sign in to {}", self.title()));
         if !self.server.is_empty() {
             ui.label(format!("Server: {}", self.server));
         }
@@ -350,7 +364,7 @@ impl Window {
         }
         egui::Panel::top("crewcraft-app-bar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.strong("CrewCraft");
+                ui.strong(self.title().to_owned());
                 ui.label(&self.server);
                 let total = self.rooms.total_unread();
                 if total > 0 {
