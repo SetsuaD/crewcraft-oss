@@ -4,7 +4,8 @@ Every non-code asset in this repository (fonts, icons, images, sounds, example d
 source and license, in the same change that adds it.
 
 **Policy:** every asset is original work by CrewCraft contributors or third-party material under a license on the
-Craft allowlist (see [AGENTS.md](AGENTS.md)). No asset is copied from another chat product, and screenshots of other
+Craft allowlist ([standards/licences.md](https://github.com/storytold/craft-contrib/blob/main/standards/licences.md);
+`deny.toml` enforces a shorter list). No asset is copied from another chat product, and screenshots of other
 vendors' software are never committed. Fonts are under OFL-1.1 only, with the license text next to the font file
 (docs/CLEAN-ROOM.md rule 3); egui's own bundled fonts are not used.
 

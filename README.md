@@ -179,7 +179,7 @@ committed: the person building a release passes it in, pinned by SHA-256 (versio
 ## Contributing
 
 Contributions of code, tests, documentation and bug reports are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and
-[AGENTS.md](AGENTS.md) (the Craft house rules, and where CrewCraft differs), then pick an open task in
+[AGENTS.md](AGENTS.md) (the shared Craft rules, and how they apply here), then pick an open task in
 [`tasks/`](tasks/README.md). Report security problems privately as described in [SECURITY.md](SECURITY.md).
 
 ## License and credits
