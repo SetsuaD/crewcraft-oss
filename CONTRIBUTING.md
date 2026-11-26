@@ -9,8 +9,9 @@ enrolled. Contributions of code, tests, documentation, translations and bug repo
   strings or assets from other projects, including other chat servers; open-source *dependencies* under licenses
   compatible with MIT OR Apache-2.0 are fine.
 - **Read [AGENTS.md](AGENTS.md).** The same short rules apply to people and to AI coding agents.
-- **Read the Craft house rules.** CrewCraft follows the shared rules of the Craft apps; [AGENTS.md](AGENTS.md)
-  links them and lists where CrewCraft differs.
+- **Read the Craft rules.** [AGENTS.md](AGENTS.md) starts with the shared rules of the Craft apps
+  ([storytold/craft-contrib](https://github.com/storytold/craft-contrib) `standards/app-agents.md`), and its
+  "This repository" section says how they apply here.
 - **Security issues are not filed as issues.** See [SECURITY.md](SECURITY.md).
 
 ## Finding work
