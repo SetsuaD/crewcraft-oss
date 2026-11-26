@@ -22,7 +22,6 @@ use crewcraft::loopback::parse_query;
 use crewcraft::server_endpoint::ServerEndpoint;
 use crewcraft::worker::{Browser, WorkerConfig};
 use crewcraft_bootstrap::{Environment, ExternalEnrollment};
-use crewcraft_client_core::room_view::Shown;
 use crewcraft_desktop_ui::{Action, Update};
 use crewcraft_enroll::EnrollmentCode;
 use crewcraft_enroll::server_trust::RootFingerprint;
@@ -240,17 +239,6 @@ fn signed_in(dir: PathBuf, join: Join, seen: &Arc<Mutex<Seen>>, email: &str, sub
     assert!(app.act(Action::SignInExternal { email: email.into() }).is_empty());
     poll_until(&mut app, "sign-in", |update| matches!(update, Update::SignedIn { .. }));
     app
-}
-
-/// The cursor of the message whose HTML contains `text`, from the snapshots in `updates`.
-fn cursor_of(updates: &[Update], text: &str) -> Option<u64> {
-    updates.iter().rev().find_map(|update| match update {
-        Update::Snapshot { shown, .. } => shown.iter().find_map(|row| match row {
-            Shown::Line(line) if line.html.contains(text) => Some(line.cursor),
-            _ => None,
-        }),
-        _ => None,
-    })
 }
 
 #[test]
