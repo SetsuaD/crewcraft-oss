@@ -57,7 +57,15 @@ fn the_requests_and_pushes_have_exact_bytes() {
     assert_eq!(decode_request(&encode_request(1, &start).unwrap()).unwrap(), (1, start));
 
     let line = Push::CallLine { room: "r".into(), cursor: 3, call: 7, ended: true, author: "a".into(), text: "call ended".into() };
-    let state = Push::CallState { room: "r".into(), cursor: 0, call: 7, video: false, started_by: "a".into(), started_ms: T0, participants: vec!["a".into(), "b".into()] };
+    let state = Push::CallState {
+        room: "r".into(),
+        cursor: 0,
+        call: 7,
+        video: false,
+        started_by: "a".into(),
+        started_ms: T0,
+        participants: vec!["a".into(), "b".into()],
+    };
     for push in [line, state] {
         let bytes = encode_push(&push).unwrap();
         assert_eq!(decode_push(&bytes).unwrap(), push);
@@ -118,7 +126,10 @@ fn people_without_a_heartbeat_leave_at_their_last_one() {
     // The leaves and the end were recorded as they happened.
     let ds = DurableServer::open(&p).unwrap();
     assert_eq!(ds.call(call).unwrap().ended_ms, Some(T0 + 40_000));
-    assert_eq!((duration_text(59_999), duration_text(60_000), duration_text(3_900_000)), ("under a minute".into(), "1 min".into(), "1 h 5 min".into()));
+    assert_eq!(
+        (duration_text(59_999), duration_text(60_000), duration_text(3_900_000)),
+        ("under a minute".into(), "1 min".into(), "1 h 5 min".into())
+    );
     fs::remove_file(&p).unwrap();
 }
 

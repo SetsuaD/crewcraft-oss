@@ -36,7 +36,10 @@ pub enum EventKind {
         on: bool,
     },
     /// A call's history line (task T360a1): its start, or its end (`ended`). The text is in the event's `html`.
-    CallLine { call: u64, ended: bool },
+    CallLine {
+        call: u64,
+        ended: bool,
+    },
 }
 
 /// Who reacted to one message: by reaction code, the people, sorted (task T341a).

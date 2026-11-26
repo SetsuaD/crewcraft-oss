@@ -338,7 +338,15 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(64..=67).contains(&tag) && tag != ATTACHED && tag != THREADED && tag != REACTED && tag != ARCHIVED && tag != SENT && tag != CALL_LINE && tag != CALL_STATE {
+    if !(64..=67).contains(&tag)
+        && tag != ATTACHED
+        && tag != THREADED
+        && tag != REACTED
+        && tag != ARCHIVED
+        && tag != SENT
+        && tag != CALL_LINE
+        && tag != CALL_STATE
+    {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;

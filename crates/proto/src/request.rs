@@ -422,7 +422,9 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(1..=6).contains(&tag) && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag) && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT)
+    if !(1..=6).contains(&tag)
+        && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag)
+        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT)
         && !(CALL_START..=CALL_LEAVE).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));

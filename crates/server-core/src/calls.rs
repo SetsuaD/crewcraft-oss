@@ -272,7 +272,12 @@ impl DurableServer {
             .filter_map(|call| {
                 let ended_ms = call.ended_ms?;
                 let joined_room = self.joined_room_at(&call.room, user)?;
-                (joined_room < call.start_cursor).then(|| MissedCall { room: call.room.clone(), call: call.id, started_by: call.started_by.clone(), ended_ms })
+                (joined_room < call.start_cursor).then(|| MissedCall {
+                    room: call.room.clone(),
+                    call: call.id,
+                    started_by: call.started_by.clone(),
+                    ended_ms,
+                })
             })
             .collect();
         missed.sort_by(|a, b| b.ended_ms.cmp(&a.ended_ms).then(a.call.cmp(&b.call)));
@@ -288,7 +293,9 @@ impl DurableServer {
             Since::Events(events) => events,
             Since::Gap { .. } => return Some(0),
         };
-        Some(events.iter().rev().find(|(_, event)| matches!(&event.kind, EventKind::Joined { user: who, .. } if who == user)).map_or(0, |(at, _)| *at))
+        Some(
+            events.iter().rev().find(|(_, event)| matches!(&event.kind, EventKind::Joined { user: who, .. } if who == user)).map_or(0, |(at, _)| *at),
+        )
     }
 
     fn member(&self, slug: &str, actor: &str) -> Result<(), CallError> {

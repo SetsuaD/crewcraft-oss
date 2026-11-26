@@ -20,7 +20,9 @@ use crewcraft_enroll::EnrollmentCode;
 use crewcraft_enroll::invitation::{InvitationLink, LinkError, write_link};
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_proto::handshake::ServerSide;
-use crewcraft_proto::request::{FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS};
+use crewcraft_proto::request::{
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS,
+};
 use sha2::{Digest, Sha256};
 
 use crate::lab_admin::{self, AdminError, LabRoot};
