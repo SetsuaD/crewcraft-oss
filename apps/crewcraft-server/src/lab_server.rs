@@ -202,6 +202,10 @@ struct BeforeSignIn<A> {
 impl<A: DeviceAuth> DeviceAuth for BeforeSignIn<A> {
     type Session = A::Session;
 
+    fn device(&self) -> Option<u64> {
+        self.inner.device()
+    }
+
     fn sign_in(&self, credentials: SignIn<'_>, now_ms: u64) -> Result<Option<CommittedSignIn<Self::Session>>, AuthError> {
         if Instant::now() >= self.deadline {
             return Err(AuthError::Unavailable);

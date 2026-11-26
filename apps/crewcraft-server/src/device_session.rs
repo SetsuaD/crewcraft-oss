@@ -74,6 +74,11 @@ pub trait DeviceAuth {
     /// Check that this session and its device remain authorized at `now_ms` and hold that authorization throughout
     /// `action`. A revoked or expired session returns `Ok(None)` without calling `action`.
     fn with_live_session<T>(&self, session: &Self::Session, now_ms: u64, action: impl FnOnce() -> T) -> Result<Option<T>, AuthError>;
+
+    /// The enrolled device the transport verified, when known: media credentials name it (task T360b2).
+    fn device(&self) -> Option<u64> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,7 +171,7 @@ pub fn serve<S: Read + Write, A: DeviceAuth>(
         };
         (user, session)
     };
-    let mut session = Session::new(&user, server_side);
+    let mut session = Session::new(&user, server_side).with_device(auth.device());
     loop {
         reset_deadline(stream)?;
         let Some(request) = frame::read_frame(stream, MAX_FRAME)? else {

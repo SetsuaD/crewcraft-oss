@@ -1,0 +1,32 @@
+{
+  "id": "T360b2-call-join-credential",
+  "title": "CallJoin issues the media credential; leaving, removal and ends become media events",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/server-core/Cargo.toml",
+    "crates/server-core/src/lib.rs",
+    "crates/server-core/src/media.rs",
+    "crates/server-core/src/calls.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/server-core/src/session.rs",
+    "apps/crewcraft-server/src/device_session.rs",
+    "apps/crewcraft-server/src/stored_device_auth.rs",
+    "apps/crewcraft-server/src/lab_server.rs",
+    "docs/CALLS.md",
+    "Cargo.lock"
+  ],
+  "test_path": "crates/server-core/tests/t360b2_call_join_credential.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t360b2_call_join_credential",
+  "depends_on": [
+    "T360a1-call-records",
+    "T360b1-media-credentials",
+    "T363a-media-server"
+  ],
+  "spec": "docs/CALLS.md 'Admission: removed means removed'. Proto: handshake bit FEATURE_MEDIA (512) and the media frame (tag 137): u32 id | str media server address (1 to MAX_MEDIA_ADDRESS = 255) | u16 n | the credential (1 to MAX_CREDENTIAL = 1200 bytes); encode_media and decode_media. Server core: DurableServer::set_media(MediaIssuer::new(issuer, media server name, address)); media_credential(room, person, call, device, now_ms) issues a crewcraft-media-auth credential only to a room member who is in the open call (NotMember, NoSuchCall), Ok(None) without a media server. A connection that agreed to FEATURE_MEDIA and knows its device (Connection/Session::with_device, filled from DeviceAuth::device by the server binary) gets the media frame after every successful CallStart and CallJoin. Every time someone leaves a call (leaving, removal from the room, a stopped heartbeat, or drop_from_calls for someone whose access was withdrawn) is a MediaEvent::DropPerson, and every end a MediaEvent::EndCall, kept (at most MAX_MEDIA_EVENTS, oldest dropped) only when a media server is set and taken with take_media_events. Test: a member's credential is for their call, person and device and the media core accepts it; non-members, members not in the call, unknown devices, clients without the bit and servers without media get none; removal and revocation drop people from the media at once; the last leave and stopped heartbeats end the call and close everyone in the media.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}

@@ -51,6 +51,12 @@ This part needs no media and no new dependency, and it can ship (with ringing an
   media server to drop that participant, and the media server does so at once. A participant whose heartbeat stops is
   dropped when the call closes them.
 
+**Built (T360b2).** With a media server set (`DurableServer::set_media`), a client that agreed to `FEATURE_MEDIA` gets
+a media frame after every successful `CallStart` and `CallJoin`: the media server's address and a credential for its
+own device, issued only to a room member who is in the open call. Every way out of a call (leaving, removal from the
+room, a stopped heartbeat, withdrawn access through `drop_from_calls`) becomes a `DropPerson` event and every end an
+`EndCall` event, which the server binary sends to the media server over the control connection (the next task).
+
 ## End-to-end encryption (T360c, T360d)
 
 Hop-by-hop, WebRTC already encrypts (DTLS-SRTP) between each client and the media server. End-to-end, each media frame

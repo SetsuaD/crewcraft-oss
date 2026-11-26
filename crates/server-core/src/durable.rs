@@ -68,6 +68,8 @@ pub struct DurableServer {
     pub(crate) imports: crate::import::Imports,
     /// Calls, open and ended (docs/CALLS.md, task T360a1).
     pub(crate) calls: crate::calls::Calls,
+    /// The media server credentials are issued for, if any, and what it must be told (task T360b2).
+    pub(crate) media: crate::media::Media,
 }
 
 #[derive(Debug, Clone)]
@@ -293,6 +295,7 @@ impl DurableServer {
             parents,
             imports,
             calls,
+            media: crate::media::Media::default(),
         })
     }
 

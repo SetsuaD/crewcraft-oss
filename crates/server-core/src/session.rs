@@ -51,12 +51,20 @@ pub struct Session {
     phase: Phase,
     buf: Vec<u8>,
     connection: Option<Connection>,
+    /// The signed-in device, when the transport knows it (task T360b2).
+    device: Option<u64>,
 }
 
 impl Session {
     /// A session for an already authenticated user. This handshake only negotiates the protocol.
     pub fn new(user: &str, server_side: ServerSide) -> Self {
-        Self { user: user.to_string(), server_side, phase: Phase::Hello, buf: Vec::new(), connection: None }
+        Self { user: user.to_string(), server_side, phase: Phase::Hello, buf: Vec::new(), connection: None, device: None }
+    }
+
+    /// The same session, for the signed-in `device`: media credentials name it (task T360b2).
+    pub fn with_device(mut self, device: Option<u64>) -> Self {
+        self.device = device;
+        self
     }
 
     pub fn phase(&self) -> Phase {
@@ -149,7 +157,7 @@ impl Session {
             Reply::Welcome { version, features, server: _ } => {
                 self.phase = Phase::Open { version, features };
                 // The connection pushes attachments only when the client agreed to files (task T330c).
-                let mut conn = Connection::with_features(&self.user, features);
+                let mut conn = Connection::with_features(&self.user, features).with_device(self.device);
                 // Feed any remaining bytes (from the same call) to the now-open connection.
                 if !self.buf.is_empty() {
                     let remaining = std::mem::take(&mut self.buf);
