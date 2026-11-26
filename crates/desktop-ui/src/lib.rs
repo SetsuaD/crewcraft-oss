@@ -140,6 +140,11 @@ pub enum Update {
         room: String,
         parents: Vec<(u64, u64)>,
     },
+    /// `room` is an archive room (task T350d2): read-only, with its imported messages' original times by cursor.
+    Archive {
+        room: String,
+        times: Vec<(u64, u64)>,
+    },
     /// Who reacted to each message of `room` with what (task T341b): by cursor, each reaction code with the people.
     Reactions {
         room: String,
@@ -170,6 +175,7 @@ impl fmt::Debug for Update {
             Self::Uploaded { room, file } => f.debug_struct("Uploaded").field("room", room).field("name", &file.name).finish(),
             Self::Attachments { room, files } => f.debug_struct("Attachments").field("room", room).field("messages", &files.len()).finish(),
             Self::Threads { room, parents } => f.debug_struct("Threads").field("room", room).field("replies", &parents.len()).finish(),
+            Self::Archive { room, times } => f.debug_struct("Archive").field("room", room).field("times", &times.len()).finish(),
             Self::Reactions { room, reactions } => f.debug_struct("Reactions").field("room", room).field("messages", &reactions.len()).finish(),
             Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
             Self::WaitingForBrowser => f.write_str("WaitingForBrowser"),
@@ -277,6 +283,10 @@ pub struct Window {
     thread_draft: String,
     /// Who reacted to each message with what, per room and cursor (T341b).
     reactions: HashMap<String, std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>>,
+    /// Archive rooms (T350d2): listed under Archive, read-only.
+    archived: std::collections::HashSet<String>,
+    /// Imported messages' original times, per archive room and cursor (T350d2).
+    sent_times: HashMap<String, std::collections::BTreeMap<u64, u64>>,
 }
 
 /// What a message is drawn with (T340b): who is reading, the theme's colours, which message is selected, the files and
@@ -292,6 +302,10 @@ struct Bubbles<'a> {
     reactions: &'a std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>,
     /// Whether messages can be selected and threads opened from here (not inside the thread pane).
     actions: bool,
+    /// An archive room (T350d2): nothing can be selected, replied to or reacted to.
+    read_only: bool,
+    /// Imported messages' original times, by cursor (T350d2).
+    times: &'a std::collections::BTreeMap<u64, u64>,
 }
 
 /// What the person did to a message in the feed (T316).
@@ -426,6 +440,10 @@ impl Window {
             Update::Threads { room, parents } => {
                 self.threads.insert(room, parents.into_iter().collect());
             }
+            Update::Archive { room, times } => {
+                self.archived.insert(room.clone());
+                self.sent_times.insert(room, times.into_iter().collect());
+            }
             Update::Reactions { room, reactions } => {
                 self.reactions.insert(room, reactions.into_iter().collect());
             }
@@ -446,6 +464,8 @@ impl Window {
                 self.message_files.clear();
                 self.threads.clear();
                 self.reactions.clear();
+                self.archived.clear();
+                self.sent_times.clear();
                 self.open_thread = None;
                 self.thread_draft.clear();
                 self.feeds.clear();
@@ -640,12 +660,23 @@ impl Window {
             if rows.is_empty() {
                 ui.weak(if self.room_filter.trim().is_empty() { "No rooms yet." } else { "No room matches." });
             }
+            let (archive, rows): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| self.archived.contains(&row.name));
             ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                 for row in rows {
                     let text = if row.unread > 0 { format!("{}  ({})", row.name, row.unread) } else { row.name.clone() };
                     let text = if row.unread > 0 { RichText::new(text).strong() } else { RichText::new(text) };
                     if ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(row.selected, text)).clicked() {
                         open = Some(row.name);
+                    }
+                }
+                // Archive rooms, under their own heading (T350d2).
+                if !archive.is_empty() {
+                    ui.add_space(10.0);
+                    ui.strong("Archive");
+                    for row in archive {
+                        if ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(row.selected, row.name.clone())).clicked() {
+                            open = Some(row.name);
+                        }
                     }
                 }
             });
@@ -678,6 +709,8 @@ impl Window {
         let files = self.message_files.get(&room).cloned().unwrap_or_default();
         let replies = self.reply_counts(&room);
         let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
+        let times = self.sent_times.get(&room).cloned().unwrap_or_default();
+        let read_only = self.archived.contains(&room);
         let threads = self.threads.get(&room).cloned().unwrap_or_default();
         let look = Bubbles {
             me: &me,
@@ -687,6 +720,8 @@ impl Window {
             files: &files,
             replies: &replies,
             reactions: &reactions,
+            read_only,
+            times: &times,
             actions: true,
         };
         egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -701,7 +736,9 @@ impl Window {
             });
         });
         self.message_action(&room, action);
-        self.take_dropped_files(ui, &room);
+        if !self.archived.contains(&room) {
+            self.take_dropped_files(ui, &room);
+        }
     }
 
     /// Files dropped onto the window are uploaded to the open room, to attach to the next post (T330e).
@@ -757,6 +794,8 @@ impl Window {
                 let files = self.message_files.get(&room).cloned().unwrap_or_default();
                 let replies = self.reply_counts(&room);
                 let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
+                let times = self.sent_times.get(&room).cloned().unwrap_or_default();
+                let read_only = self.archived.contains(&room);
                 let threads = self.threads.get(&room).cloned().unwrap_or_default();
                 let look = Bubbles {
                     me: &me,
@@ -766,6 +805,8 @@ impl Window {
                     files: &files,
                     replies: &replies,
                     reactions: &reactions,
+                    read_only,
+                    times: &times,
                     actions: true,
                 };
                 egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -803,10 +844,20 @@ impl Window {
                     }
                     ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                         let mut open = None;
+                        let (archive, rows): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| self.archived.contains(&row.name));
                         for row in rows {
                             let text = if row.unread > 0 { format!("{}  ({})", row.name, row.unread) } else { row.name.clone() };
                             if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, text)).clicked() {
                                 open = Some(row.name);
+                            }
+                        }
+                        if !archive.is_empty() {
+                            ui.add_space(10.0);
+                            ui.strong("Archive");
+                            for row in archive {
+                                if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, row.name.clone())).clicked() {
+                                    open = Some(row.name);
+                                }
                             }
                         }
                         if let Some(room) = open {
@@ -888,6 +939,8 @@ impl Window {
         let files = self.message_files.get(room).cloned().unwrap_or_default();
         let replies = std::collections::BTreeMap::new();
         let reactions = self.reactions.get(room).cloned().unwrap_or_default();
+        let times = self.sent_times.get(room).cloned().unwrap_or_default();
+        let read_only = self.archived.contains(room);
         let look = Bubbles {
             me: &me,
             colors: self.bubbles,
@@ -896,6 +949,8 @@ impl Window {
             files: &files,
             replies: &replies,
             reactions: &reactions,
+            read_only,
+            times: &times,
             actions: false,
         };
         let mut action = None;
@@ -905,6 +960,10 @@ impl Window {
             }
         });
         self.message_action(room, action);
+        if self.archived.contains(room) {
+            ui.weak("Archive: read only");
+            return;
+        }
         let label = ui.label("Reply in thread");
         ui.add(TextEdit::multiline(&mut self.thread_draft).desired_rows(2).desired_width(f32::INFINITY)).labelled_by(label.id);
         if ui.button("Send reply").clicked() {
@@ -963,6 +1022,13 @@ impl Window {
     }
 
     fn composer_ui(&mut self, ui: &mut Ui, room: &str) {
+        // An archive room takes no messages (T350d2).
+        if self.archived.contains(room) {
+            ui.add_space(6.0);
+            ui.weak("Archive: read only");
+            ui.add_space(6.0);
+            return;
+        }
         let editing = self.editing.as_ref().filter(|(edited_room, _)| edited_room == room).map(|(_, cursor)| *cursor);
         if editing.is_some() {
             ui.horizontal(|ui| {
@@ -1094,6 +1160,8 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
         FeedRow::Message { cursor, .. } if look.actions => Some(*cursor),
         _ => None,
     };
+    // In an archive room nothing is selected (so nothing is offered), but threads still open (T350d2).
+    let selectable = message_cursor.filter(|_| !look.read_only);
     let chips = match row {
         FeedRow::Message { cursor, .. } => files.get(cursor).cloned().unwrap_or_default(),
         FeedRow::Pending { .. } => Vec::new(),
@@ -1139,14 +1207,21 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
                 rich
             };
             let label = egui::Label::new(rich).wrap();
-            let label = if message_cursor.is_some() { label.sense(egui::Sense::click()) } else { label };
+            let label = if selectable.is_some() { label.sense(egui::Sense::click()) } else { label };
             if ui.add(label).clicked()
-                && let Some(cursor) = message_cursor
+                && let Some(cursor) = selectable
             {
                 action = Some(MessageAction::Select(cursor));
             }
         });
     });
+    // When an imported message was first sent (T350d2).
+    if let FeedRow::Message { cursor, .. } = row
+        && let Some(&sent_ms) = look.times.get(cursor)
+    {
+        let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
+        ui.with_layout(layout, |ui| ui.weak(utc_time(sent_ms)));
+    }
     // The message's files, each with Save (T330e).
     for chip in chips {
         let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
@@ -1168,14 +1243,14 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
                 let Some(name) = crewcraft_proto::push::reaction_name(*code) else { continue };
                 let yours = people.iter().any(|person| person == me);
                 let chip = ui.add(egui::Button::selectable(yours, format!("{name} {}", people.len())).small());
-                if chip.on_hover_text(people.join(", ")).clicked() {
+                if chip.on_hover_text(people.join(", ")).clicked() && !look.read_only {
                     action = Some(MessageAction::React(*cursor, *code, !yours));
                 }
             }
         });
     }
     // The reactions to choose from, for a selected message (T341b).
-    if let Some(cursor) = message_cursor.filter(|cursor| Some(*cursor) == selected) {
+    if let Some(cursor) = selectable.filter(|cursor| Some(*cursor) == selected) {
         let yours = |code: u8| {
             look.reactions
                 .get(&cursor)
@@ -1205,7 +1280,7 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
         });
     }
     // Reply, for any selected message (T340b).
-    if let Some(cursor) = message_cursor.filter(|cursor| Some(*cursor) == selected)
+    if let Some(cursor) = selectable.filter(|cursor| Some(*cursor) == selected)
         && own_message.is_none()
     {
         ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
@@ -1214,7 +1289,7 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
             }
         });
     }
-    if let Some((cursor, text)) = own_message.filter(|(cursor, _)| Some(*cursor) == selected && look.actions) {
+    if let Some((cursor, text)) = own_message.filter(|(cursor, _)| Some(*cursor) == selected && look.actions && !look.read_only) {
         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
             if confirming {
                 if ui.button("Keep").clicked() {
@@ -1239,6 +1314,23 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
     }
     ui.add_space(2.0);
     action
+}
+
+/// A time as `2024-03-05 14:07 UTC` (T350d2). Imported times are shown in UTC: the window has no time zone database.
+pub fn utc_time(ms: u64) -> String {
+    let seconds = ms / 1000;
+    let (days, of_day) = ((seconds / 86_400) as i64, seconds % 86_400);
+    // Howard Hinnant's civil_from_days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02} {:02}:{:02} UTC", of_day / 3600, of_day % 3600 / 60)
 }
 
 /// A labelled one-line field whose text is zeroed when dropped. `hidden` draws it as a password field.

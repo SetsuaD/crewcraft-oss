@@ -17,7 +17,7 @@ use crewcraft_client_core::room_view::Shown;
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
-use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, SearchHit};
+use crewcraft_proto::request::{FEATURE_ARCHIVE, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, SearchHit};
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -131,7 +131,7 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -147,7 +147,7 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -178,7 +178,7 @@ pub(crate) fn finish_external(
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -318,6 +318,12 @@ impl SignedInSession {
             .iter()
             .map(|(cursor, by_code)| (*cursor, by_code.iter().map(|(code, who)| (*code, who.iter().cloned().collect())).collect()))
             .collect()
+    }
+
+    /// For an archive room, its imported messages' original times by cursor (task T350d2); `None` for any other room.
+    pub fn archive(&mut self, room: &str) -> Option<Vec<(u64, u64)>> {
+        let view = self.chat.view(room)?;
+        view.archived().then(|| view.sent_times().iter().map(|(cursor, ms)| (*cursor, *ms)).collect())
     }
 
     /// Each reply's parent in `room`, by the reply's cursor, as the server pushed them (task T340b).

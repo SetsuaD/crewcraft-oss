@@ -1,0 +1,22 @@
+{
+  "id": "T350d2-archive-app",
+  "title": "Archive rooms in the app: listed apart, read only, original times",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t350d2_archive_window.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t350d2_archive.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t350d2_archive",
+  "depends_on": [
+    "T350d1-archive-protocol"
+  ],
+  "spec": "The app agrees to FEATURE_ARCHIVE. SignedInSession::archive(room) gives an archive room's imported times by cursor (None for other rooms); the worker emits Event::Archive (Update::Archive { room, times }) when a room is first seen as an archive and when its times change. The window lists archive rooms under an 'Archive' heading after the active rooms (phone too); an open archive room shows 'Archive: read only' instead of the composer (and in the thread pane), takes no dropped files, shows each imported message's original time (utc_time: 'YYYY-MM-DD HH:MM UTC'), and offers nothing on a message: no selection, reactions, Reply, Edit or Delete, and reaction chips do nothing; threads still open. End to end: a bundle imported into a real server reaches the app as an archive room with both original times, and a post into it is refused.",
+  "status": "done",
+  "context": [
+    "docs/IMPORT.md"
+  ]
+}
