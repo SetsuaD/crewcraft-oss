@@ -430,13 +430,23 @@ fn unread_targets_must_be_live_and_readable_and_archived_rooms_never_count() {
     running.stop();
 }
 
-fn wait_for_event(events: &Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+fn wait_for_event(events: &Receiver<Event>, phase: &str, want: impl Fn(&Event) -> bool) -> Event {
     let deadline = Instant::now() + WAIT;
+    let mut observed = VecDeque::new();
     loop {
-        assert!(Instant::now() < deadline, "worker did not report the expected state");
-        let event = events.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap();
+        let received = events.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+        assert!(received.is_ok(), "worker did not complete {phase}: {received:?}; earlier events: {observed:?}");
+        let event = received.unwrap();
         if want(&event) {
             return event;
+        }
+        assert!(
+            !matches!(event, Event::Failed(_) | Event::Disconnected | Event::SessionEnded),
+            "worker failed during {phase}: {event:?}; earlier events: {observed:?}"
+        );
+        observed.push_back(format!("{event:?}"));
+        if observed.len() > 16 {
+            observed.pop_front();
         }
     }
 }
@@ -453,25 +463,26 @@ fn an_open_worker_observes_another_devices_rewind_until_a_deliberate_read() {
     let config =
         WorkerConfig { poll_interval: Duration::from_millis(50), first_retry: Duration::from_millis(50), max_retry: Duration::from_millis(200) };
     let (worker, events) = Worker::start(fixture.endpoint(&running), fixture.devices[2].clone(), config, || {}).unwrap();
-    wait_for_event(&events, |event| matches!(event, Event::Connected));
     running.advance(STEP_MS);
     let code = fixture.people[0].code_at(clock_now(&running.clock));
     assert!(worker.sign_in(Credentials::new(ALICE, PASSWORD, &code).unwrap()));
-    wait_for_event(&events, |event| matches!(event, Event::SignedIn { .. }));
+    wait_for_event(&events, "secondary device connection", |event| matches!(event, Event::Connected));
+    wait_for_event(&events, "secondary device sign-in", |event| matches!(event, Event::SignedIn { .. }));
     assert!(worker.send(Command::Sync { room: room.clone() }));
-    wait_for_event(&events, |event| matches!(event, Event::Room { room: reported, .. } if reported == room));
+    wait_for_event(&events, "initial open-room snapshot", |event| matches!(event, Event::Room { room: reported, .. } if reported == room));
 
     alice.mark_unread(room, target).unwrap();
     // No new command is sent to the worker here: its normal background poll must observe the other device's change.
-    wait_for_event(&events, |event| matches!(event, Event::Unread { room: reported, count } if reported == room && *count > 0));
+    wait_for_event(&events, "background unread count after remote rewind", |event| matches!(event, Event::Unread { room: reported, count } if reported == room && *count > 0));
     wait_for_event(
         &events,
+        "background read state after remote rewind",
         |event| matches!(event, Event::ReadState { room: reported, state } if reported == room && state.position == target - 1 && state.unread > 0),
     );
     // A forced observation cycle supplies a completion barrier. Refreshing an already-open room must preserve the
     // remote unread position, as ordinary background polling does.
     assert!(worker.send(Command::Sync { room: room.clone() }));
-    wait_for_event(&events, |event| matches!(event, Event::Room { room: reported, .. } if reported == room));
+    wait_for_event(&events, "passive refresh completion", |event| matches!(event, Event::Room { room: reported, .. } if reported == room));
     alice.sync(room).unwrap();
     let pending = alice.read_state(room).unwrap();
     assert_eq!(pending.position, target - 1);
@@ -479,6 +490,7 @@ fn an_open_worker_observes_another_devices_rewind_until_a_deliberate_read() {
     assert!(worker.send(Command::Read { room: room.clone() }));
     wait_for_event(
         &events,
+        "deliberate read completion",
         |event| matches!(event, Event::ReadState { room: reported, state } if reported == room && state.position == head && state.unread == 0),
     );
     alice.sync(room).unwrap();
