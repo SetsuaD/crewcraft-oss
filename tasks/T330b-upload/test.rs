@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crewcraft_proto::frame::encode;
 use crewcraft_proto::message::CodecError;
@@ -34,7 +34,7 @@ fn sha(bytes: &[u8]) -> [u8; 32] {
 }
 
 /// A durable server with files, a room of alice and bob, and a room of carol.
-fn server(dir: &PathBuf) -> (DurableServer, String, String) {
+fn server(dir: &Path) -> (DurableServer, String, String) {
     let mut ds = DurableServer::open(&dir.join("rooms.journal")).unwrap().with_files(FileStore::open(&dir.join("files")).unwrap()).unwrap();
     let room = ds.create_room("alice", "Project").unwrap();
     ds.add_member(&room, "alice", "bob", Role::Member).unwrap();
