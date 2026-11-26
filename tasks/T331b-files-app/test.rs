@@ -294,7 +294,9 @@ fn a_file_shows_in_the_other_persons_files() {
     assert_eq!((chip.name.as_str(), chip.size), ("quarterly report.bin", bytes.len() as u64));
     assert!(alice.act(Action::Room(Command::PostFiles { room: room.clone(), text: "the report".into(), files: vec![chip.file] })).is_empty());
 
-    // Bob opens Files: the file is there, with its room, and saves from the list.
+    // Once the post has reached the server (Bob's app sees it), Bob opens Files: the file is there, with its room.
+    assert!(bob.act(Action::Room(Command::Sync { room: room.clone() })).is_empty());
+    poll_until(&mut bob, "the post", |update| matches!(update, Update::Attachments { files, .. } if files.iter().any(|(_, chips)| chips.iter().any(|c| c.file == chip.file))));
     assert!(bob.act(Action::Room(Command::ListFiles)).is_empty());
     let updates = poll_until(&mut bob, "the file list", |update| matches!(update, Update::Files { .. }));
     let listed = updates
