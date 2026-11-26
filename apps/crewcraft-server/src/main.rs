@@ -23,6 +23,7 @@ use crewcraft_proto::handshake::ServerSide;
 use crewcraft_proto::request::FEATURE_LIST_ROOMS;
 #[cfg(unix)]
 use crewcraft_server::control::{ControlClient, ControlSocket};
+use crewcraft_server::identity_config;
 use crewcraft_server::lab_admin::{self, DisplayFailed, IssuedCode, ProtectedDisplay};
 use crewcraft_server::lab_installation::LabInstallation;
 use crewcraft_server::lab_runtime::LabRuntime;
@@ -322,6 +323,15 @@ const IN_USE: &str = "the data directory is in use by the running server; on Win
 fn serve(data: &Path) -> io::Result<()> {
     let (installation, config) = server_install::open(data, now_ms())?;
     let runtime = LabRuntime::bind_network(installation, config.serve_options(), &config.name, now_ms)?;
+    // identity.toml, if present, adds sign-in through an external identity provider (task T611f). A file that does not
+    // check out stops the server with the reason, rather than serving without the sign-in it asks for.
+    let runtime = match identity_config::load(data)? {
+        Some(external) => {
+            println!("External sign-in configured ({})", identity_config::IDENTITY_FILE);
+            runtime.with_external(external)
+        }
+        None => runtime,
+    };
     // Ctrl+C, SIGTERM (how service managers stop a server) and SIGHUP end serving cleanly: the listener stops
     // accepting, open connections finish their current request, and the journals close.
     let shutdown = Arc::new(AtomicBool::new(false));

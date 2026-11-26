@@ -1122,6 +1122,7 @@ dependencies = [
  "crewcraft-pki",
  "crewcraft-proto",
  "crewcraft-server-core",
+ "crewcraft-strict-toml",
  "crewcraft-tls",
  "crewcraft-totp",
  "crewcraft-ui-model",

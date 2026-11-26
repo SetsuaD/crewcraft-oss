@@ -21,6 +21,8 @@ crewcraft-oidc.workspace = true
 crewcraft-pki.workspace = true
 crewcraft-proto.workspace = true
 crewcraft-server-core.workspace = true
+# identity.toml (T611f).
+crewcraft-strict-toml.workspace = true
 crewcraft-tls.workspace = true
 crewcraft-totp.workspace = true
 rand_core.workspace = true
