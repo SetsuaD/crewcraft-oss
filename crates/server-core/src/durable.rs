@@ -74,6 +74,17 @@ pub const MAX_UPLOADS_PER_PERSON: usize = 4;
 /// An upload with no chunk for this long is discarded.
 pub const UPLOAD_IDLE_MS: u64 = 10 * 60 * 1000;
 
+/// Why a download was refused (task T330d).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadError {
+    /// This server keeps no files.
+    NoStorage,
+    /// No such file, or not one this person can reach now.
+    NotFound,
+    /// Reading the bytes failed.
+    Storage,
+}
+
 /// Why an upload request was refused (task T330b). Nothing is recorded; a refused finish discards the upload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadError {
@@ -249,6 +260,18 @@ impl DurableServer {
             FileError::DuplicateId => UploadError::Storage,
         })?;
         Ok(file)
+    }
+
+    /// Up to `length` bytes of file `file` from `offset`, for `user` (task T330d). `NotFound` unless the file is
+    /// recorded and `user` is a member of its room **now**: a file in a room someone left, or one they never could
+    /// see, is answered exactly like one that does not exist.
+    pub fn download(&self, user: &str, file: &[u8; 16], offset: u64, length: usize) -> Result<Vec<u8>, DownloadError> {
+        let Some(store) = &self.store else { return Err(DownloadError::NoStorage) };
+        let Some(record) = self.files.get(file) else { return Err(DownloadError::NotFound) };
+        if !self.server.room(&record.room).is_ok_and(|room| room.role(user).is_some()) {
+            return Err(DownloadError::NotFound);
+        }
+        store.read(&record.sha256, offset, length).map_err(|_| DownloadError::Storage)
     }
 
     /// How many uploads are in progress (task T330b).

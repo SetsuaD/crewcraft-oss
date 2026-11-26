@@ -27,6 +27,8 @@ pub const E_BAD_FILE: u16 = 6;
 pub const E_NO_STORAGE: u16 = 7;
 /// No such upload in progress for this person (task T330b).
 pub const E_NO_SUCH_UPLOAD: u16 = 8;
+/// No such file, or not one this person can reach (task T330d).
+pub const E_NO_SUCH_FILE: u16 = 9;
 /// Anything else (`AlreadyMember`, `LastOwner`, `BadName`).
 pub const E_OTHER: u16 = 99;
 
@@ -130,7 +132,9 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         Request::Search { query } => return Ok(Response::Ok { cursor: backend.found(user, query).len() as u64 }),
         // Uploads (task T330b) need a journal; the connection answers them (`connection::Connection::receive_durable`)
         // because their answer carries an id frame. Without a journal there is nowhere to keep files.
-        Request::UploadBegin { .. } | Request::UploadChunk { .. } | Request::UploadFinish { .. } => return Ok(refusal(E_NO_STORAGE)),
+        Request::UploadBegin { .. } | Request::UploadChunk { .. } | Request::UploadFinish { .. } | Request::Download { .. } => {
+            return Ok(refusal(E_NO_STORAGE));
+        }
         Request::Post { room, text } => backend.change(|s| s.post(room, user, text, now_ms), |s| s.post(room, user, text, now_ms)),
         Request::Edit { room, target, text } => {
             backend.change(|s| s.edit(room, user, *target, text, now_ms), |s| s.edit(room, user, *target, text, now_ms))

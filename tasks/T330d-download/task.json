@@ -1,0 +1,21 @@
+{
+  "id": "T330d-download",
+  "title": "Downloads over the device connection",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs"
+  ],
+  "test_path": "crates/server-core/tests/t330d_download.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t330d_download",
+  "depends_on": [
+    "T330b-upload"
+  ],
+  "spec": "Request 14 Download (13 stays unassigned) { file, offset, length (1 to MAX_CHUNK) }, under FEATURE_FILES, is answered Ok { cursor: n } then a bytes frame (tag 134: id, u32 n, n bytes): the file's bytes from offset, at most length, fewer at the end, none past it. DurableServer::download checks on every request that the file is recorded and that the person is a member of its room now; otherwise NotFound, answered E_NO_SUCH_FILE alike for a file that does not exist, one in a room the person was never in, and one in a room they left. Without storage it is NoStorage (E_NO_STORAGE), also from the in-memory server.",
+  "status": "done",
+  "context": [
+    "docs/FILES.md"
+  ]
+}
