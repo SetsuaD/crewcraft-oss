@@ -76,11 +76,11 @@ fn listen_until(listener: &TcpListener, config: &Arc<ServerConfig>, handle: &Han
                     continue; // dropped unanswered
                 }
                 open.fetch_add(1, Ordering::AcqRel);
-                let (config, handle, stop, open) = (config.clone(), handle.clone(), stop.clone(), open.clone());
+                let (config, handle, stop, done) = (config.clone(), handle.clone(), stop.clone(), open.clone());
                 let spawned = thread::Builder::new().name("control-connection".into()).spawn(move || {
                     // A connection that fails its handshake or breaks is simply closed; the chat server reconnects.
                     let _ = serve_connection(tcp, config, &handle, &stop);
-                    open.fetch_sub(1, Ordering::AcqRel);
+                    done.fetch_sub(1, Ordering::AcqRel);
                 });
                 if spawned.is_err() {
                     open.fetch_sub(1, Ordering::AcqRel);
