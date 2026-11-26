@@ -156,6 +156,11 @@ fn image_sizes_come_from_the_header() {
     assert_eq!(image_size(&zero), None, "a zero dimension is not an image size");
 }
 
+/// A file record as `record_file` takes it.
+fn stored(room: &str, uploader: &str, sha256: [u8; 32], size: u64, name: &str, image: Option<(u32, u32)>) -> StoredFile {
+    StoredFile { room: room.to_owned(), uploader: uploader.to_owned(), sha256, size, name: name.to_owned(), image }
+}
+
 #[test]
 fn file_records_are_checked_kept_and_replayed() {
     let path = scratch("journal");
@@ -164,16 +169,16 @@ fn file_records_are_checked_kept_and_replayed() {
     let room = ds.create_room("alice", "Project").unwrap();
     ds.add_member(&room, "alice", "bob", Role::Member).unwrap();
     let hash = sha(b"report");
-    ds.record_file(&room, "bob", [1; 16], hash, 6, "report.pdf", None).unwrap();
-    ds.record_file(&room, "alice", [2; 16], sha(b"picture"), 7, "photo.png", Some((640, 480))).unwrap();
+    ds.record_file([1; 16], stored(&room, "bob", hash, 6, "report.pdf", None)).unwrap();
+    ds.record_file([2; 16], stored(&room, "alice", sha(b"picture"), 7, "photo.png", Some((640, 480)))).unwrap();
 
-    assert_eq!(ds.record_file(&room, "carol", [3; 16], hash, 6, "x.pdf", None), Err(FileError::NotMember));
-    assert_eq!(ds.record_file("no-such-room", "bob", [3; 16], hash, 6, "x.pdf", None), Err(FileError::NotMember));
-    assert_eq!(ds.record_file(&room, "bob", [1; 16], hash, 6, "again.pdf", None), Err(FileError::DuplicateId));
-    assert_eq!(ds.record_file(&room, "bob", [3; 16], hash, 0, "empty.txt", None), Err(FileError::Empty));
+    assert_eq!(ds.record_file([3; 16], stored(&room, "carol", hash, 6, "x.pdf", None)), Err(FileError::NotMember));
+    assert_eq!(ds.record_file([3; 16], stored("no-such-room", "bob", hash, 6, "x.pdf", None)), Err(FileError::NotMember));
+    assert_eq!(ds.record_file([1; 16], stored(&room, "bob", hash, 6, "again.pdf", None)), Err(FileError::DuplicateId));
+    assert_eq!(ds.record_file([3; 16], stored(&room, "bob", hash, 0, "empty.txt", None)), Err(FileError::Empty));
     for bad in ["", ".", "..", "a/b", "a\\b", "line\nbreak", &"n".repeat(MAX_FILE_NAME + 1)] {
         assert!(!valid_file_name(bad), "{bad:?}");
-        assert_eq!(ds.record_file(&room, "bob", [3; 16], hash, 6, bad, None), Err(FileError::BadName), "{bad:?}");
+        assert_eq!(ds.record_file([3; 16], stored(&room, "bob", hash, 6, bad, None)), Err(FileError::BadName), "{bad:?}");
     }
     assert!(valid_file_name("Q3 plan (final).pdf") && valid_file_name(&"n".repeat(MAX_FILE_NAME)));
 

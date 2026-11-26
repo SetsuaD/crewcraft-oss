@@ -266,6 +266,14 @@ enum Parent {
     Planned,
 }
 
+/// An imported message as the journal records it: its room, its external key, and the files an earlier run stored for
+/// it (none for a message new in this run).
+struct Recorded<'a> {
+    slug: &'a str,
+    external: &'a str,
+    files: &'a [ImportedFile],
+}
+
 impl DurableServer {
     /// Import `bundle` (docs/IMPORT.md "Importing a bundle"). Members for whom `has_account` is false are skipped and
     /// reported. A `dry_run` changes nothing and reports what a real run would do. Every refusal skips that part only
@@ -386,7 +394,13 @@ impl DurableServer {
                     changed = true;
                 }
                 if !existing.deleted && !message.deleted {
-                    changed |= self.import_files(&existing.slug, &external, &existing.files, message, index, dry_run, &mut report)?;
+                    changed |= self.import_files(
+                        Recorded { slug: &existing.slug, external: &external, files: &existing.files },
+                        message,
+                        index,
+                        dry_run,
+                        &mut report,
+                    )?;
                 }
                 if changed {
                     report.messages_updated += 1;
@@ -420,10 +434,10 @@ impl DurableServer {
                         Parent::None | Parent::Planned => 0,
                     };
                     self.add_imported(slug, &external, message, text, parent)?;
-                    self.import_files(slug, &external, &[], message, index, false, &mut report)?;
+                    self.import_files(Recorded { slug, external: &external, files: &[] }, message, index, false, &mut report)?;
                 }
                 _ => {
-                    self.import_files("", &external, &[], message, index, true, &mut report)?;
+                    self.import_files(Recorded { slug: "", external: &external, files: &[] }, message, index, true, &mut report)?;
                     planned.insert(external, top_level && !message.deleted);
                 }
             }
@@ -463,17 +477,15 @@ impl DurableServer {
     /// Bring an imported message's files up to date with the bundle (T350e): store what is newly captured, keep what an
     /// earlier run stored, and record the list when it changed. Returns whether it changed. A dry run stores nothing and
     /// counts what a real run would store. A deleted message has no files.
-    #[allow(clippy::too_many_arguments)]
     fn import_files(
         &mut self,
-        slug: &str,
-        external: &str,
-        existing: &[ImportedFile],
+        recorded: Recorded<'_>,
         message: &BundleMessage,
         index: usize,
         dry_run: bool,
         report: &mut Report,
     ) -> Result<bool, DurableError> {
+        let Recorded { slug, external, files: existing } = recorded;
         if message.deleted || (message.files.is_empty() && existing.is_empty()) {
             return Ok(false);
         }

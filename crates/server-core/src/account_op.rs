@@ -228,7 +228,19 @@ pub fn encode_account_op(op: &AccountOp) -> Result<Vec<u8>, CodecError> {
         }
         AccountOp::Activated { bootstrap_pub, new_person, device_id, device_name, certificate, spki_sha256, counter, now_ms } => {
             out.push(4);
-            put_activation(&mut out, bootstrap_pub, new_person, *device_id, device_name, certificate, spki_sha256, *counter, *now_ms)?;
+            put_activation(
+                &mut out,
+                ActivationFields {
+                    bootstrap_pub,
+                    new_person,
+                    device_id: *device_id,
+                    device_name,
+                    certificate,
+                    spki_sha256,
+                    counter: *counter,
+                    now_ms: *now_ms,
+                },
+            )?;
         }
         AccountOp::ActivatedExternal {
             bootstrap_pub,
@@ -243,7 +255,19 @@ pub fn encode_account_op(op: &AccountOp) -> Result<Vec<u8>, CodecError> {
             subject,
         } => {
             out.push(13);
-            put_activation(&mut out, bootstrap_pub, new_person, *device_id, device_name, certificate, spki_sha256, *counter, *now_ms)?;
+            put_activation(
+                &mut out,
+                ActivationFields {
+                    bootstrap_pub,
+                    new_person,
+                    device_id: *device_id,
+                    device_name,
+                    certificate,
+                    spki_sha256,
+                    counter: *counter,
+                    now_ms: *now_ms,
+                },
+            )?;
             put_str(&mut out, issuer)?;
             put_str(&mut out, subject)?;
         }
@@ -319,18 +343,20 @@ pub fn encode_account_op(op: &AccountOp) -> Result<Vec<u8>, CodecError> {
 }
 
 /// The fields `Activated` and `ActivatedExternal` share, in their order on disk.
-#[allow(clippy::too_many_arguments)]
-fn put_activation(
-    out: &mut Vec<u8>,
-    bootstrap_pub: &[u8; 32],
-    new_person: &Option<NewPerson>,
+struct ActivationFields<'a> {
+    bootstrap_pub: &'a [u8; 32],
+    new_person: &'a Option<NewPerson>,
     device_id: u64,
-    device_name: &str,
-    certificate: &[u8],
-    spki_sha256: &[u8; 32],
+    device_name: &'a str,
+    certificate: &'a [u8],
+    spki_sha256: &'a [u8; 32],
     counter: u64,
     now_ms: u64,
-) -> Result<(), CodecError> {
+}
+
+/// Write the shared activation fields, in their order on disk.
+fn put_activation(out: &mut Vec<u8>, fields: ActivationFields<'_>) -> Result<(), CodecError> {
+    let ActivationFields { bootstrap_pub, new_person, device_id, device_name, certificate, spki_sha256, counter, now_ms } = fields;
     out.extend_from_slice(bootstrap_pub);
     match new_person {
         None => out.push(0),

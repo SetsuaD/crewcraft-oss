@@ -384,7 +384,15 @@ impl DurableServer {
         let image = store.image_size(&entry.sha256);
         let mut file = [0u8; 16];
         OsRng.fill_bytes(&mut file);
-        self.record_file(&entry.room, user, file, entry.sha256, entry.size, &entry.name, image).map_err(|error| match error {
+        let stored = StoredFile {
+            room: entry.room.clone(),
+            uploader: user.to_owned(),
+            sha256: entry.sha256,
+            size: entry.size,
+            name: entry.name.clone(),
+            image,
+        };
+        self.record_file(file, stored).map_err(|error| match error {
             FileError::Durable(error) => UploadError::Durable(error),
             FileError::NotMember => UploadError::NotMember,
             FileError::BadName => UploadError::BadName,
@@ -571,24 +579,16 @@ impl DurableServer {
         }
     }
 
-    /// Record a finished upload (task T330a). Call it only after `file_store::FileStore::finish` returned `Ok` for these
-    /// bytes: the record is the file's existence. The uploader must be a member of `slug` now.
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_file(
-        &mut self,
-        slug: &str,
-        uploader: &str,
-        file: [u8; 16],
-        sha256: [u8; 32],
-        size: u64,
-        name: &str,
-        image: Option<(u32, u32)>,
-    ) -> Result<(), FileError> {
+    /// Record a finished upload as file `file` (task T330a). Call it only after `file_store::FileStore::finish` returned
+    /// `Ok` for these bytes: the record is the file's existence. The uploader must be a member of the file's room now.
+    pub fn record_file(&mut self, file: [u8; 16], stored: StoredFile) -> Result<(), FileError> {
         self.check_alive().map_err(FileError::Durable)?;
-        check_file(&self.server, &self.files, slug, uploader, &file, size, name)?;
-        let op = Op::FileStored { slug: slug.to_owned(), uploader: uploader.to_owned(), file, sha256, size, name: name.to_owned(), image };
+        let StoredFile { room, uploader, sha256, size, name, image } = &stored;
+        check_file(&self.server, &self.files, room, uploader, &file, *size, name)?;
+        let op =
+            Op::FileStored { slug: room.clone(), uploader: uploader.clone(), file, sha256: *sha256, size: *size, name: name.clone(), image: *image };
         self.record(&op).map_err(FileError::Durable)?;
-        self.files.insert(file, StoredFile { room: slug.to_owned(), uploader: uploader.to_owned(), sha256, size, name: name.to_owned(), image });
+        self.files.insert(file, stored);
         Ok(())
     }
 

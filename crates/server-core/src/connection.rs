@@ -112,19 +112,7 @@ impl Connection {
     /// Returns everything to send, in that order. On a fatal error, returns only the error: no bytes from this call
     /// are sent and the caller closes the connection.
     pub fn receive(&mut self, server: &mut Server, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, ConnError> {
-        self.receive_with(
-            server,
-            bytes,
-            now_ms,
-            |s, user, request, now| Ok((handle(s, user, request, now), None)),
-            |s| s,
-            |_, _, _| Vec::new(),
-            |_, _, _| Vec::new(),
-            |_, _, _| None,
-            |_, _, _| None,
-            |_, _, _| Vec::new(),
-            memory_pin_state,
-        )
+        self.receive_with(server, bytes, now_ms, |s, user, request, now| Ok((handle(s, user, request, now), None)))
     }
 
     /// Handle framed requests with the same wire behavior as [Self::receive].
@@ -136,38 +124,20 @@ impl Connection {
         // Calls whose people stopped sending heartbeats close first (task T360a1).
         server.sweep_calls(now_ms).map_err(DurableConnError::Storage)?;
         let media_device = self.device.filter(|_| self.features & crewcraft_proto::request::FEATURE_MEDIA != 0);
-        self.receive_with(
-            server,
-            bytes,
-            now_ms,
-            |s, user, request, now| match upload(s, user, request, now).or_else(|| calls(s, user, request, now, media_device)) {
+        self.receive_with(server, bytes, now_ms, |s, user, request, now| {
+            match upload(s, user, request, now).or_else(|| calls(s, user, request, now, media_device)) {
                 Some(answer) => answer,
                 None => handle_backend(&mut Backend::Durable(s), user, request, now).map(|r| (r, None)).map_err(DurableConnError::Storage),
-            },
-            DurableServer::server,
-            DurableServer::found,
-            DurableServer::attachments,
-            DurableServer::parent_of,
-            DurableServer::imported_sent_ms,
-            call_state,
-            DurableServer::pin_state,
-        )
+            }
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn receive_with<S, E: From<ConnError>>(
+    fn receive_with<S: Reads, E: From<ConnError>>(
         &mut self,
         server: &mut S,
         bytes: &[u8],
         now_ms: u64,
         mut dispatch: impl FnMut(&mut S, &str, &Request, u64) -> Result<Answered, E>,
-        read: impl Fn(&S) -> &Server,
-        found: impl Fn(&S, &str, &str) -> Vec<SearchHit>,
-        attachments: impl Fn(&S, &str, u64) -> Vec<crewcraft_proto::push::AttachedFile>,
-        parent_of: impl Fn(&S, &str, u64) -> Option<u64>,
-        sent_of: impl Fn(&S, &str, u64) -> Option<u64>,
-        call_state: impl Fn(&S, &str, &str) -> Vec<Push>,
-        pin_state: impl Fn(&S, &str, &str) -> Option<Push>,
     ) -> Result<Vec<u8>, E> {
         self.decoder.push(bytes);
         let mut out = Vec::new();
@@ -209,14 +179,14 @@ impl Connection {
             // After a successful Sync, append the room's events as push frames.
             if let Request::Sync { room, cursor } = &request
                 && matches!(response, Response::Ok { .. })
-                && let Ok(service) = read(server).room(room)
+                && let Ok(service) = server.server().room(room)
                 && let Ok(Since::Events(events)) = service.sync(&self.user, *cursor)
             {
                 let archive = self.features & crewcraft_proto::request::FEATURE_ARCHIVE != 0;
                 let calls_on = self.features & crewcraft_proto::request::FEATURE_CALLS != 0;
                 // The room's open call, before its events (task T360a1).
                 if calls_on {
-                    for state in call_state(server, room, &self.user) {
+                    for state in server.call_state(room, &self.user) {
                         out.extend_from_slice(&encode(&encode_push(&state).map_err(ConnError::Request)?).map_err(ConnError::Frame)?);
                     }
                 }
@@ -242,7 +212,7 @@ impl Connection {
                     // An imported message's original time follows its push (task T350d1).
                     if posted
                         && archive
-                        && let Some(sent_ms) = sent_of(server, room, ev_cursor)
+                        && let Some(sent_ms) = server.sent_of(room, ev_cursor)
                     {
                         let sent = encode_push(&Push::Sent { room: room.clone(), cursor: ev_cursor, sent_ms }).map_err(ConnError::Request)?;
                         out.extend_from_slice(&encode(&sent).map_err(ConnError::Frame)?);
@@ -250,14 +220,14 @@ impl Connection {
                     // A reply's thread follows its push, for a client that agreed to threads (task T340a).
                     if posted
                         && self.features & crewcraft_proto::request::FEATURE_THREADS != 0
-                        && let Some(parent) = parent_of(server, room, ev_cursor)
+                        && let Some(parent) = server.parent_of(room, ev_cursor)
                     {
                         let threaded = encode_push(&Push::Threaded { room: room.clone(), cursor: ev_cursor, parent }).map_err(ConnError::Request)?;
                         out.extend_from_slice(&encode(&threaded).map_err(ConnError::Frame)?);
                     }
                     // A message's files follow its push, for a client that agreed to them (task T330c).
                     if posted && self.features & crewcraft_proto::request::FEATURE_FILES != 0 {
-                        let files = attachments(server, room, ev_cursor);
+                        let files = server.attachments(room, ev_cursor);
                         if !files.is_empty() {
                             let attached =
                                 encode_push(&Push::Attached { room: room.clone(), cursor: ev_cursor, files }).map_err(ConnError::Request)?;
@@ -269,7 +239,7 @@ impl Connection {
             if let Request::ListRooms = request
                 && matches!(response, Response::Ok { .. })
             {
-                let rooms = encode_rooms(id, &listed_rooms(read(server), &self.user)).map_err(ConnError::Request)?;
+                let rooms = encode_rooms(id, &listed_rooms(server.server(), &self.user)).map_err(ConnError::Request)?;
                 out.extend_from_slice(&encode(&rooms).map_err(ConnError::Frame)?);
             }
             // The complete pin projection follows every successful sync, even when the event tail has a gap.
@@ -277,7 +247,7 @@ impl Connection {
             if let Request::Sync { room, .. } = &request
                 && pins_saved
                 && matches!(response, Response::Ok { .. })
-                && let Some(pinned) = pin_state(server, room, &self.user)
+                && let Some(pinned) = server.pin_state(room, &self.user)
             {
                 let frame = encode_push(&pinned).map_err(ConnError::Request)?;
                 out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
@@ -286,12 +256,72 @@ impl Connection {
             if let Request::Search { query } = &request
                 && matches!(response, Response::Ok { .. })
             {
-                let hits = encode_hits(id, &found(server, &self.user, query)).map_err(ConnError::Request)?;
+                let hits = encode_hits(id, &server.found(&self.user, query)).map_err(ConnError::Request)?;
                 out.extend_from_slice(&encode(&hits).map_err(ConnError::Frame)?);
             }
         }
 
         Ok(out)
+    }
+}
+
+/// What a connection reads from the server it serves, besides dispatching requests. The in-memory server has rooms and
+/// pinned messages only; the durable one adds search, files, threads, imported times and calls.
+trait Reads {
+    fn server(&self) -> &Server;
+    fn found(&self, user: &str, query: &str) -> Vec<SearchHit>;
+    fn attachments(&self, room: &str, cursor: u64) -> Vec<crewcraft_proto::push::AttachedFile>;
+    fn parent_of(&self, room: &str, cursor: u64) -> Option<u64>;
+    fn sent_of(&self, room: &str, cursor: u64) -> Option<u64>;
+    fn call_state(&self, room: &str, user: &str) -> Vec<Push>;
+    fn pin_state(&self, room: &str, user: &str) -> Option<Push>;
+}
+
+impl Reads for Server {
+    fn server(&self) -> &Server {
+        self
+    }
+    fn found(&self, _: &str, _: &str) -> Vec<SearchHit> {
+        Vec::new()
+    }
+    fn attachments(&self, _: &str, _: u64) -> Vec<crewcraft_proto::push::AttachedFile> {
+        Vec::new()
+    }
+    fn parent_of(&self, _: &str, _: u64) -> Option<u64> {
+        None
+    }
+    fn sent_of(&self, _: &str, _: u64) -> Option<u64> {
+        None
+    }
+    fn call_state(&self, _: &str, _: &str) -> Vec<Push> {
+        Vec::new()
+    }
+    fn pin_state(&self, room: &str, user: &str) -> Option<Push> {
+        memory_pin_state(self, room, user)
+    }
+}
+
+impl Reads for DurableServer {
+    fn server(&self) -> &Server {
+        DurableServer::server(self)
+    }
+    fn found(&self, user: &str, query: &str) -> Vec<SearchHit> {
+        DurableServer::found(self, user, query)
+    }
+    fn attachments(&self, room: &str, cursor: u64) -> Vec<crewcraft_proto::push::AttachedFile> {
+        DurableServer::attachments(self, room, cursor)
+    }
+    fn parent_of(&self, room: &str, cursor: u64) -> Option<u64> {
+        DurableServer::parent_of(self, room, cursor)
+    }
+    fn sent_of(&self, room: &str, cursor: u64) -> Option<u64> {
+        self.imported_sent_ms(room, cursor)
+    }
+    fn call_state(&self, room: &str, user: &str) -> Vec<Push> {
+        call_state(self, room, user)
+    }
+    fn pin_state(&self, room: &str, user: &str) -> Option<Push> {
+        DurableServer::pin_state(self, room, user)
     }
 }
 
