@@ -8,8 +8,12 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-# Ed25519 signatures; ring is already the TLS stack's crypto provider (docs/NON-RUST-DEPENDENCIES.md).
-ring = "0.17"
+# Ed25519 signatures and the media key's PKCS#8 form, in pure Rust: the media server checks credentials and must
+# stay free of native code (docs/NON-RUST-DEPENDENCIES.md, "Crates that stay pure Rust"), so not ring.
+ed25519-dalek = { workspace = true, features = ["pkcs8", "alloc"] }
+# The key seed and each credential's nonce, from the operating system.
+getrandom = "0.3"
+zeroize.workspace = true
 
 [lints]
 workspace = true

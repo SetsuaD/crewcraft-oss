@@ -10,7 +10,7 @@ same change that adds the dependency; the security contributor reviews it (CODEO
 
 | Helper | Pulled in by | Why it is needed | Pure-Rust option considered | Approved |
 |---|---|---|---|---|
-| `cc` | `ring` 0.17 (through `rustls`, crate `crewcraft-tls`; directly in `xtask`, which signs the Android APK with it; and directly in `crewcraft-sframe` (AES-GCM and HKDF of end-to-end encrypted calls, T360c) and `crewcraft-media-auth` (Ed25519 media credentials, T360b1)) | ring compiles its C and assembly routines with `cc`. It is the crypto provider of the first owned TLS proof (M2, work item W0). | `rustls-graviola` (no C, but x86_64 and aarch64 only and very new), `rustls-rustcrypto` (pre-release), `aws-lc-rs` (audited, but also needs `cmake`) | No: waits for the security contributor's review (CODEOWNERS) |
+| `cc` | `ring` 0.17 (through `rustls`, crate `crewcraft-tls`; directly in `xtask`, which signs the Android APK with it; and directly in `crewcraft-sframe` (AES-GCM and HKDF of end-to-end encrypted calls, T360c)) | ring compiles its C and assembly routines with `cc`. It is the crypto provider of the first owned TLS proof (M2, work item W0). | `rustls-graviola` (no C, but x86_64 and aarch64 only and very new), `rustls-rustcrypto` (pre-release), `aws-lc-rs` (audited, but also needs `cmake`) | No: waits for the security contributor's review (CODEOWNERS) |
 | `pkg-config` | `wayland-sys` 0.31 (through `winit` and `glutin`, used by `eframe` for the desktop window on Linux, crate `crewcraft`) | wayland-sys's build script can look up the system's Wayland library. The window loads libwayland at run time (winit's `wayland-dlopen`), so nothing is compiled or linked at build time; the helper is listed because it is in `Cargo.lock`. Linux desktops supply libwayland, libxkbcommon, X11 and OpenGL; they are run-time requirements of the package, not build inputs | None mature: winit is the Rust windowing library egui uses, and it reaches the display server through these system libraries | No: waits for the security contributor's review (CODEOWNERS) |
 
 Only the helpers in the table are native; every other dependency is pure Rust.
@@ -44,6 +44,8 @@ the normal or build dependencies of one of them, on any target, include `cc`, `c
 | Crate | Why it stays pure Rust |
 |---|---|
 | `crewcraft-media-crypto` | The media server's DTLS, SRTP and hashes (T362a, [CALLS.md](CALLS.md)). Every ready-made str0m backend links C (AWS-LC, OpenSSL, or `rcgen`'s AWS-LC even in str0m's RustCrypto mode), so CrewCraft supplies its own provider from RustCrypto crates and `dimpl`'s RustCrypto mode, and makes its DTLS certificate with `p256` and `x509-cert` |
+| `crewcraft-media-auth` | The media credentials the media server checks (T360b1). Ed25519 and the media key's PKCS#8 form come from `ed25519-dalek` (until T363a they came from `ring`), so the media server can link it |
+| `crewcraft-media` | The media server itself (T363a, [CALLS.md](CALLS.md)): str0m with no backend of its own, on `crewcraft-media-crypto` and `crewcraft-media-auth` |
 
 ## Shipped third-party binaries
 
