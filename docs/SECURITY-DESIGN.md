@@ -400,22 +400,23 @@ bootstrap connection (section 3) takes a third pair of calls in place of the pas
    unbound). Only after it returns `Ok` is the leaf sent as `Activated`.
 
 On an `oidc` server, `Redeem` (password and authenticator) is refused, and on any other server `RedeemExternal` is
-refused, so a server has exactly one way in. The invitation link carries the mode (`&signin=org`) so the app shows the
-right form; the server, not the link, decides. Signing in afterwards is the flow above. An account enrolled this way
-has no CrewCraft password or code, so it cannot be signed in to any other way.
-
-The sub-tasks, each test-defined: the bootstrap wire messages (`crewcraft-proto`), the account store's
-`ActivatedExternal`, the bootstrap state machine's external path, the app's enrollment through the browser and the
-link's mode, and an end-to-end test that enrolls, signs in and chats against a running server with a fake provider.
+refused (`ERR_WRONG_PATH`), so a server has exactly one way in. The app's enrollment screen offers both ("Enroll this
+device" with a password, "Enroll with your organization" with only the link) and says which one the server wants when
+the other is tried; the server, not the app, decides. Signing in afterwards is the flow above. An account enrolled this
+way has no CrewCraft password or code, so it cannot be signed in to any other way. A server with a provider keeps each
+bootstrap connection open for up to 330 seconds (the app's window), so the person has five minutes in the browser.
 
 **While signed in.** The session layer re-checks the authorizer by the T600 rules (10 minutes, 60-second retry, at most
 24 hours of grace from the last confirmation, none for the visitor module). A `deny` ends the person's sessions at the
 next check; signing out and device revocation work as before.
 
-**What is built (tasks T611a to T611h).** The opening and reply for steps 1 and 3 in `crewcraft-proto`, the account
+**What is built (tasks T611a to T611i).** The opening and reply for steps 1 and 3 in `crewcraft-proto`, the account
 binding and the authorization record in the account store, an https client on the server (`crates/https`) for
 discovery, keys, the token exchange and the authorizer, the server's sign-in and its `identity.toml`, and in the app the
 loopback listener, the browser launch, the whole flow, and the sign-in screen's "Sign in with your organization" button
 with a Cancel while the browser page is open (the connection worker runs the flow; cancelling or closing the app ends
-the wait at once). **Still to build:** binding an account to its provider identity when an invitation is redeemed (today
-the binding is made in the account store directly), and an end-to-end test against a running server.
+the wait at once). Enrollment through the provider (T611i): the bootstrap messages, the account store's one-record
+activation with the binding, the bootstrap connection's external path (provider calls with no lock held), the server's
+nonces per invitation, and the app's "Enroll with your organization"; an end-to-end test enrolls, signs in and chats
+against a running server with a provider that signs real ID tokens. **Still to build:** an administrator re-binding an
+account (audited), and the invitation link naming the way in so the app can show only the right button.

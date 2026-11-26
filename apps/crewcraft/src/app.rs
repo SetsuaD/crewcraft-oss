@@ -27,6 +27,7 @@ use zeroize::Zeroizing;
 use crate::bootstrap_transport::MAX_CONFIRMATION_WINDOW;
 use crate::device::{DeviceError, StoredDevice};
 use crate::device_store::{DeviceStore, StoreError};
+use crate::enroll_client::{BrowserProblem, ERR_EXTERNAL_REFUSED};
 use crate::enrollment::{Enrollment, EnrollmentEvent, KeySource};
 use crate::hardware_key::{HardwareKeys, new_alias};
 use crate::key_vault::{OpenVault, SystemVault};
@@ -34,7 +35,7 @@ use crate::lab_client::LabError;
 use crate::server_endpoint::ServerEndpoint;
 use crate::signed_in::{Credentials, valid_email};
 use crate::ticket_file::TicketFile;
-use crate::worker::{Event, Worker, WorkerConfig};
+use crate::worker::{Browser, Event, Worker, WorkerConfig};
 
 /// The one saved server profile of the first beta. Several servers come later.
 pub const PROFILE: &str = "default";
@@ -222,6 +223,8 @@ pub struct Controller {
     worker: Option<(Worker, Receiver<Event>)>,
     /// The hardware key store new device keys are made in; `None` on the desktop (software keys, sealed records).
     hardware: Option<Arc<dyn HardwareKeys>>,
+    /// Opens an organization's sign-in page (tasks T611h, T611i): the system browser, or a test's or a phone's own.
+    browser: Browser,
 }
 
 impl Controller {
@@ -272,8 +275,9 @@ impl Controller {
             }
         };
         let remembered = store.as_ref().and(dir.as_deref()).and_then(read_last_email);
+        let browser: Browser = Arc::new(crate::loopback::open_browser);
         let mut controller =
-            Self { store, dir, join: Arc::new(Mutex::new(join)), joining: None, wake, config, enrollment: None, worker: None, hardware };
+            Self { store, dir, join: Arc::new(Mutex::new(join)), joining: None, wake, config, enrollment: None, worker: None, hardware, browser };
         let saved = controller.store.as_ref().map(|store| store.load(PROFILE));
         match saved {
             Some(Ok(device)) => {
@@ -298,34 +302,59 @@ impl Controller {
         (controller, updates)
     }
 
+    /// Open organization sign-in pages with `browser` from now on (tests; a phone's own browser call). Applies to
+    /// enrollments started after this call, and to the connection of a device enrolled after it.
+    pub fn set_browser(&mut self, browser: Browser) {
+        self.browser = browser;
+    }
+
+    /// Join from `link` on a short-lived thread, then start the enrollment `start` makes from the endpoint and code.
+    fn join_then(
+        &mut self,
+        link: Zeroizing<String>,
+        start: impl FnOnce(ServerEndpoint, EnrollmentCode, Wake) -> Started + Send + 'static,
+    ) -> Vec<Update> {
+        let (sender, receiver) = mpsc::channel();
+        let (join, wake) = (self.join.clone(), self.wake.clone());
+        let spawned = thread::Builder::new().name("crewcraft-join".into()).spawn(move || {
+            let joined = join.lock().map_err(|_| "Enrollment could not start.".to_owned()).and_then(|join| (*join)(link.as_str()));
+            let started = joined.and_then(|(endpoint, code)| start(endpoint, code, wake.clone()));
+            if sender.send(started).is_ok() {
+                wake();
+            }
+        });
+        match spawned {
+            Ok(_) => {
+                self.joining = Some(receiver);
+                Vec::new()
+            }
+            Err(_) => vec![Update::NeedsEnrollment, Update::Failed("Enrollment could not start.".to_owned())],
+        }
+    }
+
+    fn key_source(&self) -> KeySource {
+        match &self.hardware {
+            Some(keys) => KeySource::Hardware { keys: keys.clone(), alias: new_alias(PROFILE) },
+            None => KeySource::Software,
+        }
+    }
+
     /// Act on one window action.
     pub fn act(&mut self, action: Action) -> Vec<Update> {
         match action {
+            Action::EnrollExternal { link } => {
+                let (key, browser) = (self.key_source(), self.browser.clone());
+                self.join_then(link, move |endpoint, code, wake| {
+                    Enrollment::start_external(endpoint, code, &device_name(), key, browser, move || wake())
+                        .map_err(|_| "Enrollment could not start.".to_owned())
+                })
+            }
             Action::Enroll { link, password } => {
-                let (sender, receiver) = mpsc::channel();
-                let (join, wake) = (self.join.clone(), self.wake.clone());
-                let key = match &self.hardware {
-                    Some(keys) => KeySource::Hardware { keys: keys.clone(), alias: new_alias(PROFILE) },
-                    None => KeySource::Software,
-                };
-                let spawned = thread::Builder::new().name("crewcraft-join".into()).spawn(move || {
-                    let joined = join.lock().map_err(|_| "Enrollment could not start.".to_owned()).and_then(|join| (*join)(link.as_str()));
-                    let started = joined.and_then(|(endpoint, code)| {
-                        let notify = wake.clone();
-                        Enrollment::start_with_key(endpoint, code, &device_name(), &password, MAX_CONFIRMATION_WINDOW, key, move || notify())
-                            .map_err(|_| "Enrollment could not start.".to_owned())
-                    });
-                    if sender.send(started).is_ok() {
-                        wake();
-                    }
-                });
-                match spawned {
-                    Ok(_) => {
-                        self.joining = Some(receiver);
-                        Vec::new()
-                    }
-                    Err(_) => vec![Update::NeedsEnrollment, Update::Failed("Enrollment could not start.".to_owned())],
-                }
+                let key = self.key_source();
+                self.join_then(link, move |endpoint, code, wake| {
+                    Enrollment::start_with_key(endpoint, code, &device_name(), &password, MAX_CONFIRMATION_WINDOW, key, move || wake())
+                        .map_err(|_| "Enrollment could not start.".to_owned())
+                })
             }
             Action::ConfirmAuthenticator { code } => match &self.enrollment {
                 Some((enrollment, _)) if enrollment.confirm(code.trim()) => Vec::new(),
@@ -354,6 +383,9 @@ impl Controller {
             Action::CancelSignIn => {
                 if let Some((worker, _)) = &self.worker {
                     worker.cancel_sign_in();
+                }
+                if let Some((enrollment, _)) = &self.enrollment {
+                    enrollment.cancel();
                 }
                 Vec::new()
             }
@@ -399,6 +431,7 @@ impl Controller {
                     Ok(EnrollmentEvent::AuthenticatorSetup(setup)) => {
                         updates.push(Update::AuthenticatorSetup { otpauth_uri: setup.otpauth_uri().to_owned() });
                     }
+                    Ok(EnrollmentEvent::WaitingForBrowser) => updates.push(Update::WaitingForBrowser),
                     Ok(EnrollmentEvent::Enrolled(device)) => {
                         enrolled = Some(device);
                         break;
@@ -464,9 +497,14 @@ impl Controller {
         // The resume ticket (T240) is kept next to the saved device, so a restart can reopen the session without a
         // code; with nowhere to keep the device, it is kept in memory only.
         let started = match (&self.store, self.dir.as_deref()) {
-            (Some(_), Some(dir)) => {
-                Worker::start_with_keeper(device.endpoint().clone(), identity, self.config, Box::new(TicketFile::new(dir)), move || wake())
-            }
+            (Some(_), Some(dir)) => Worker::start_with_browser(
+                device.endpoint().clone(),
+                identity,
+                self.config,
+                Box::new(TicketFile::new(dir)),
+                self.browser.clone(),
+                move || wake(),
+            ),
             _ => Worker::start(device.endpoint().clone(), identity, self.config, move || wake()),
         };
         match started {
@@ -505,12 +543,27 @@ pub fn enrollment_problem(error: DeviceError) -> String {
         DeviceError::Bootstrap(Transport::ConfirmationWindow) | DeviceError::Enrollment(Exchange::PromptCancelled) => {
             "Enrollment took too long. Ask for a new invitation if this one has expired.".to_owned()
         }
+        // The two answers of an enrollment through the provider come before the general refusals (task T611i).
+        DeviceError::Enrollment(Exchange::WrongPath) => {
+            "This server enrolls the other way: with your organization's sign-in, or with a password. Use the other button.".to_owned()
+        }
+        DeviceError::Enrollment(Exchange::ConfirmRefused(ERR_EXTERNAL_REFUSED)) => {
+            "Your organization's sign-in did not match this invitation, or you do not have access to this chat. Ask your \
+             administrator."
+                .to_owned()
+        }
         DeviceError::Enrollment(Exchange::SetupRefused(_)) => {
             "The server refused the invitation. It may have expired or already been used.".to_owned()
         }
         DeviceError::Enrollment(Exchange::ConfirmRefused(_)) => {
             "The server refused that authenticator code. Start again with the invitation.".to_owned()
         }
+        DeviceError::Enrollment(Exchange::Browser(problem)) => match problem {
+            BrowserProblem::Cancelled => "Enrollment cancelled.".to_owned(),
+            BrowserProblem::TimedOut => "The sign-in in the browser was not finished in time. Try again.".to_owned(),
+            BrowserProblem::ProviderRefused => "The sign-in page did not sign you in. Try again.".to_owned(),
+            BrowserProblem::Browser | BrowserProblem::NoRedirect => "The browser could not be used for the sign-in.".to_owned(),
+        },
         DeviceError::Enrollment(Exchange::ConfirmationUnknown(_)) => {
             "The connection dropped while the server confirmed the code. Ask your administrator whether this device was enrolled.".to_owned()
         }

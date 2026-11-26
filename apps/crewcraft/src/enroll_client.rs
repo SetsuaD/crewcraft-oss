@@ -1,4 +1,7 @@
 //! One client-side bootstrap exchange on an already verified server connection. Task T221.
+//!
+//! `enroll_external` is the same exchange through the server's identity provider (task T611i): `RedeemExternal`, the
+//! browser part (`browse`, passed in), `ConfirmExternal`, `Activated`.
 
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -12,11 +15,46 @@ use rustls::server::WebPkiClientVerifier;
 use rustls::server::danger::ClientCertVerifier;
 use rustls::{RootCertStore, crypto::ring};
 use x509_parser::prelude::{ASN1Time, FromDer, X509Certificate};
+use zeroize::Zeroizing;
+
+use crate::chat_session::ExternalStart;
+use crate::external_flow::{FlowError, Redirect};
+use crate::loopback::LoopbackError;
 
 const REDEEM_ID: u32 = 1;
 const CONFIRM_ID: u32 = 2;
 const MAX_SETUP_REPLY: usize = 1 + 4 + 2 + bootstrap::MAX_URI;
 const MAX_CONFIRM_REPLY: usize = 1 + 4 + 2 + bootstrap::MAX_CERT + 2 + bootstrap::MAX_CERT;
+/// `ExternalStart`: four length-prefixed texts (task T611i).
+const MAX_EXTERNAL_START_REPLY: usize =
+    1 + 4 + 4 * 2 + 2 * crewcraft_proto::signin::MAX_URL_BYTES + crewcraft_proto::signin::MAX_CLIENT_ID_BYTES + crewcraft_proto::signin::TOKEN_LEN;
+/// The server's code for "this server enrolls the other way" (`crewcraft_bootstrap::ERR_WRONG_PATH`).
+const ERR_WRONG_PATH: u16 = 6;
+/// The server's code for "the provider's sign-in does not match the invitation, or was not allowed", answering
+/// `ConfirmExternal` (`crewcraft_bootstrap::ERR_EXTERNAL_REFUSED`).
+pub const ERR_EXTERNAL_REFUSED: u16 = 7;
+
+/// A device's signing request for enrolling through the server's identity provider: no password (task T611i).
+pub struct ExternalEnrollmentRequest<'a> {
+    pub device_name: &'a str,
+    pub csr: &'a [u8],
+    pub expected_spki: &'a [u8],
+}
+
+/// Why the browser part of an enrollment through the provider gave no code (task T611i).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserProblem {
+    /// The system browser could not be opened.
+    Browser,
+    /// The app could not listen for the redirect.
+    NoRedirect,
+    /// The person did not finish in time.
+    TimedOut,
+    /// The provider ended the sign-in without a code.
+    ProviderRefused,
+    /// The person cancelled, or the app is closing.
+    Cancelled,
+}
 
 /// A signing request and the exact DER SubjectPublicKeyInfo supplied by its device signer.
 pub struct EnrollmentRequest<'a> {
@@ -95,6 +133,10 @@ pub enum EnrollmentError {
     ConfirmationUnknown(ExchangeProblem),
     /// The server reported activation. Its certificate cannot be installed.
     ActivatedCertificateRejected(CertificateProblem),
+    /// The server enrolls the other way: through its identity provider, or with a password (task T611i).
+    WrongPath,
+    /// The browser part of an enrollment through the provider gave no code (task T611i).
+    Browser(BrowserProblem),
 }
 
 /// Enroll on a server-authenticated TLS stream. Its caller supplies I/O deadlines and the same root DER that
@@ -120,6 +162,7 @@ pub fn enroll(
         let setup = receive(&mut stream, REDEEM_ID, MAX_SETUP_REPLY).map_err(EnrollmentError::Setup)?;
         let uri = match setup {
             BootstrapResponse::Setup { totp_uri } => totp_uri,
+            BootstrapResponse::Error { code: ERR_WRONG_PATH } => return Err(EnrollmentError::WrongPath),
             BootstrapResponse::Error { code } => return Err(EnrollmentError::SetupRefused(code)),
             BootstrapResponse::Activated { .. } | BootstrapResponse::ExternalStart { .. } => {
                 return Err(EnrollmentError::Setup(ExchangeProblem::UnexpectedReply));
@@ -141,6 +184,66 @@ pub fn enroll(
         BootstrapResponse::Setup { .. } | BootstrapResponse::ExternalStart { .. } => {
             Err(EnrollmentError::ConfirmationUnknown(ExchangeProblem::UnexpectedReply))
         }
+    }
+}
+
+/// Enroll through the server's identity provider on a server-authenticated TLS stream (task T611i), as `enroll` does
+/// with a password: `RedeemExternal`, then `browse` (the system browser and the loopback redirect, for the start the
+/// server gave), then `ConfirmExternal` and `Activated`. A refusal at the start is `SetupRefused` (or `WrongPath`); one
+/// at the confirmation is `ConfirmRefused`; a lost reply after sending the confirmation is `ConfirmationUnknown`.
+pub fn enroll_external(
+    mut stream: impl Read + Write,
+    request: ExternalEnrollmentRequest<'_>,
+    pinned_root_der: &[u8],
+    browse: impl FnOnce(&ExternalStart) -> Result<Redirect, BrowserProblem>,
+) -> Result<VerifiedDeviceChain, EnrollmentError> {
+    let root = parse_der(pinned_root_der).map_err(|_| EnrollmentError::InvalidTrust)?;
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(pinned_root_der)).map_err(|_| EnrollmentError::InvalidTrust)?;
+    let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), Arc::new(ring::default_provider()))
+        .build()
+        .map_err(|_| EnrollmentError::InvalidTrust)?;
+
+    let redeem = BootstrapRequest::RedeemExternal { device_name: request.device_name.into(), csr: request.csr.to_vec() };
+    send(&mut stream, REDEEM_ID, &redeem).map_err(EnrollmentError::Setup)?;
+    let start = match receive(&mut stream, REDEEM_ID, MAX_EXTERNAL_START_REPLY).map_err(EnrollmentError::Setup)? {
+        BootstrapResponse::ExternalStart { issuer, client_id, authorization_endpoint, nonce } => {
+            ExternalStart { issuer, client_id, authorization_endpoint, nonce: Zeroizing::new(nonce) }
+        }
+        BootstrapResponse::Error { code: ERR_WRONG_PATH } => return Err(EnrollmentError::WrongPath),
+        BootstrapResponse::Error { code } => return Err(EnrollmentError::SetupRefused(code)),
+        BootstrapResponse::Setup { .. } | BootstrapResponse::Activated { .. } => {
+            return Err(EnrollmentError::Setup(ExchangeProblem::UnexpectedReply));
+        }
+    };
+    let redirect = browse(&start).map_err(EnrollmentError::Browser)?;
+
+    let confirm = BootstrapRequest::ConfirmExternal {
+        code: redirect.code.to_string(),
+        verifier: redirect.verifier.to_string(),
+        redirect_uri: redirect.redirect_uri.clone(),
+    };
+    send(&mut stream, CONFIRM_ID, &confirm).map_err(EnrollmentError::ConfirmationUnknown)?;
+    match receive(&mut stream, CONFIRM_ID, MAX_CONFIRM_REPLY).map_err(EnrollmentError::ConfirmationUnknown)? {
+        BootstrapResponse::Activated { certificate, issuer_certificate } => {
+            verify_device_chain(certificate, issuer_certificate, request.expected_spki, &root, &*verifier)
+                .map_err(EnrollmentError::ActivatedCertificateRejected)
+        }
+        BootstrapResponse::Error { code } => Err(EnrollmentError::ConfirmRefused(code)),
+        BootstrapResponse::Setup { .. } | BootstrapResponse::ExternalStart { .. } => {
+            Err(EnrollmentError::ConfirmationUnknown(ExchangeProblem::UnexpectedReply))
+        }
+    }
+}
+
+/// The browser part's failure, as the enrollment reports it.
+pub fn browser_problem(error: &FlowError) -> BrowserProblem {
+    match error {
+        FlowError::Browser(_) => BrowserProblem::Browser,
+        FlowError::Loopback(LoopbackError::Bind(_)) => BrowserProblem::NoRedirect,
+        FlowError::Loopback(LoopbackError::TimedOut) => BrowserProblem::TimedOut,
+        FlowError::Loopback(LoopbackError::Provider(_)) => BrowserProblem::ProviderRefused,
+        FlowError::Loopback(LoopbackError::Cancelled) | FlowError::NotOffered | FlowError::Server(_) => BrowserProblem::Cancelled,
     }
 }
 

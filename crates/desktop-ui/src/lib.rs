@@ -49,6 +49,11 @@ pub enum Action {
         link: Zeroizing<String>,
         password: Zeroizing<String>,
     },
+    /// Enroll this device from an invitation link through the organization's sign-in page in the system browser (task
+    /// T611i): no password and no authenticator in CrewCraft.
+    EnrollExternal {
+        link: Zeroizing<String>,
+    },
     /// Finish enrollment with the first code from the authenticator the person just set up.
     ConfirmAuthenticator {
         code: Zeroizing<String>,
@@ -75,6 +80,7 @@ impl fmt::Debug for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Enroll { .. } => f.write_str("Enroll { .. }"),
+            Self::EnrollExternal { .. } => f.write_str("EnrollExternal { .. }"),
             Self::ConfirmAuthenticator { .. } => f.write_str("ConfirmAuthenticator { .. }"),
             Self::SignIn { email, .. } => f.debug_struct("SignIn").field("email", email).finish_non_exhaustive(),
             Self::SignInExternal { email } => f.debug_struct("SignInExternal").field("email", email).finish(),
@@ -251,7 +257,7 @@ impl Window {
         }
         // The browser page opening changes nothing but what the sign-in screen says: the sign-in is still in progress.
         if update == Update::WaitingForBrowser {
-            self.waiting_for_browser = self.busy && self.screen() == Screen::SignIn;
+            self.waiting_for_browser = self.busy && matches!(self.screen(), Screen::SignIn | Screen::Enroll);
             return;
         }
         self.busy = false;
@@ -357,6 +363,24 @@ impl Window {
             let password = std::mem::take(&mut self.password);
             self.busy = true;
             self.actions.push(Action::Enroll { link, password });
+        }
+        // An organization whose server signs people in with its own accounts (T611i): only the link is needed; the
+        // sign-in, and any second factor, happen on the organization's page in the browser.
+        ui.separator();
+        if self.waiting_for_browser {
+            ui.label("Finish signing in on the page that opened in your browser.");
+            if ui.button("Cancel").clicked() {
+                self.actions.push(Action::CancelSignIn);
+            }
+        } else {
+            let ready = !self.busy && !self.link.trim().is_empty();
+            if ui.add_enabled(ready, egui::Button::new("Enroll with your organization")).clicked() {
+                let link = Zeroizing::new(self.link.trim().to_owned());
+                self.link = Zeroizing::default();
+                self.password = Zeroizing::default();
+                self.busy = true;
+                self.actions.push(Action::EnrollExternal { link });
+            }
         }
     }
 

@@ -106,6 +106,16 @@ impl ServerEndpoint {
         open_bootstrap(|device| Ok(self.connect(device)?.transport), &self.root_der, code, confirmation_window)
     }
 
+    /// As `open_bootstrap`, for an enrollment through the server's identity provider (task T611i), whose window may be
+    /// up to `bootstrap_transport::MAX_EXTERNAL_CONFIRMATION_WINDOW`.
+    pub fn open_bootstrap_external(
+        &self,
+        code: &EnrollmentCode,
+        confirmation_window: Duration,
+    ) -> Result<BootstrapConnection<'_>, BootstrapTransportError> {
+        crate::bootstrap_transport::open_bootstrap_external(|device| Ok(self.connect(device)?.transport), &self.root_der, code, confirmation_window)
+    }
+
     /// Connect with an enrolled device and sign in with `credentials`. Each call is a new connection, and each needs
     /// a fresh authenticator code: the server refuses a code it has already accepted.
     pub fn sign_in(&self, device: Arc<dyn ResolvesClientCert>, credentials: &Credentials) -> Result<SignedInSession, LabError> {

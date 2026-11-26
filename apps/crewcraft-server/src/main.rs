@@ -322,10 +322,16 @@ const IN_USE: &str = "the data directory is in use by the running server; on Win
 
 fn serve(data: &Path) -> io::Result<()> {
     let (installation, config) = server_install::open(data, now_ms())?;
-    let runtime = LabRuntime::bind_network(installation, config.serve_options(), &config.name, now_ms)?;
     // identity.toml, if present, adds sign-in through an external identity provider (task T611f). A file that does not
     // check out stops the server with the reason, rather than serving without the sign-in it asks for.
-    let runtime = match identity_config::load(data)? {
+    let external = identity_config::load(data)?;
+    let mut options = config.serve_options();
+    if external.is_some() {
+        // Enrolling through the provider includes the person's sign-in in the browser (task T611i).
+        options.timeouts.bootstrap = options.timeouts.bootstrap.max(server_install::EXTERNAL_BOOTSTRAP_TIMEOUT);
+    }
+    let runtime = LabRuntime::bind_network(installation, options, &config.name, now_ms)?;
+    let runtime = match external {
         Some(external) => {
             println!("External sign-in configured ({})", identity_config::IDENTITY_FILE);
             runtime.with_external(external)
