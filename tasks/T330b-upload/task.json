@@ -1,0 +1,24 @@
+{
+  "id": "T330b-upload",
+  "title": "Uploads over the device connection",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "apps/crewcraft-server/src/lab_installation.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs"
+  ],
+  "test_path": "crates/server-core/tests/t330b_upload.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t330b_upload",
+  "depends_on": [
+    "T330a-file-store"
+  ],
+  "spec": "Requests 10 UploadBegin { room, name, size, sha256 }, 11 UploadChunk { upload, offset, bytes (1 to MAX_CHUNK) } and 12 UploadFinish { upload }, announced by FEATURE_FILES (4); UploadBegin and UploadFinish are answered Ok then an id frame (tag 133) with the upload's or the file's id, UploadChunk with Ok { bytes received }. DurableServer::with_files keeps bytes in a FileStore (sweeping unreferenced ones at start). begin_upload refuses, before any byte: no storage, a non-member, a bad name, a size of 0 or over MAX_FILE_SIZE, and more than MAX_UPLOADS (server) or MAX_UPLOADS_PER_PERSON in progress; uploads idle for UPLOAD_IDLE_MS are discarded. upload_chunk writes at any offset within the size (BadChunk otherwise) and only to the person's own upload (NoSuchUpload). finish_upload checks the content (WrongContent), checks membership again (NotMember if the person left), then records the file with its image size; a refused finish discards the upload. Refusals map to E_NO_STORAGE, E_NO_SUCH_ROOM, E_BAD_FILE, E_RATE_LIMITED and E_NO_SUCH_UPLOAD; the in-memory server answers E_NO_STORAGE. The installation keeps files in its data directory, and the network server advertises FEATURE_FILES.",
+  "status": "done",
+  "context": [
+    "docs/FILES.md"
+  ]
+}

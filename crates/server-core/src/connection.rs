@@ -6,7 +6,7 @@
 use crewcraft_proto::frame::{Decoder, FrameError, encode};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{MAX_MENTIONS, Push, encode_push};
-use crewcraft_proto::request::{Request, Response, SearchHit, decode_request, encode_hits, encode_response, encode_rooms};
+use crewcraft_proto::request::{Request, Response, SearchHit, decode_request, encode_hits, encode_id, encode_response, encode_rooms};
 
 use crate::cursor_log::Since;
 use crate::dispatch::{Backend, handle, handle_backend, listed_rooms};
@@ -85,7 +85,7 @@ impl Connection {
     /// Returns everything to send, in that order. On a fatal error, returns only the error: no bytes from this call
     /// are sent and the caller closes the connection.
     pub fn receive(&mut self, server: &mut Server, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, ConnError> {
-        self.receive_with(server, bytes, now_ms, |s, user, request, now| Ok(handle(s, user, request, now)), |s| s, |_, _, _| Vec::new())
+        self.receive_with(server, bytes, now_ms, |s, user, request, now| Ok((handle(s, user, request, now), None)), |s| s, |_, _, _| Vec::new())
     }
 
     /// Handle framed requests with the same wire behavior as [Self::receive].
@@ -98,7 +98,10 @@ impl Connection {
             server,
             bytes,
             now_ms,
-            |s, user, request, now| handle_backend(&mut Backend::Durable(s), user, request, now).map_err(DurableConnError::Storage),
+            |s, user, request, now| match upload(s, user, request, now) {
+                Some(answer) => answer,
+                None => handle_backend(&mut Backend::Durable(s), user, request, now).map(|r| (r, None)).map_err(DurableConnError::Storage),
+            },
             DurableServer::server,
             DurableServer::found,
         )
@@ -109,7 +112,7 @@ impl Connection {
         server: &mut S,
         bytes: &[u8],
         now_ms: u64,
-        mut dispatch: impl FnMut(&mut S, &str, &Request, u64) -> Result<Response, E>,
+        mut dispatch: impl FnMut(&mut S, &str, &Request, u64) -> Result<Answered, E>,
         read: impl Fn(&S) -> &Server,
         found: impl Fn(&S, &str, &str) -> Vec<SearchHit>,
     ) -> Result<Vec<u8>, E> {
@@ -118,10 +121,14 @@ impl Connection {
 
         while let Some(payload) = self.decoder.next_frame().map_err(ConnError::Frame)? {
             let (id, request) = decode_request(&payload).map_err(ConnError::Request)?;
-            let response = dispatch(server, &self.user, &request, now_ms)?;
+            let (response, follow) = dispatch(server, &self.user, &request, now_ms)?;
             let resp_bytes = encode_response(id, &response).map_err(ConnError::Request)?;
             let framed_resp = encode(&resp_bytes).map_err(ConnError::Frame)?;
             out.extend_from_slice(&framed_resp);
+            // An upload's answer carries the new upload's id or the finished file's (task T330b).
+            if let Some(value) = follow {
+                out.extend_from_slice(&encode(&encode_id(id, &value)).map_err(ConnError::Frame)?);
+            }
 
             // After a successful Sync, append the room's events as push frames.
             if let Request::Sync { room, cursor } = &request
@@ -154,3 +161,23 @@ impl Connection {
         Ok(out)
     }
 }
+
+/// Answer an upload request over a durable server (task T330b): `None` for any other request. A refusal is an `Error`
+/// with `dispatch::upload_error_code`; a storage failure (the journal, or a poisoned server) is fatal.
+fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64) -> Option<Result<Answered, DurableConnError>> {
+    use crate::durable::UploadError;
+    let answer = match request {
+        Request::UploadBegin { room, name, size, sha256 } => server.begin_upload(user, room, name, *size, *sha256, now_ms).map(|id| (0, Some(id))),
+        Request::UploadChunk { upload, offset, bytes } => server.upload_chunk(user, upload, *offset, bytes, now_ms).map(|received| (received, None)),
+        Request::UploadFinish { upload } => server.finish_upload(user, upload, now_ms).map(|file| (0, Some(file))),
+        _ => return None,
+    };
+    Some(match answer {
+        Ok((cursor, follow)) => Ok((Response::Ok { cursor }, follow)),
+        Err(UploadError::Durable(error)) => Err(DurableConnError::Storage(error)),
+        Err(error) => Ok((Response::Error { code: crate::dispatch::upload_error_code(error), detail: String::new() }, None)),
+    })
+}
+
+/// A request's answer, and the id frame that follows it when there is one (an upload's id or a file's, task T330b).
+type Answered = (Response, Option<[u8; 16]>);

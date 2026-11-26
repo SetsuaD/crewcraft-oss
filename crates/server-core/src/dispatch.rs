@@ -21,8 +21,27 @@ pub const E_NOT_ALLOWED: u16 = 3;
 /// `Service(EmptyText)` and `Service(TooLong)`.
 pub const E_BAD_TEXT: u16 = 4;
 pub const E_NO_SUCH_MESSAGE: u16 = 5;
+/// An upload that cannot be accepted: a bad name or size, a chunk outside it, bytes that do not match (task T330b).
+pub const E_BAD_FILE: u16 = 6;
+/// This server keeps no files (task T330b).
+pub const E_NO_STORAGE: u16 = 7;
+/// No such upload in progress for this person (task T330b).
+pub const E_NO_SUCH_UPLOAD: u16 = 8;
 /// Anything else (`AlreadyMember`, `LastOwner`, `BadName`).
 pub const E_OTHER: u16 = 99;
+
+/// The code for a refused upload request (task T330b). `Durable` is not here: a storage failure is fatal.
+pub fn upload_error_code(error: crate::durable::UploadError) -> u16 {
+    use crate::durable::UploadError as U;
+    match error {
+        U::NoStorage => E_NO_STORAGE,
+        U::NotMember => E_NO_SUCH_ROOM,
+        U::BadName | U::BadSize | U::BadChunk | U::WrongContent => E_BAD_FILE,
+        U::TooMany => E_RATE_LIMITED,
+        U::NoSuchUpload => E_NO_SUCH_UPLOAD,
+        U::Storage | U::Durable(_) => E_OTHER,
+    }
+}
 
 /// The code for an error: `NoSuchRoom` and `Service(Room(NotMember))` are `E_NO_SUCH_ROOM`, then as listed above.
 pub fn error_code(error: ServerError) -> u16 {
@@ -109,6 +128,9 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         Request::Ping => return Ok(Response::Ok { cursor: 0 }),
         Request::ListRooms => return Ok(Response::Ok { cursor: listed_rooms(backend.server(), user).len() as u64 }),
         Request::Search { query } => return Ok(Response::Ok { cursor: backend.found(user, query).len() as u64 }),
+        // Uploads (task T330b) need a journal; the connection answers them (`connection::Connection::receive_durable`)
+        // because their answer carries an id frame. Without a journal there is nowhere to keep files.
+        Request::UploadBegin { .. } | Request::UploadChunk { .. } | Request::UploadFinish { .. } => return Ok(refusal(E_NO_STORAGE)),
         Request::Post { room, text } => backend.change(|s| s.post(room, user, text, now_ms), |s| s.post(room, user, text, now_ms)),
         Request::Edit { room, target, text } => {
             backend.change(|s| s.edit(room, user, *target, text, now_ms), |s| s.edit(room, user, *target, text, now_ms))

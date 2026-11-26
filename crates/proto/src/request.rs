@@ -11,6 +11,9 @@
 //! - tag 6 `Ping`: no fields
 //! - tag 8 `ListRooms`: no fields (task T233; tag 7 is unassigned)
 //! - tag 9 `Search`: `str query` (1 to `MAX_QUERY` bytes; task T320b)
+//! - tag 10 `UploadBegin`: `str room | str name (1 to MAX_FILE_NAME) | u64 size | 32 SHA-256` (task T330b)
+//! - tag 11 `UploadChunk`: `16 upload id | u64 offset | u32 length | bytes (1 to MAX_CHUNK)`
+//! - tag 12 `UploadFinish`: `16 upload id`
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
@@ -25,6 +28,10 @@
 //! signed-in person can read whose words begin with every word of the query. `cursor` is the message's own (the key for
 //! opening it), `author` 0 to `MAX_AUTHOR` bytes (empty when the server no longer knows it), `snippet` 0 to
 //! `MAX_SNIPPET` bytes of the message's current plain text.
+//!
+//! `UploadBegin` and `UploadFinish` are answered `Ok { cursor: 0 }`, and then by one id frame (`encode_id`): `u8 tag
+//! (133) | u32 id | 16 value`, the new upload's id or the finished file's id. `UploadChunk` is answered `Ok` with the
+//! number of bytes the upload has received so far. All three are announced by `FEATURE_FILES` (docs/FILES.md).
 //!
 //! `room` is 1 to `message::MAX_NAME` bytes, `text` 0 to `message::MAX_BODY` bytes, `detail` 0 to `MAX_DETAIL` bytes.
 //!
@@ -49,6 +56,14 @@ pub const HITS_TAG: u8 = 132;
 pub const MAX_QUERY: usize = 200;
 /// The most hits one hits frame carries.
 pub const MAX_HITS: usize = 100;
+/// The handshake feature bit for uploads (task T330b).
+pub const FEATURE_FILES: u32 = 4;
+/// The first byte of an id frame.
+pub const ID_TAG: u8 = 133;
+/// The longest file name, in bytes.
+pub const MAX_FILE_NAME: usize = 255;
+/// The most bytes one upload chunk carries.
+pub const MAX_CHUNK: usize = 256 * 1024;
 /// The longest author in a hit, in bytes (an email address).
 pub const MAX_AUTHOR: usize = 320;
 /// The longest snippet in a hit, in bytes.
@@ -56,6 +71,9 @@ pub const MAX_SNIPPET: usize = 400;
 
 const LIST_ROOMS: u8 = 8;
 const SEARCH: u8 = 9;
+const UPLOAD_BEGIN: u8 = 10;
+const UPLOAD_CHUNK: u8 = 11;
+const UPLOAD_FINISH: u8 = 12;
 
 /// A request. `ListRooms` asks for the rooms the signed-in person is a member of.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +104,23 @@ pub enum Request {
     /// Messages the signed-in person can read, by the words they begin with (task T320b).
     Search {
         query: String,
+    },
+    /// Start uploading a file of `size` bytes whose SHA-256 is `sha256` to `room` (task T330b).
+    UploadBegin {
+        room: String,
+        name: String,
+        size: u64,
+        sha256: [u8; 32],
+    },
+    /// Part of an upload, at `offset`.
+    UploadChunk {
+        upload: [u8; 16],
+        offset: u64,
+        bytes: Vec<u8>,
+    },
+    /// Finish an upload: the file is recorded once its bytes check out.
+    UploadFinish {
+        upload: [u8; 16],
     },
 }
 
@@ -151,6 +186,14 @@ fn read_u64(bytes: &[u8], pos: &mut usize) -> Result<u64, CodecError> {
     Ok(value)
 }
 
+fn read_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
+    let end = pos.checked_add(N).filter(|end| *end <= bytes.len()).ok_or(CodecError::Truncated)?;
+    let mut array = [0u8; N];
+    array.copy_from_slice(&bytes[*pos..end]);
+    *pos = end;
+    Ok(array)
+}
+
 fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, CodecError> {
     if *pos + 4 > bytes.len() {
         return Err(CodecError::Truncated);
@@ -208,6 +251,30 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.extend_from_slice(&id.to_be_bytes());
             write_str(&mut out, query, 1, MAX_QUERY)?;
         }
+        Request::UploadBegin { room, name, size, sha256 } => {
+            out.push(UPLOAD_BEGIN);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            write_str(&mut out, name, 1, MAX_FILE_NAME)?;
+            out.extend_from_slice(&size.to_be_bytes());
+            out.extend_from_slice(sha256);
+        }
+        Request::UploadChunk { upload, offset, bytes } => {
+            if bytes.is_empty() || bytes.len() > MAX_CHUNK {
+                return Err(CodecError::FieldLength);
+            }
+            out.push(UPLOAD_CHUNK);
+            out.extend_from_slice(&id.to_be_bytes());
+            out.extend_from_slice(upload);
+            out.extend_from_slice(&offset.to_be_bytes());
+            out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            out.extend_from_slice(bytes);
+        }
+        Request::UploadFinish { upload } => {
+            out.push(UPLOAD_FINISH);
+            out.extend_from_slice(&id.to_be_bytes());
+            out.extend_from_slice(upload);
+        }
     }
     Ok(out)
 }
@@ -220,7 +287,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(1..=6).contains(&tag) && tag != LIST_ROOMS && tag != SEARCH {
+    if !(1..=6).contains(&tag) && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag) {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -255,6 +322,26 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         6 => Request::Ping,
         LIST_ROOMS => Request::ListRooms,
         SEARCH => Request::Search { query: read_string(bytes, &mut pos, 1, MAX_QUERY)? },
+        UPLOAD_BEGIN => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let name = read_string(bytes, &mut pos, 1, MAX_FILE_NAME)?;
+            let size = read_u64(bytes, &mut pos)?;
+            let sha256 = read_array::<32>(bytes, &mut pos)?;
+            Request::UploadBegin { room, name, size, sha256 }
+        }
+        UPLOAD_CHUNK => {
+            let upload = read_array::<16>(bytes, &mut pos)?;
+            let offset = read_u64(bytes, &mut pos)?;
+            let length = read_u32(bytes, &mut pos)? as usize;
+            if length == 0 || length > MAX_CHUNK {
+                return Err(CodecError::FieldLength);
+            }
+            let end = pos.checked_add(length).filter(|end| *end <= bytes.len()).ok_or(CodecError::Truncated)?;
+            let chunk = bytes[pos..end].to_vec();
+            pos = end;
+            Request::UploadChunk { upload, offset, bytes: chunk }
+        }
+        UPLOAD_FINISH => Request::UploadFinish { upload: read_array::<16>(bytes, &mut pos)? },
         _ => return Err(CodecError::BadKind(tag)),
     };
     if pos != bytes.len() {
@@ -410,4 +497,31 @@ pub fn decode_hits(bytes: &[u8]) -> Result<(u32, Vec<SearchHit>), CodecError> {
         return Err(CodecError::TrailingBytes);
     }
     Ok((id, hits))
+}
+
+/// Encode the id frame that follows the `Ok` answering `UploadBegin` or `UploadFinish` request `id` (task T330b): the
+/// new upload's id, or the finished file's.
+pub fn encode_id(id: u32, value: &[u8; 16]) -> Vec<u8> {
+    let mut out = vec![ID_TAG];
+    out.extend_from_slice(&id.to_be_bytes());
+    out.extend_from_slice(value);
+    out
+}
+
+/// Decode exactly one id frame: its request id and the value. `BadKind` for any tag but `ID_TAG`, `Truncated`, then
+/// `TrailingBytes`.
+pub fn decode_id(bytes: &[u8]) -> Result<(u32, [u8; 16]), CodecError> {
+    let Some(&tag) = bytes.first() else {
+        return Err(CodecError::Truncated);
+    };
+    if tag != ID_TAG {
+        return Err(CodecError::BadKind(tag));
+    }
+    let mut pos: usize = 1;
+    let id = read_u32(bytes, &mut pos)?;
+    let value = read_array::<16>(bytes, &mut pos)?;
+    if pos != bytes.len() {
+        return Err(CodecError::TrailingBytes);
+    }
+    Ok((id, value))
 }
