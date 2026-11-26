@@ -99,6 +99,8 @@ pub enum Event {
     Saved { path: std::path::PathBuf },
     /// Each reply's parent in `room`, by the reply's cursor, whenever they change (task T340b).
     Threads { room: String, parents: Vec<(u64, u64)> },
+    /// Who reacted to each message in `room` with what, whenever it changes (task T341b).
+    Reactions { room: String, reactions: crewcraft_ui_model::RoomReactions },
     /// A post that was not acknowledged; `text` is returned so the window can restore the draft. After
     /// `Problem::Lost` the post may still have arrived: the room's next snapshot shows it if so.
     PostFailed { room: String, text: String, problem: Problem },
@@ -394,6 +396,7 @@ impl Worker {
             unread: BTreeMap::new(),
             files_sent: BTreeMap::new(),
             threads_sent: BTreeMap::new(),
+            reactions_sent: BTreeMap::new(),
             next_poll: Instant::now(),
             retry,
             keeper,
@@ -478,6 +481,8 @@ struct Run {
     files_sent: BTreeMap<String, Vec<(u64, Vec<crewcraft_proto::push::AttachedFile>)>>,
     /// The last threads sent, per room (task T340b).
     threads_sent: BTreeMap<String, Vec<(u64, u64)>>,
+    /// The last reactions sent, per room (task T341b).
+    reactions_sent: BTreeMap<String, crewcraft_ui_model::RoomReactions>,
     next_poll: Instant,
     retry: Option<Retry>,
     keeper: Box<dyn TicketKeeper>,
@@ -547,6 +552,9 @@ impl Run {
                 Some(Input::Command(Command::Search { query })) => self.search(query),
                 Some(Input::Command(Command::Attach { room, path })) => self.attach(room, path),
                 Some(Input::Command(Command::Reply { room, parent, text })) => self.reply(room, parent, text),
+                Some(Input::Command(Command::React { room, target, reaction, on })) => {
+                    self.change(room, |session, room| session.react(room, target, reaction, on));
+                }
                 Some(Input::Command(Command::PostFiles { room, text, files })) => self.post_files(room, text, files),
                 Some(Input::Command(Command::Save { file, size, name, to })) => self.save(file, size, &name, to),
                 Some(Input::SignOut) => {
@@ -955,6 +963,18 @@ impl Run {
             if !files.is_empty() && self.files_sent.get(room) != Some(&files) {
                 self.files_sent.insert(room.to_owned(), files.clone());
                 self.emit(Event::Attachments { room: room.to_owned(), files });
+            }
+        }
+        // Who reacted with what, when it changes; an empty list once the last reaction goes (task T341b).
+        if let Some(session) = self.session.as_mut() {
+            let reactions = session.reactions(room);
+            let changed = match self.reactions_sent.get(room) {
+                Some(last) => *last != reactions,
+                None => !reactions.is_empty(),
+            };
+            if changed {
+                self.reactions_sent.insert(room.to_owned(), reactions.clone());
+                self.emit(Event::Reactions { room: room.to_owned(), reactions });
             }
         }
         // The room's threads, when they change (task T340b).

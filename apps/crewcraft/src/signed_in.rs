@@ -17,7 +17,7 @@ use crewcraft_client_core::room_view::Shown;
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
-use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, SearchHit};
+use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, SearchHit};
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -131,7 +131,7 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -147,7 +147,7 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -178,7 +178,7 @@ pub(crate) fn finish_external(
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS,
+        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -300,6 +300,24 @@ impl SignedInSession {
             return Err(LabError::Usage);
         }
         self.chat.reply(room, parent, text, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// Add (`on`) or take back `reaction` on the message at `target` in `room` (task T341b).
+    pub fn react(&mut self, room: &str, target: u64, reaction: u8, on: bool) -> Result<u64, LabError> {
+        if !valid_room(room) || target == 0 || crewcraft_proto::push::reaction_name(reaction).is_none() {
+            return Err(LabError::Usage);
+        }
+        self.chat.react(room, target, reaction, on, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// Who reacted to each message in `room` with what, as the server pushed it (task T341b): by cursor, the reaction
+    /// codes in order, each with the people, sorted.
+    pub fn reactions(&mut self, room: &str) -> crewcraft_ui_model::RoomReactions {
+        let Some(view) = self.chat.view(room) else { return Vec::new() };
+        view.reactions()
+            .iter()
+            .map(|(cursor, by_code)| (*cursor, by_code.iter().map(|(code, who)| (*code, who.iter().cloned().collect())).collect()))
+            .collect()
     }
 
     /// Each reply's parent in `room`, by the reply's cursor, as the server pushed them (task T340b).

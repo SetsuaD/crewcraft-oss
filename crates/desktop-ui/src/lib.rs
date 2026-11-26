@@ -140,6 +140,11 @@ pub enum Update {
         room: String,
         parents: Vec<(u64, u64)>,
     },
+    /// Who reacted to each message of `room` with what (task T341b): by cursor, each reaction code with the people.
+    Reactions {
+        room: String,
+        reactions: crewcraft_ui_model::RoomReactions,
+    },
     /// The app was opened from an invitation link (task T405): fill in the enrollment form's link field. Ignored
     /// unless the enrollment screen is showing. `Debug` does not show the link, which holds a one-time secret.
     InvitationLink(Zeroizing<String>),
@@ -165,6 +170,7 @@ impl fmt::Debug for Update {
             Self::Uploaded { room, file } => f.debug_struct("Uploaded").field("room", room).field("name", &file.name).finish(),
             Self::Attachments { room, files } => f.debug_struct("Attachments").field("room", room).field("messages", &files.len()).finish(),
             Self::Threads { room, parents } => f.debug_struct("Threads").field("room", room).field("replies", &parents.len()).finish(),
+            Self::Reactions { room, reactions } => f.debug_struct("Reactions").field("room", room).field("messages", &reactions.len()).finish(),
             Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
             Self::WaitingForBrowser => f.write_str("WaitingForBrowser"),
             Self::Failed(text) => f.debug_tuple("Failed").field(text).finish(),
@@ -269,6 +275,8 @@ pub struct Window {
     open_thread: Option<(String, u64)>,
     /// The thread composer's text (T340b).
     thread_draft: String,
+    /// Who reacted to each message with what, per room and cursor (T341b).
+    reactions: HashMap<String, std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>>,
 }
 
 /// What a message is drawn with (T340b): who is reading, the theme's colours, which message is selected, the files and
@@ -280,6 +288,8 @@ struct Bubbles<'a> {
     confirming: bool,
     files: &'a std::collections::BTreeMap<u64, Vec<FileChip>>,
     replies: &'a std::collections::BTreeMap<u64, usize>,
+    /// Who reacted to each message with what (T341b).
+    reactions: &'a std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>,
     /// Whether messages can be selected and threads opened from here (not inside the thread pane).
     actions: bool,
 }
@@ -292,6 +302,8 @@ enum MessageAction {
     Save(FileChip),
     /// Open the thread of the message at this cursor (T340b).
     OpenThread(u64),
+    /// Add (`true`) or take back a reaction on the message at this cursor (T341b).
+    React(u64, u8, bool),
     Edit(u64, String),
     AskDelete,
     Delete(u64),
@@ -414,6 +426,9 @@ impl Window {
             Update::Threads { room, parents } => {
                 self.threads.insert(room, parents.into_iter().collect());
             }
+            Update::Reactions { room, reactions } => {
+                self.reactions.insert(room, reactions.into_iter().collect());
+            }
             Update::LastEmail(email) => {
                 if self.email.is_empty() {
                     self.email = email;
@@ -430,6 +445,7 @@ impl Window {
                 self.pending_files.clear();
                 self.message_files.clear();
                 self.threads.clear();
+                self.reactions.clear();
                 self.open_thread = None;
                 self.thread_draft.clear();
                 self.feeds.clear();
@@ -661,6 +677,7 @@ impl Window {
         let mut action = None;
         let files = self.message_files.get(&room).cloned().unwrap_or_default();
         let replies = self.reply_counts(&room);
+        let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
         let threads = self.threads.get(&room).cloned().unwrap_or_default();
         let look = Bubbles {
             me: &me,
@@ -669,6 +686,7 @@ impl Window {
             confirming: self.confirm_delete,
             files: &files,
             replies: &replies,
+            reactions: &reactions,
             actions: true,
         };
         egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -738,6 +756,7 @@ impl Window {
                 let mut action = None;
                 let files = self.message_files.get(&room).cloned().unwrap_or_default();
                 let replies = self.reply_counts(&room);
+                let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
                 let threads = self.threads.get(&room).cloned().unwrap_or_default();
                 let look = Bubbles {
                     me: &me,
@@ -746,6 +765,7 @@ impl Window {
                     confirming: self.confirm_delete,
                     files: &files,
                     replies: &replies,
+                    reactions: &reactions,
                     actions: true,
                 };
                 egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -867,7 +887,17 @@ impl Window {
         let me = self.email.clone();
         let files = self.message_files.get(room).cloned().unwrap_or_default();
         let replies = std::collections::BTreeMap::new();
-        let look = Bubbles { me: &me, colors: self.bubbles, selected: None, confirming: false, files: &files, replies: &replies, actions: false };
+        let reactions = self.reactions.get(room).cloned().unwrap_or_default();
+        let look = Bubbles {
+            me: &me,
+            colors: self.bubbles,
+            selected: None,
+            confirming: false,
+            files: &files,
+            replies: &replies,
+            reactions: &reactions,
+            actions: false,
+        };
         let mut action = None;
         ScrollArea::vertical().max_height(ui.available_height() - 90.0).auto_shrink(false).show(ui, |ui| {
             for row in &rows {
@@ -918,6 +948,10 @@ impl Window {
                 self.confirm_delete = false;
             }
             Some(MessageAction::Keep) => self.confirm_delete = false,
+            Some(MessageAction::React(target, reaction, on)) => {
+                self.selected_message = None;
+                self.actions.push(Action::Room(Command::React { room: room.to_owned(), target, reaction, on }));
+            }
             Some(MessageAction::OpenThread(parent)) => {
                 self.open_thread = Some((room.to_owned(), parent));
                 self.selected_message = None;
@@ -1121,6 +1155,41 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
                 action = Some(MessageAction::Save(chip.clone()));
             }
             ui.label(chip.label());
+        });
+    }
+    // Who reacted with what, under the message (T341b): one chip per reaction, highlighted when it includes you; a
+    // click adds yours or takes it back. Words, not emoji: the bundled font has none.
+    if let FeedRow::Message { cursor, .. } = row
+        && let Some(by_code) = look.reactions.get(cursor)
+    {
+        let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
+        ui.with_layout(layout, |ui| {
+            for (code, people) in by_code {
+                let Some(name) = crewcraft_proto::push::reaction_name(*code) else { continue };
+                let yours = people.iter().any(|person| person == me);
+                let chip = ui.add(egui::Button::selectable(yours, format!("{name} {}", people.len())).small());
+                if chip.on_hover_text(people.join(", ")).clicked() {
+                    action = Some(MessageAction::React(*cursor, *code, !yours));
+                }
+            }
+        });
+    }
+    // The reactions to choose from, for a selected message (T341b).
+    if let Some(cursor) = message_cursor.filter(|cursor| Some(*cursor) == selected) {
+        let yours = |code: u8| {
+            look.reactions
+                .get(&cursor)
+                .and_then(|by_code| by_code.iter().find(|(c, _)| *c == code))
+                .is_some_and(|(_, people)| people.iter().any(|p| p == me))
+        };
+        let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
+        ui.with_layout(layout, |ui| {
+            for (index, name) in crewcraft_proto::push::REACTIONS.iter().enumerate() {
+                let code = index as u8 + 1;
+                if ui.small_button(*name).clicked() {
+                    action = Some(MessageAction::React(cursor, code, !yours(code)));
+                }
+            }
         });
     }
     // The thread under a message that has replies (T340b).
