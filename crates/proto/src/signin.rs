@@ -309,7 +309,7 @@ fn check_code(code: &str) -> Result<(), CodecError> {
     Ok(())
 }
 
-fn check_token(token: &str) -> Result<(), CodecError> {
+pub(crate) fn check_token(token: &str) -> Result<(), CodecError> {
     // After 42 full sextets, a 32-byte token has four remaining bits. The last sextet's two padding bits must be zero.
     const TOKEN_ENDINGS: &[u8] = b"AEIMQUYcgkosw048";
     let Some((last, prefix)) = token.as_bytes().split_last() else {

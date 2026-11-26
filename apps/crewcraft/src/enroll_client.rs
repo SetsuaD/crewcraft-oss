@@ -121,7 +121,9 @@ pub fn enroll(
         let uri = match setup {
             BootstrapResponse::Setup { totp_uri } => totp_uri,
             BootstrapResponse::Error { code } => return Err(EnrollmentError::SetupRefused(code)),
-            BootstrapResponse::Activated { .. } => return Err(EnrollmentError::Setup(ExchangeProblem::UnexpectedReply)),
+            BootstrapResponse::Activated { .. } | BootstrapResponse::ExternalStart { .. } => {
+                return Err(EnrollmentError::Setup(ExchangeProblem::UnexpectedReply));
+            }
         };
         if uri.strip_prefix("otpauth://totp/").is_none_or(|rest| rest.is_empty()) || uri.bytes().any(|byte| byte.is_ascii_control()) {
             return Err(EnrollmentError::Setup(ExchangeProblem::InvalidSetupUri));
@@ -136,7 +138,9 @@ pub fn enroll(
                 .map_err(EnrollmentError::ActivatedCertificateRejected)
         }
         BootstrapResponse::Error { code } => Err(EnrollmentError::ConfirmRefused(code)),
-        BootstrapResponse::Setup { .. } => Err(EnrollmentError::ConfirmationUnknown(ExchangeProblem::UnexpectedReply)),
+        BootstrapResponse::Setup { .. } | BootstrapResponse::ExternalStart { .. } => {
+            Err(EnrollmentError::ConfirmationUnknown(ExchangeProblem::UnexpectedReply))
+        }
     }
 }
 
