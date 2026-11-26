@@ -1,0 +1,22 @@
+{
+  "id": "T330a-file-store",
+  "title": "The content-addressed file store and the file records",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/file_store.rs",
+    "crates/server-core/src/lib.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/durable.rs"
+  ],
+  "test_path": "crates/server-core/tests/t330a_file_store.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t330a_file_store",
+  "depends_on": [
+    "T144-durable-server",
+    "T107-chunked-upload"
+  ],
+  "spec": "FileStore keeps bytes under files/<2 hex>/<64 hex SHA-256>, owner-only; uploads in progress are files/partial/<id>, written at offsets in any order, never served, removed when the store opens. finish checks the declared size and SHA-256 (WrongSize, WrongHash), syncs, and renames into place, or drops the partial when those bytes are already stored; the partial is gone either way. read returns a byte range; sweep removes content files no record refers to, leaving anything that is not a content name. image_size reads width and height from PNG, GIF, JPEG (first start-of-frame marker, skipping others) and WebP (VP8X, VP8L, VP8) headers; None otherwise or for a zero dimension. Op::FileStored (tag 8) records room, uploader, file id, SHA-256, size, name and image size; DurableServer::record_file refuses a non-member (NotMember), a bad name (BadName: empty, over 255 bytes, . or .., a slash, backslash or control character), a size of 0 (Empty) and a reused id (DuplicateId); file() and referenced_hashes() read the records, which survive a replay.",
+  "status": "done",
+  "context": [
+    "docs/FILES.md"
+  ]
+}

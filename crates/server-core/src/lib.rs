@@ -17,6 +17,7 @@ pub mod cursor_log;
 pub mod devices;
 pub mod dispatch;
 pub mod durable;
+pub mod file_store;
 pub mod enrollment;
 pub mod html_text;
 pub mod invites;
