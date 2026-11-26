@@ -51,6 +51,10 @@ crewcraft-server invite <data-directory> <email> [--invitation-file <new-file>]
     file.
 crewcraft-server room <data-directory> <owner> <name>
 crewcraft-server add-member <data-directory> <room> <owner> <member>
+crewcraft-server import <data-directory> --bundle <bundle-directory> [--map-domain <old>=<new>]... [--dry-run]
+    Import history from another system as read-only archive rooms (docs/IMPORT.md), with the server stopped. Safe to
+    run again: a second run adds nothing, a later export adds what is new. Writes import-report.json into the bundle
+    directory and exits non-zero when any part of the bundle was refused. --dry-run changes nothing.
 crewcraft-server lab init <new-state-directory>
 crewcraft-server lab invite <state-directory> <trusted-root.der> <email>
 crewcraft-server lab serve <state-directory> <trusted-root.der> <port>
@@ -80,6 +84,7 @@ fn run(args: &[OsString]) -> io::Result<()> {
         [command, data, email, flag, path] if command == "invite" && flag == "--invitation-file" => {
             invite(Path::new(data), text_arg(email)?, Some(Path::new(path)))?
         }
+        [command, data, rest @ ..] if command == "import" => import(Path::new(data), rest)?,
         [command, data, owner, name] if command == "room" => println!("Room {}", create_room(Path::new(data), owner, name)?),
         [command, data, room, owner, member] if command == "add-member" => {
             add_member(Path::new(data), room, owner, member)?;
@@ -293,6 +298,46 @@ fn create_room(data: &Path, owner: &OsString, name: &OsString) -> io::Result<Str
     }
     let (mut installation, _) = open_offline(data)?;
     installation.rooms.create_room(&lab_email(owner)?, text_arg(name)?).map_err(lab_error)
+}
+
+/// `import` (docs/IMPORT.md, task T350b): read the bundle, import it offline, and write the report.
+fn import(data: &Path, rest: &[OsString]) -> io::Result<()> {
+    use crewcraft_server::import_bundle;
+    let mut bundle_dir: Option<PathBuf> = None;
+    let mut domains = Vec::new();
+    let mut dry_run = false;
+    let mut args = rest.iter();
+    while let Some(flag) = args.next() {
+        match text_arg(flag)? {
+            "--dry-run" => dry_run = true,
+            "--bundle" => {
+                let value = args.next().ok_or_else(|| usage("--bundle takes a directory"))?;
+                if bundle_dir.replace(PathBuf::from(value)).is_some() {
+                    return Err(usage("--bundle is given twice"));
+                }
+            }
+            "--map-domain" => {
+                let value = text_arg(args.next().ok_or_else(|| usage("--map-domain takes old=new"))?)?;
+                domains.push(import_bundle::parse_domain_map(value).ok_or_else(|| usage("--map-domain takes old=new, two domains"))?);
+            }
+            other => return Err(usage_owned(format!("unknown import option {other:?}"))),
+        }
+    }
+    let bundle_dir = bundle_dir.ok_or_else(|| usage("import needs --bundle <directory>"))?;
+    let mut bundle = import_bundle::read_bundle(&bundle_dir)?;
+    bundle.map_domains(&domains);
+    let (mut installation, _) = open_offline(data)?;
+    let accounts = &installation.accounts;
+    let has_account = |email: &str| accounts.person(email).is_some();
+    let report = installation.rooms.import(&bundle, &has_account, dry_run).map_err(lab_error)?;
+    let report_path = bundle_dir.join(import_bundle::REPORT_FILE);
+    fs::write(&report_path, import_bundle::report_json(&report, dry_run))?;
+    print!("{}", import_bundle::summary(&report, dry_run));
+    println!("Report: {}", report_path.display());
+    if !report.ok() {
+        return Err(io::Error::other(format!("{} parts of the bundle were refused; see {}", report.refusals.len(), report_path.display())));
+    }
+    Ok(())
 }
 
 fn add_member(data: &Path, room: &OsString, owner: &OsString, member: &OsString) -> io::Result<()> {

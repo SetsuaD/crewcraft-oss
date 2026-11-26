@@ -1,0 +1,20 @@
+{
+  "id": "T350b-import-command",
+  "title": "crewcraft-server import: read a bundle directory strictly, import it, write the report",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/import_bundle.rs",
+    "apps/crewcraft-server/src/lib.rs",
+    "apps/crewcraft-server/src/main.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t350b_import_command.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t350b_import_command",
+  "depends_on": [
+    "T350a-import-engine"
+  ],
+  "spec": "docs/IMPORT.md. import_bundle::read_bundle(dir) reads dir/bundle.json (at most 512 MB) strictly: format crewcraft-import/1, every unknown or missing field refused with where it was (room n, message n, message n file m), kinds direct/group/channel, addresses normalized as accounts are; a file is captured only when its path, a plain relative path that cannot leave files/, is a regular file under dir/files/. parse_domain_map(old=new). `crewcraft-server import <data> --bundle <dir> [--map-domain old=new]... [--dry-run]` opens the data directory offline (the server stopped), maps domains, imports with has_account = a person exists in the account store, writes import-report.json (dry_run, ok, every count, people_skipped by room, made_top_level, refusals with at and reason) into the bundle directory, prints a summary, and exits non-zero when any part was refused. Unknown options and a missing --bundle are usage errors.",
+  "status": "done",
+  "context": [
+    "docs/IMPORT.md"
+  ]
+}
