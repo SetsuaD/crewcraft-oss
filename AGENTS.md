@@ -90,8 +90,8 @@ and mobile, and the same client in the browser. It is a community project, not p
   or assembly unless [docs/NON-RUST-DEPENDENCIES.md](docs/NON-RUST-DEPENDENCIES.md) lists it.
 - Licences: `deny.toml` enforces a shorter list than `standards/licences.md`. A new dependency's pull request says why
   it is needed; cryptography comes only from audited crates.
-- Time: calendar dates go through `chrono` (default features off: no clock, no time zone database). One place still
-  converts them by hand (`utc_time` in `crates/desktop-ui/src/lib.rs`) until it moves to `chrono`.
+- Time: calendar dates go through `chrono` (default features off: no clock, no time zone database); none are
+  converted by hand.
 - Nothing private: tests use `example.org` / `example.com` and the documentation IP ranges. The sanitize scan
   (`tools/sanitize-scan.sh`) fails on private keys, other email addresses and private network details.
 - Attribution file: [ATTRIBUTION.md](ATTRIBUTION.md). The desktop app's one font, Inter (`assets/fonts/`, OFL-1.1),

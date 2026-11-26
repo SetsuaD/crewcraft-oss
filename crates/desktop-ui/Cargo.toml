@@ -8,6 +8,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The calendar under the archive's UTC times (T350d2).
+chrono.workspace = true
 crewcraft-client-core.workspace = true
 # How an invitation link says the person signs in (T611k).
 crewcraft-enroll.workspace = true
