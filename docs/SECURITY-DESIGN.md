@@ -382,7 +382,10 @@ the same email is refused. An administrator can re-bind an account (audited).
 24 hours of grace from the last confirmation, none for the visitor module). A `deny` ends the person's sessions at the
 next check; signing out and device revocation work as before.
 
-**What it needs that does not exist yet.** An https client on the server for discovery, keys, the token exchange and
-the authorizer (a small Rust client over the rustls already in the tree), the opening and reply for steps 1 and 3 in
-`crewcraft-proto`, the loopback listener and browser launch in the app, the account binding in the account store, and
-the authorization record in the durable store. Each lands as its own test-defined task.
+**What is built (tasks T611a to T611h).** The opening and reply for steps 1 and 3 in `crewcraft-proto`, the account
+binding and the authorization record in the account store, an https client on the server (`crates/https`) for
+discovery, keys, the token exchange and the authorizer, the server's sign-in and its `identity.toml`, and in the app the
+loopback listener, the browser launch, the whole flow, and the sign-in screen's "Sign in with your organization" button
+with a Cancel while the browser page is open (the connection worker runs the flow; cancelling or closing the app ends
+the wait at once). **Still to build:** binding an account to its provider identity when an invitation is redeemed (today
+the binding is made in the account store directly), and an end-to-end test against a running server.

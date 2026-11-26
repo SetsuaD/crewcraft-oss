@@ -1,0 +1,27 @@
+{
+  "id": "T611h-signin-button",
+  "title": "Sign in with your organization: the window's button, its Cancel, and the worker running the flow",
+  "crate": "crewcraft",
+  "files": [
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t611h_signin_button.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/src/external_flow.rs",
+    "apps/crewcraft/src/loopback.rs",
+    "apps/crewcraft/src/server_endpoint.rs",
+    "apps/crewcraft/src/signed_in.rs"
+  ],
+  "test_path": "apps/crewcraft/tests/t611h_worker_external.rs",
+  "test_cmd": "cargo test -p crewcraft --test t611h_worker_external",
+  "depends_on": [
+    "T611g-app-external-flow",
+    "T303-connection-worker",
+    "T305-desktop-window"
+  ],
+  "spec": "The sign-in screen has a 'Sign in with your organization' button that needs only the email and sends Action::SignInExternal; while the browser page is open (Update::WaitingForBrowser, ignored unless a sign-in is in progress) it says so and offers Cancel (Action::CancelSignIn); any other update ends the wait. The controller checks the email and hands both to the worker. Worker::sign_in_external runs external_flow::run_unless on the worker's thread with the system browser (Worker::start_with_browser takes another), reports WaitingForBrowser once the page is open, and takes over the session like a password sign-in (SignedIn, resume ticket kept). Worker::cancel_sign_in, or dropping the worker, ends the wait at once (Loopback::wait_unless, LoopbackError::Cancelled); a cancel before a sign-in does not cancel it. Each failure has its own Problem: ExternalNotOffered, ExternalRefused (the finish refused), Browser, NoRedirect, BrowserTimedOut, ProviderRefused, Cancelled.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md"
+  ]
+}

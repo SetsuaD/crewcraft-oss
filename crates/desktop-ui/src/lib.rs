@@ -59,6 +59,13 @@ pub enum Action {
         password: Zeroizing<String>,
         code: Zeroizing<String>,
     },
+    /// Sign in through the organization's sign-in page in the system browser (task T611h). `email` names the person
+    /// this device is enrolled for.
+    SignInExternal {
+        email: String,
+    },
+    /// Stop waiting for the browser in that sign-in.
+    CancelSignIn,
     /// A room action for the connection worker.
     Room(Command),
     SignOut,
@@ -70,6 +77,8 @@ impl fmt::Debug for Action {
             Self::Enroll { .. } => f.write_str("Enroll { .. }"),
             Self::ConfirmAuthenticator { .. } => f.write_str("ConfirmAuthenticator { .. }"),
             Self::SignIn { email, .. } => f.debug_struct("SignIn").field("email", email).finish_non_exhaustive(),
+            Self::SignInExternal { email } => f.debug_struct("SignInExternal").field("email", email).finish(),
+            Self::CancelSignIn => f.write_str("CancelSignIn"),
             Self::Room(command) => f.debug_tuple("Room").field(command).finish(),
             Self::SignOut => f.write_str("SignOut"),
         }
@@ -108,6 +117,9 @@ pub enum Update {
     /// The app was opened from an invitation link (task T405): fill in the enrollment form's link field. Ignored
     /// unless the enrollment screen is showing. `Debug` does not show the link, which holds a one-time secret.
     InvitationLink(Zeroizing<String>),
+    /// The organization's sign-in page is open in the browser (task T611h): say so, with a way to cancel. Ignored
+    /// unless a sign-in is in progress.
+    WaitingForBrowser,
     /// Something failed; the text is shown to the person as written.
     Failed(String),
     SignedOut,
@@ -124,6 +136,7 @@ impl fmt::Debug for Update {
             Self::Unread { room, unread } => f.debug_struct("Unread").field("room", room).field("unread", unread).finish(),
             Self::LastEmail(email) => f.debug_tuple("LastEmail").field(email).finish(),
             Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
+            Self::WaitingForBrowser => f.write_str("WaitingForBrowser"),
             Self::Failed(text) => f.debug_tuple("Failed").field(text).finish(),
             Self::SignedOut => f.write_str("SignedOut"),
         }
@@ -155,6 +168,8 @@ pub struct Window {
     draft: String,
     notice: Option<String>,
     busy: bool,
+    /// An external sign-in is waiting for the person to finish in the browser (T611h).
+    waiting_for_browser: bool,
     actions: Vec<Action>,
     /// Which pane a phone-width window shows (one at a time, T402).
     phone_pane: PhonePane,
@@ -211,6 +226,11 @@ impl Window {
         self.screen.unwrap_or(Screen::Enroll)
     }
 
+    /// Whether the sign-in screen is waiting for the person to finish signing in in the browser (T611h).
+    pub fn waiting_for_browser(&self) -> bool {
+        self.waiting_for_browser
+    }
+
     /// The text shown above the current screen (the last failure or hint), if any.
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
@@ -229,7 +249,13 @@ impl Window {
             }
             return;
         }
+        // The browser page opening changes nothing but what the sign-in screen says: the sign-in is still in progress.
+        if update == Update::WaitingForBrowser {
+            self.waiting_for_browser = self.busy && self.screen() == Screen::SignIn;
+            return;
+        }
         self.busy = false;
+        self.waiting_for_browser = false;
         match update {
             Update::NeedsEnrollment => self.go(Screen::Enroll),
             Update::AuthenticatorSetup { otpauth_uri } => {
@@ -263,7 +289,7 @@ impl Window {
                     self.email = email;
                 }
             }
-            Update::InvitationLink(_) => {}
+            Update::InvitationLink(_) | Update::WaitingForBrowser => {}
             Update::Failed(text) => self.notice = Some(text),
             Update::SignedOut => {
                 self.phone_pane = PhonePane::Chats;
@@ -366,6 +392,21 @@ impl Window {
             let code = std::mem::take(&mut self.code);
             self.busy = true;
             self.actions.push(Action::SignIn { email: self.email.trim().to_owned(), password, code });
+        }
+        // Sign-in through the organization's own page (T611h): only the email is needed here; the password and any
+        // second factor are typed on that page, in the browser, never in CrewCraft.
+        ui.separator();
+        if self.waiting_for_browser {
+            ui.label("Finish signing in on the page that opened in your browser.");
+            if ui.button("Cancel").clicked() {
+                self.actions.push(Action::CancelSignIn);
+            }
+        } else {
+            let ready = !self.busy && !self.email.trim().is_empty();
+            if ui.add_enabled(ready, egui::Button::new("Sign in with your organization")).clicked() {
+                self.busy = true;
+                self.actions.push(Action::SignInExternal { email: self.email.trim().to_owned() });
+            }
         }
     }
 
