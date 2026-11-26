@@ -1,0 +1,22 @@
+{
+  "id": "T611a-external-signin-wire",
+  "title": "Wire format for signing in through an external OpenID Connect provider",
+  "crate": "crewcraft-proto",
+  "files": [
+    "crates/proto/src/signin.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft-server/src/device_session.rs"
+  ],
+  "test_path": "crates/proto/tests/t611a_external_signin_wire.rs",
+  "test_cmd": "cargo test -p crewcraft-proto --test t611a_external_signin_wire",
+  "depends_on": [
+    "T152-signin-codec",
+    "T240-session-resume"
+  ],
+  "spec": "Opening tag 37 BeginExternal has no payload (trailing bytes refused). Reply tag 166 ExternalStart carries issuer (1..2048 bytes), client id (1..256), authorization endpoint (1..2048) and a 43-character nonce of the session-token shape, each a u16 big-endian length and UTF-8. Opening tag 38 FinishExternal carries the authorization code (1..2048 printable ASCII), the PKCE verifier (43..128 of A-Z a-z 0-9 - . _ ~, RFC 7636) and the redirect URI (1..256 printable ASCII), each a u16 length and the bytes; bad shapes are FieldLength on encode and decode, every prefix fails, trailing bytes are refused. Debug never shows the code, the verifier or the nonce. Until a server has an identity provider, it answers both new openings with the same Refused as a failed sign-in; the app treats an ExternalStart answer to any other opening as a protocol error.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md",
+    "crates/proto/src/signin.rs"
+  ]
+}

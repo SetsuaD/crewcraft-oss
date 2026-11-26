@@ -220,7 +220,8 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         match signin::decode_reply(reply.payload()).map_err(|_| ChatError::SignInProtocol)? {
             signin::Reply::Accepted { token } => Ok(Zeroizing::new(token.to_owned())),
             signin::Reply::Refused => Err(ChatError::SignInRefused),
-            signin::Reply::Ended => Err(ChatError::SignInProtocol),
+            // An external-sign-in start is only an answer to BeginExternal (task T611a), never to these openings.
+            signin::Reply::Ended | signin::Reply::ExternalStart { .. } => Err(ChatError::SignInProtocol),
         }
     }
 

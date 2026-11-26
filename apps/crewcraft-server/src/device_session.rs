@@ -90,6 +90,9 @@ pub fn serve<S: Read + Write, A: DeviceAuth>(
             match signin::decode_opening(first.payload()).map_err(|_| DeviceSessionError::InvalidSignIn)? {
                 Opening::SignIn(credentials) => auth.sign_in(credentials, now_ms()).map_err(DeviceSessionError::Auth)?,
                 Opening::Resume { token } => auth.resume(token, now_ms()).map_err(DeviceSessionError::Auth)?,
+                // External sign-in (task T611a) needs a configured identity provider, which this server does not have
+                // yet: refused exactly like a failed sign-in, so the reply reveals nothing.
+                Opening::BeginExternal | Opening::FinishExternal { .. } => None,
                 Opening::End { token } => {
                     auth.end(token, now_ms()).map_err(DeviceSessionError::Auth)?;
                     let payload = signin::encode_reply(&signin::Reply::Ended).map_err(|_| DeviceSessionError::InvalidSignInReply)?;
