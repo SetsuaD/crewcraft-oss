@@ -339,3 +339,50 @@ feature, so it is not CrewCraft-specific code.
 
 First test-defined pieces: `tasks/T007-password-hash` (the `own` source), `tasks/T008-email-identity` and `tasks/T009-pkce` (the server's
 PKCE check).
+
+## 9. Signing in through an external OpenID Connect provider (plan, task T611)
+
+An organization that already has an identity provider can let people sign in with it instead of a CrewCraft password
+and code (REQUIREMENTS.md section 4, "Identity provider"). The checks are built and tested in `crates/oidc` (T610), and
+the external authorizer's rules in `crates/authz` (T600, contract in [AUTHORIZER.md](AUTHORIZER.md)). This section is
+the plan for joining them to the sign-in path. Nothing here weakens the device rule: **a session still needs an enrolled
+device's certificate in the TLS handshake**; the provider replaces only the password and the TOTP code.
+
+**Configuration (server).** `[identity] source = "oidc"` with the provider's exact `issuer`, the `client_id` of a
+*public* client (no client secret anywhere: RFC 8252 section 8.5, PKCE instead), and `require-mfa` (default on: the ID
+token's `amr` must contain `mfa`, because the provider's second factor stands in for CrewCraft's TOTP). The server
+fetches the discovery document and the keys over https, caches them, and fetches the keys again at most once a minute
+when a token names a `kid` it does not have. Its health check fetches discovery, so a provider outage shows at once.
+
+**The flow (native apps, RFC 8252).**
+
+1. Over its mutual-TLS connection, the app asks the server to begin an external sign-in. The server answers with the
+   issuer, the client id, the authorization endpoint and a fresh **nonce bound to this device's certificate**, valid
+   for 10 minutes and usable once.
+2. The app makes the PKCE pair and a state value, listens on a loopback port (`127.0.0.1`, a random port, one request
+   only), and opens the system browser at the authorization URL. Embedded web views are not used (RFC 8252 section 8.12).
+3. The provider redirects the browser to the loopback port with a code. The app accepts the request only with the
+   state it made, then sends the code, the PKCE verifier and the redirect URI to the server, over the same
+   certificate-gated connection.
+4. **The server exchanges the code** at the provider's token endpoint and verifies the ID token itself:
+   `crewcraft_oidc::verify_id_token` with the nonce it issued for this device and `require-mfa`. The app never holds
+   or forwards an ID token, so a token stolen elsewhere cannot be replayed through CrewCraft.
+5. The server looks up the account **bound to that issuer and subject** (below). With an external authorizer
+   configured, it asks it (`purpose: sign-in`) and applies `crewcraft_authz::Record::sign_in`: no fresh `allow` with
+   `use`, no session. Then it issues the same session as a password sign-in, bound to the device certificate, with the
+   same resume ticket (section 5).
+
+**Binding accounts to the provider.** An account is bound to the provider's `(issuer, subject)` pair, never to an email
+address (an address can be reassigned). The binding is made once, at enrollment: an invitation for a server in `oidc`
+mode is redeemed by an external sign-in instead of choosing a password and setting up TOTP, and the subject of that
+sign-in is stored on the account. After that, only that subject signs in to it; an ID token for another subject with
+the same email is refused. An administrator can re-bind an account (audited).
+
+**While signed in.** The session layer re-checks the authorizer by the T600 rules (10 minutes, 60-second retry, at most
+24 hours of grace from the last confirmation, none for the visitor module). A `deny` ends the person's sessions at the
+next check; signing out and device revocation work as before.
+
+**What it needs that does not exist yet.** An https client on the server for discovery, keys, the token exchange and
+the authorizer (a small Rust client over the rustls already in the tree), the opening and reply for steps 1 and 3 in
+`crewcraft-proto`, the loopback listener and browser launch in the app, the account binding in the account store, and
+the authorization record in the durable store. Each lands as its own test-defined task.
