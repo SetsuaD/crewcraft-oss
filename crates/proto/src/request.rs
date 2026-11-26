@@ -558,7 +558,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
     let tag = bytes[0];
     if !(1..=6).contains(&tag)
         && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag)
-        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT)
+        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT | PIN | SAVE_MESSAGE | LIST_SAVED)
         && !(CALL_START..=STORAGE_USE).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));
@@ -1131,6 +1131,9 @@ mod pins_saved_tests {
         for (after_room, after_cursor) in [(String::new(), 0), ("room".into(), 4)] {
             let request = Request::ListSaved { after_room, after_cursor };
             assert_eq!(decode_request(&encode_request(8, &request).unwrap()).unwrap(), (8, request));
+        }
+        for tag in [0, 7, 13, 29, 63, 128, SAVED_TAG, 255] {
+            assert_eq!(decode_request(&[tag]), Err(CodecError::BadKind(tag)));
         }
         assert!(encode_request(8, &Request::ListSaved { after_room: String::new(), after_cursor: 4 }).is_err());
         assert!(encode_request(8, &Request::ListSaved { after_room: "room".into(), after_cursor: 0 }).is_err());
