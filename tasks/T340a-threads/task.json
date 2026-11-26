@@ -1,0 +1,28 @@
+{
+  "id": "T340a-threads",
+  "title": "Threads: replies to a message",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/proto/src/push.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/inbox.rs",
+    "crates/client-core/src/room_view.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs"
+  ],
+  "test_path": "crates/server-core/tests/t340a_threads.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t340a_threads",
+  "depends_on": [
+    "T330c-attach"
+  ],
+  "spec": "Request 16 Reply { room, parent, text } (answered as Post) and push 71 Threaded { room, cursor of the reply, parent }, announced by FEATURE_THREADS (8). DurableServer::reply accepts only a parent that is a live, top-level message held in the room (NoParent, E_NO_SUCH_MESSAGE, for a reply, a missing or deleted message), posts as post would (search finds it), and records it with its parent in one journal record (Op::Reply, tag 18) that survives a restart; parent_of and reply_count read the threads. After a Sync, a reply's Threaded push follows its Posted push only on a connection that agreed to FEATURE_THREADS. The client's inbox keeps each reply's parent (RoomView::parents) without moving the cursor. The network server advertises FEATURE_THREADS.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md"
+  ]
+}

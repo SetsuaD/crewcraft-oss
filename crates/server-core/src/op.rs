@@ -78,6 +78,15 @@ pub enum Op {
         now_ms: u64,
         files: Vec<[u8; 16]>,
     },
+    /// A reply in the thread of the message at `parent` (task T340a). Tag 18: `str slug | str author | u64 parent |
+    /// str text | u64 now_ms`.
+    Reply {
+        slug: String,
+        author: String,
+        parent: u64,
+        text: String,
+        now_ms: u64,
+    },
 }
 
 /// `FieldLength` if a string is longer than `MAX_STR` bytes. (Strings may be empty here: `Server` decides what is
@@ -163,6 +172,14 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             for file in files {
                 out.extend_from_slice(file);
             }
+        }
+        Op::Reply { slug, author, parent, text, now_ms } => {
+            out.push(REPLY);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, author)?;
+            out.extend_from_slice(&parent.to_be_bytes());
+            encode_str(&mut out, text)?;
+            out.extend_from_slice(&now_ms.to_be_bytes());
         }
     }
     Ok(out)
@@ -296,6 +313,17 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::PostFiles { slug, author, text, now_ms, files })
         }
+        REPLY => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let author = decode_str(bytes, &mut pos)?;
+            let parent = decode_u64(bytes, &mut pos)?;
+            let text = decode_str(bytes, &mut pos)?;
+            let now_ms = decode_u64(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::Reply { slug, author, parent, text, now_ms })
+        }
         _ => Err(CodecError::BadKind(tag)),
     }
 }
@@ -304,6 +332,8 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
 const FILE_STORED: u8 = 16;
 /// The tag of `Op::PostFiles` (task T330c).
 const POST_FILES: u8 = 17;
+/// The tag of `Op::Reply` (task T340a).
+const REPLY: u8 = 18;
 
 fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;

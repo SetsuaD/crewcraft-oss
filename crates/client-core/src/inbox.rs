@@ -56,6 +56,11 @@ impl Inbox {
             self.views.get_mut(&room)?.attach(cursor, files);
             return Some((Apply::Duplicate, Notify::None));
         }
+        // So does a reply's thread (task T340a).
+        if let Push::Threaded { room, cursor, parent } = push {
+            self.views.get_mut(&room)?.thread(cursor, parent);
+            return Some((Apply::Duplicate, Notify::None));
+        }
         let (room, cursor, change, is_posted, author, mentions) = match &push {
             Push::Posted { room, cursor, author, html, mentions } => (
                 room.as_str(),
@@ -70,7 +75,7 @@ impl Inbox {
             }
             Push::Deleted { room, cursor, target } => (room.as_str(), *cursor, Change::Deleted { target: *target }, false, None, None),
             Push::Other { room, cursor } => (room.as_str(), *cursor, Change::Other, false, None, None),
-            Push::Attached { .. } => return None,
+            Push::Attached { .. } | Push::Threaded { .. } => return None,
         };
 
         let is_direct = self.direct.get(room).copied().unwrap_or(false);

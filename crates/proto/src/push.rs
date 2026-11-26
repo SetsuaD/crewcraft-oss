@@ -7,6 +7,8 @@
 //! - tag 65 `Edited`: `u64 target | str html | u8 count | count × str mention`
 //! - tag 66 `Deleted`: `u64 target`
 //! - tag 67 `Other` (membership and settings changes): no fields
+//! - tag 71 `Threaded` (task T340a): `u64 parent`. Its `cursor` is the reply's own; it follows the reply's `Posted`
+//!   and advances nothing. Only a client that agreed to `request::FEATURE_THREADS` is sent it.
 //! - tag 70 `Attached` (task T330c; 68 and 69 stay unassigned): `u8 count (1 to MAX_ATTACHMENTS) | count × (16 file id | str name | u64 size |
 //!   u8 has image size | [u32 width | u32 height])`. Its `cursor` is the message's own; it follows that message's
 //!   `Posted` and advances nothing. Only a client that agreed to `request::FEATURE_FILES` is sent it.
@@ -22,6 +24,8 @@ pub const MAX_HTML: usize = 60 * 1024;
 pub const MAX_MENTIONS: usize = 32;
 /// The tag of `Push::Attached` (task T330c).
 pub const ATTACHED: u8 = 70;
+/// The tag of `Push::Threaded` (task T340a).
+pub const THREADED: u8 = 71;
 /// The most files one message carries (task T330c).
 pub const MAX_ATTACHMENTS: usize = 10;
 /// The longest file name, in bytes (as `request::MAX_FILE_NAME`).
@@ -67,6 +71,12 @@ pub enum Push {
         room: String,
         cursor: u64,
         files: Vec<AttachedFile>,
+    },
+    /// The message at `cursor` is a reply in the thread of the message at `parent` (task T340a).
+    Threaded {
+        room: String,
+        cursor: u64,
+        parent: u64,
     },
 }
 
@@ -167,6 +177,12 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
             write_str(&mut out, room, 1, MAX_NAME)?;
             out.extend_from_slice(&cursor.to_be_bytes());
         }
+        Push::Threaded { room, cursor, parent } => {
+            out.push(THREADED);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&parent.to_be_bytes());
+        }
         Push::Attached { room, cursor, files } => {
             if files.is_empty() || files.len() > MAX_ATTACHMENTS {
                 return Err(CodecError::FieldLength);
@@ -201,7 +217,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(64..=67).contains(&tag) && tag != ATTACHED {
+    if !(64..=67).contains(&tag) && tag != ATTACHED && tag != THREADED {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -240,6 +256,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
             Push::Deleted { room, cursor, target }
         }
         67 => Push::Other { room, cursor },
+        THREADED => Push::Threaded { room, cursor, parent: read_u64(bytes, &mut pos)? },
         ATTACHED => {
             let count = usize::from(*bytes.get(pos).ok_or(CodecError::Truncated)?);
             pos += 1;

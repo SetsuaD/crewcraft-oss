@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crewcraft_accounts::identity::normalize_email;
 use crewcraft_enroll::server_trust::RootFingerprint;
 use crewcraft_proto::handshake::ServerSide;
-use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_SEARCH};
+use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_SEARCH, FEATURE_THREADS};
 #[cfg(unix)]
 use crewcraft_server::control::{ControlClient, ControlSocket};
 use crewcraft_server::identity_config;
@@ -429,7 +429,7 @@ fn serve_lab(state: &Path, trusted_root: &Path, port: u16) -> io::Result<()> {
         protocol: ServerSide {
             min_version: 1,
             max_version: 1,
-            features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES,
+            features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS,
             name: "CrewCraft Lab".into(),
         },
     };
