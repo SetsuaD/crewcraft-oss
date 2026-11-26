@@ -16,6 +16,9 @@
 //!   (0 for none)`
 //! - tag 22 `ImportEdit`: `str slug | str key | str text | u64 edited_ms`
 //! - tag 23 `ImportDelete`: `str slug | str key`
+//! - tags 25 to 28, calls (task T360a1): 25 `CallStart`: `str slug | u64 call | str actor | u8 video | u64 now_ms`;
+//!   26 `CallJoin` and 27 `CallLeave`: `str slug | u64 call | str actor | u64 now_ms`; 28 `CallEnd`: `str slug | u64
+//!   call | u64 ended_ms`
 //! - tag 24 `ImportFiles` (task T350e): `str slug | str key | u8 count | count × (str name | u64 size | u8 stored (0 or
 //!   1) | [16 file id when stored])`, the message's whole file list
 
@@ -99,6 +102,32 @@ pub enum Op {
         slug: String,
         key: String,
         files: Vec<(String, u64, Option<[u8; 16]>)>,
+    },
+    /// A call started (task T360a1).
+    CallStart {
+        slug: String,
+        call: u64,
+        actor: String,
+        video: bool,
+        now_ms: u64,
+    },
+    CallJoin {
+        slug: String,
+        call: u64,
+        actor: String,
+        now_ms: u64,
+    },
+    /// Someone left a call, by leaving or by their heartbeat stopping (at `now_ms`, their last heartbeat).
+    CallLeave {
+        slug: String,
+        call: u64,
+        actor: String,
+        now_ms: u64,
+    },
+    CallEnd {
+        slug: String,
+        call: u64,
+        ended_ms: u64,
     },
     /// A reaction added or taken back (task T341a).
     React {
@@ -223,6 +252,27 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             for file in files {
                 out.extend_from_slice(file);
             }
+        }
+        Op::CallStart { slug, call, actor, video, now_ms } => {
+            out.push(CALL_START);
+            encode_str(&mut out, slug)?;
+            out.extend_from_slice(&call.to_be_bytes());
+            encode_str(&mut out, actor)?;
+            out.push(u8::from(*video));
+            out.extend_from_slice(&now_ms.to_be_bytes());
+        }
+        Op::CallJoin { slug, call, actor, now_ms } | Op::CallLeave { slug, call, actor, now_ms } => {
+            out.push(if matches!(op, Op::CallJoin { .. }) { CALL_JOIN } else { CALL_LEAVE });
+            encode_str(&mut out, slug)?;
+            out.extend_from_slice(&call.to_be_bytes());
+            encode_str(&mut out, actor)?;
+            out.extend_from_slice(&now_ms.to_be_bytes());
+        }
+        Op::CallEnd { slug, call, ended_ms } => {
+            out.push(CALL_END);
+            encode_str(&mut out, slug)?;
+            out.extend_from_slice(&call.to_be_bytes());
+            out.extend_from_slice(&ended_ms.to_be_bytes());
         }
         Op::ImportRoom { key, name } => {
             out.push(IMPORT_ROOM);
@@ -444,6 +494,40 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::React { slug, actor, target, reaction, on, now_ms })
         }
+        CALL_START => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let call = decode_u64(bytes, &mut pos)?;
+            let actor = decode_str(bytes, &mut pos)?;
+            let video = match decode_array::<1>(bytes, &mut pos)? {
+                [0] => false,
+                [1] => true,
+                [other] => return Err(CodecError::BadKind(other)),
+            };
+            let now_ms = decode_u64(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::CallStart { slug, call, actor, video, now_ms })
+        }
+        CALL_JOIN | CALL_LEAVE => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let call = decode_u64(bytes, &mut pos)?;
+            let actor = decode_str(bytes, &mut pos)?;
+            let now_ms = decode_u64(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(if tag == CALL_JOIN { Op::CallJoin { slug, call, actor, now_ms } } else { Op::CallLeave { slug, call, actor, now_ms } })
+        }
+        CALL_END => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let call = decode_u64(bytes, &mut pos)?;
+            let ended_ms = decode_u64(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::CallEnd { slug, call, ended_ms })
+        }
         IMPORT_ROOM => {
             let key = decode_str(bytes, &mut pos)?;
             let name = decode_str(bytes, &mut pos)?;
@@ -525,6 +609,11 @@ const IMPORT_MESSAGE: u8 = 21;
 const IMPORT_EDIT: u8 = 22;
 const IMPORT_DELETE: u8 = 23;
 const IMPORT_FILES: u8 = 24;
+/// The tags of the call records (task T360a1).
+const CALL_START: u8 = 25;
+const CALL_JOIN: u8 = 26;
+const CALL_LEAVE: u8 = 27;
+const CALL_END: u8 = 28;
 
 fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;

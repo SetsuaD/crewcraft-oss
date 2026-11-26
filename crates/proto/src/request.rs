@@ -18,6 +18,9 @@
 //!   `FEATURE_THREADS`
 //! - tag 15 `PostFiles` (task T330c): `str room | str text (0 to MAX_BODY) | u8 count (1 to 10) | count × 16 file id`
 //! - tag 14 `Download`: `16 file id | u64 offset | u32 length (1 to MAX_CHUNK)` (task T330d; tag 13 is unassigned)
+//! - tags 18 to 21 (task T360a1, docs/CALLS.md), announced by `FEATURE_CALLS`, each answered `Ok { cursor }` with the
+//!   call's id: 18 `CallStart`: `str room | u8 video (0 or 1)` (joins the room's open call if it has one); 19
+//!   `CallJoin`, 20 `CallHeartbeat` and 21 `CallLeave`: `str room | u64 call`
 //! - tag 17 `React` (task T341a): `str room | u64 target | u8 reaction (1 to push::REACTIONS.len()) | u8 on (0 or 1)`,
 //!   answered `Ok { cursor }` of the reaction's event; announced by `FEATURE_REACTIONS`
 //!
@@ -73,6 +76,8 @@ pub const FEATURE_THREADS: u32 = 8;
 pub const FEATURE_REACTIONS: u32 = 16;
 /// The handshake feature bit for archive rooms: the `Archived` and `Sent` pushes (task T350d1).
 pub const FEATURE_ARCHIVE: u32 = 32;
+/// The handshake feature bit for calls: the call requests and the `CallLine` and `CallState` pushes (task T360a1).
+pub const FEATURE_CALLS: u32 = 64;
 /// The first byte of an id frame.
 pub const ID_TAG: u8 = 133;
 /// The first byte of a bytes frame (task T330d).
@@ -95,6 +100,10 @@ const DOWNLOAD: u8 = 14;
 const POST_FILES: u8 = 15;
 const REPLY: u8 = 16;
 const REACT: u8 = 17;
+const CALL_START: u8 = 18;
+const CALL_JOIN: u8 = 19;
+const CALL_HEARTBEAT: u8 = 20;
+const CALL_LEAVE: u8 = 21;
 /// The most files one `PostFiles` attaches (task T330c).
 pub const MAX_POST_FILES: usize = 10;
 
@@ -164,6 +173,26 @@ pub enum Request {
         target: u64,
         reaction: u8,
         on: bool,
+    },
+    /// Start a call in `room`, or join its open one (task T360a1).
+    CallStart {
+        room: String,
+        video: bool,
+    },
+    /// Join the open call `call` of `room`.
+    CallJoin {
+        room: String,
+        call: u64,
+    },
+    /// Say "still here" in call `call` of `room` (docs/CALLS.md liveness).
+    CallHeartbeat {
+        room: String,
+        call: u64,
+    },
+    /// Leave call `call` of `room`.
+    CallLeave {
+        room: String,
+        call: u64,
     },
     /// Up to `length` bytes of file `file` from `offset` (task T330d).
     Download {
@@ -355,6 +384,22 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.push(*reaction);
             out.push(u8::from(*on));
         }
+        Request::CallStart { room, video } => {
+            out.push(CALL_START);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.push(u8::from(*video));
+        }
+        Request::CallJoin { room, call } | Request::CallHeartbeat { room, call } | Request::CallLeave { room, call } => {
+            out.push(match request {
+                Request::CallJoin { .. } => CALL_JOIN,
+                Request::CallHeartbeat { .. } => CALL_HEARTBEAT,
+                _ => CALL_LEAVE,
+            });
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&call.to_be_bytes());
+        }
         Request::Download { file, offset, length } => {
             if *length == 0 || *length as usize > MAX_CHUNK {
                 return Err(CodecError::FieldLength);
@@ -377,7 +422,11 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(1..=6).contains(&tag) && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag) && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT) {
+    if !(1..=6).contains(&tag)
+        && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag)
+        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT)
+        && !(CALL_START..=CALL_LEAVE).contains(&tag)
+    {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -465,6 +514,24 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
                 [other] => return Err(CodecError::BadKind(other)),
             };
             Request::React { room, target, reaction, on }
+        }
+        CALL_START => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let video = match read_array::<1>(bytes, &mut pos)? {
+                [0] => false,
+                [1] => true,
+                [other] => return Err(CodecError::BadKind(other)),
+            };
+            Request::CallStart { room, video }
+        }
+        CALL_JOIN | CALL_HEARTBEAT | CALL_LEAVE => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let call = read_u64(bytes, &mut pos)?;
+            match tag {
+                CALL_JOIN => Request::CallJoin { room, call },
+                CALL_HEARTBEAT => Request::CallHeartbeat { room, call },
+                _ => Request::CallLeave { room, call },
+            }
         }
         DOWNLOAD => {
             let file = read_array::<16>(bytes, &mut pos)?;

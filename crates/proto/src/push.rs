@@ -16,6 +16,12 @@
 //!   events; its `cursor` is 0 and it advances nothing.
 //! - tag 74 `Sent` (task T350d1): `u64 sent_ms`. The original time of the imported message at `cursor`; it follows
 //!   that message's `Posted` and advances nothing. Both only to a client that agreed to `request::FEATURE_ARCHIVE`.
+//! - tag 75 `CallLine` (task T360a1): `u64 call | u8 ended (0 or 1) | str author | str text (0 to MAX_HTML)`. A call's
+//!   history line ("started a call", "call ended ..."), an event of its own that advances the cursor; a client that
+//!   did not agree to `request::FEATURE_CALLS` is sent `Other` in its place.
+//! - tag 76 `CallState` (task T360a1): `u64 call | u8 video | str started_by | u64 started_ms | u8 count | count × str
+//!   participant`. The room's open call, sent after a `Sync` before the room's events (cursor 0, advances nothing),
+//!   only with `FEATURE_CALLS`.
 //! - tag 72 `Reacted` (task T341a): `u64 target | str author | u8 reaction (1 to REACTIONS.len()) | u8 on (0 or 1)`.
 //!   An event of its own: it advances the cursor like `Other`. A client that did not agree to
 //!   `request::FEATURE_REACTIONS` is sent `Other` in its place.
@@ -36,6 +42,11 @@ pub const THREADED: u8 = 71;
 /// The tags of `Push::Archived` and `Push::Sent` (task T350d1).
 pub const ARCHIVED: u8 = 73;
 pub const SENT: u8 = 74;
+/// The tags of `Push::CallLine` and `Push::CallState` (task T360a1).
+pub const CALL_LINE: u8 = 75;
+pub const CALL_STATE: u8 = 76;
+/// The most participants a `CallState` lists.
+pub const MAX_PARTICIPANTS: usize = 255;
 /// The tag of `Push::Reacted` (task T341a).
 pub const REACTED: u8 = 72;
 /// The reactions, by code: code `n` is `REACTIONS[n - 1]` (task T341a). A fixed set, as Teams has, named in words: the
@@ -120,6 +131,25 @@ pub enum Push {
         room: String,
         cursor: u64,
         sent_ms: u64,
+    },
+    /// A call's history line by `author` (task T360a1): its start, or its end (`ended`).
+    CallLine {
+        room: String,
+        cursor: u64,
+        call: u64,
+        ended: bool,
+        author: String,
+        text: String,
+    },
+    /// The room's open call (task T360a1). `cursor` is 0.
+    CallState {
+        room: String,
+        cursor: u64,
+        call: u64,
+        video: bool,
+        started_by: String,
+        started_ms: u64,
+        participants: Vec<String>,
     },
 }
 
@@ -237,6 +267,31 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
             write_str(&mut out, room, 1, MAX_NAME)?;
             out.extend_from_slice(&cursor.to_be_bytes());
         }
+        Push::CallLine { room, cursor, call, ended, author, text } => {
+            out.push(CALL_LINE);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&call.to_be_bytes());
+            out.push(u8::from(*ended));
+            write_str(&mut out, author, 1, MAX_NAME)?;
+            write_str(&mut out, text, 0, MAX_HTML)?;
+        }
+        Push::CallState { room, cursor, call, video, started_by, started_ms, participants } => {
+            if participants.len() > MAX_PARTICIPANTS {
+                return Err(CodecError::FieldLength);
+            }
+            out.push(CALL_STATE);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&call.to_be_bytes());
+            out.push(u8::from(*video));
+            write_str(&mut out, started_by, 1, MAX_NAME)?;
+            out.extend_from_slice(&started_ms.to_be_bytes());
+            out.push(participants.len() as u8);
+            for person in participants {
+                write_str(&mut out, person, 1, MAX_NAME)?;
+            }
+        }
         Push::Sent { room, cursor, sent_ms } => {
             out.push(SENT);
             write_str(&mut out, room, 1, MAX_NAME)?;
@@ -283,7 +338,15 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(64..=67).contains(&tag) && tag != ATTACHED && tag != THREADED && tag != REACTED && tag != ARCHIVED && tag != SENT {
+    if !(64..=67).contains(&tag)
+        && tag != ATTACHED
+        && tag != THREADED
+        && tag != REACTED
+        && tag != ARCHIVED
+        && tag != SENT
+        && tag != CALL_LINE
+        && tag != CALL_STATE
+    {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -325,6 +388,33 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         THREADED => Push::Threaded { room, cursor, parent: read_u64(bytes, &mut pos)? },
         ARCHIVED => Push::Archived { room, cursor },
         SENT => Push::Sent { room, cursor, sent_ms: read_u64(bytes, &mut pos)? },
+        CALL_LINE => {
+            let call = read_u64(bytes, &mut pos)?;
+            let ended = match read_u8(bytes, &mut pos)? {
+                0 => false,
+                1 => true,
+                other => return Err(CodecError::BadKind(other)),
+            };
+            let author = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let text = read_string(bytes, &mut pos, 0, MAX_HTML)?;
+            Push::CallLine { room, cursor, call, ended, author, text }
+        }
+        CALL_STATE => {
+            let call = read_u64(bytes, &mut pos)?;
+            let video = match read_u8(bytes, &mut pos)? {
+                0 => false,
+                1 => true,
+                other => return Err(CodecError::BadKind(other)),
+            };
+            let started_by = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let started_ms = read_u64(bytes, &mut pos)?;
+            let count = usize::from(read_u8(bytes, &mut pos)?);
+            let mut participants = Vec::with_capacity(count);
+            for _ in 0..count {
+                participants.push(read_string(bytes, &mut pos, 1, MAX_NAME)?);
+            }
+            Push::CallState { room, cursor, call, video, started_by, started_ms, participants }
+        }
         REACTED => {
             let target = read_u64(bytes, &mut pos)?;
             let author = read_string(bytes, &mut pos, 1, MAX_NAME)?;

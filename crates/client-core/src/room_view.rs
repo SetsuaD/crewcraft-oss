@@ -15,6 +15,25 @@ pub enum Shown {
     Pending { id: u64, body: String, failed: bool },
 }
 
+/// A room's open call, as the server last said (task T360a1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCall {
+    pub call: u64,
+    pub video: bool,
+    pub started_by: String,
+    pub started_ms: u64,
+    pub participants: Vec<String>,
+}
+
+/// A call's history line (task T360a1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallLineRow {
+    pub call: u64,
+    pub ended: bool,
+    pub author: String,
+    pub text: String,
+}
+
 pub struct RoomView {
     timeline: Timeline,
     outbox: Outbox,
@@ -33,6 +52,10 @@ pub struct RoomView {
     archived: bool,
     /// Imported messages' original times, by cursor (task T350d1).
     sent: BTreeMap<u64, u64>,
+    /// The room's open call (task T360a1).
+    call: Option<OpenCall>,
+    /// Call history lines, by cursor (task T360a1).
+    call_lines: BTreeMap<u64, CallLineRow>,
 }
 
 impl Default for RoomView {
@@ -55,6 +78,8 @@ impl RoomView {
             reactions: BTreeMap::new(),
             archived: false,
             sent: BTreeMap::new(),
+            call: None,
+            call_lines: BTreeMap::new(),
         }
     }
 
@@ -155,6 +180,29 @@ impl RoomView {
     /// Imported messages' original times, by cursor (task T350d1).
     pub fn sent_times(&self) -> &BTreeMap<u64, u64> {
         &self.sent
+    }
+
+    /// Keep the room's open call, or that it has none (task T360a1).
+    pub fn set_call(&mut self, call: Option<OpenCall>) {
+        self.call = call;
+    }
+
+    /// The room's open call, if any (task T360a1).
+    pub fn call(&self) -> Option<&OpenCall> {
+        self.call.as_ref()
+    }
+
+    /// Keep a call's history line at `cursor`; the end of the open call closes it (task T360a1).
+    pub fn call_line(&mut self, cursor: u64, line: CallLineRow) {
+        if line.ended && self.call.as_ref().is_some_and(|open| open.call == line.call) {
+            self.call = None;
+        }
+        self.call_lines.insert(cursor, line);
+    }
+
+    /// Call history lines, by cursor (task T360a1).
+    pub fn call_lines(&self) -> &BTreeMap<u64, CallLineRow> {
+        &self.call_lines
     }
 
     /// Who reacted to each message that has reactions, by cursor, then by reaction code (task T341a).

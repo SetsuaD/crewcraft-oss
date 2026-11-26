@@ -35,6 +35,11 @@ pub enum EventKind {
         reaction: u8,
         on: bool,
     },
+    /// A call's history line (task T360a1): its start, or its end (`ended`). The text is in the event's `html`.
+    CallLine {
+        call: u64,
+        ended: bool,
+    },
 }
 
 /// Who reacted to one message: by reaction code, the people, sorted (task T341a).
@@ -294,6 +299,19 @@ impl RoomService {
             mentions: Vec::new(),
         };
         Ok(self.log.append(event))
+    }
+
+    /// Append a call's history line by `actor` (task T360a1), rendered from `text`. The call rules are the caller's
+    /// (`calls`); a history line never counts as unread.
+    pub fn call_line(&mut self, actor: &str, call: u64, ended: bool, text: &str) -> u64 {
+        let event = Event {
+            cursor: self.log.head() + 1,
+            actor: actor.to_string(),
+            kind: EventKind::CallLine { call, ended },
+            html: render(text),
+            mentions: Vec::new(),
+        };
+        self.log.append(event)
     }
 
     /// Who reacted to the message at `target` (task T341a); empty when no one has.

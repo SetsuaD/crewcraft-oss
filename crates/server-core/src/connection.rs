@@ -51,6 +51,14 @@ pub fn to_push(room: &str, cursor: u64, event: &Event) -> Push {
         }
         EventKind::Deleted { target } => Push::Deleted { room: room.to_string(), cursor, target: *target },
         EventKind::Joined { .. } | EventKind::Left { .. } => Push::Other { room: room.to_string(), cursor },
+        EventKind::CallLine { call, ended } => Push::CallLine {
+            room: room.to_string(),
+            cursor,
+            call: *call,
+            ended: *ended,
+            author: event.actor.clone(),
+            text: crate::html_text::html_text(&event.html),
+        },
         EventKind::Reacted { target, reaction, on } => {
             Push::Reacted { room: room.to_string(), cursor, target: *target, author: event.actor.clone(), reaction: *reaction, on: *on }
         }
@@ -105,6 +113,7 @@ impl Connection {
             |_, _, _| Vec::new(),
             |_, _, _| None,
             |_, _, _| None,
+            |_, _| None,
         )
     }
 
@@ -114,11 +123,13 @@ impl Connection {
     /// mutations in the same call remain committed.
     pub fn receive_durable(&mut self, server: &mut DurableServer, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, DurableConnError> {
         server.check_alive().map_err(DurableConnError::Storage)?;
+        // Calls whose people stopped sending heartbeats close first (task T360a1).
+        server.sweep_calls(now_ms).map_err(DurableConnError::Storage)?;
         self.receive_with(
             server,
             bytes,
             now_ms,
-            |s, user, request, now| match upload(s, user, request, now) {
+            |s, user, request, now| match upload(s, user, request, now).or_else(|| calls(s, user, request, now)) {
                 Some(answer) => answer,
                 None => handle_backend(&mut Backend::Durable(s), user, request, now).map(|r| (r, None)).map_err(DurableConnError::Storage),
             },
@@ -127,6 +138,7 @@ impl Connection {
             DurableServer::attachments,
             DurableServer::parent_of,
             DurableServer::imported_sent_ms,
+            call_state,
         )
     }
 
@@ -142,6 +154,7 @@ impl Connection {
         attachments: impl Fn(&S, &str, u64) -> Vec<crewcraft_proto::push::AttachedFile>,
         parent_of: impl Fn(&S, &str, u64) -> Option<u64>,
         sent_of: impl Fn(&S, &str, u64) -> Option<u64>,
+        call_state: impl Fn(&S, &str) -> Option<Push>,
     ) -> Result<Vec<u8>, E> {
         self.decoder.push(bytes);
         let mut out = Vec::new();
@@ -169,6 +182,11 @@ impl Connection {
                 && let Ok(Since::Events(events)) = service.sync(&self.user, *cursor)
             {
                 let archive = self.features & crewcraft_proto::request::FEATURE_ARCHIVE != 0;
+                let calls_on = self.features & crewcraft_proto::request::FEATURE_CALLS != 0;
+                // The room's open call, before its events (task T360a1).
+                if calls_on && let Some(state) = call_state(server, room) {
+                    out.extend_from_slice(&encode(&encode_push(&state).map_err(ConnError::Request)?).map_err(ConnError::Frame)?);
+                }
                 // An archive room says so before its events (task T350d1).
                 if archive && service.is_read_only() {
                     let archived = encode_push(&Push::Archived { room: room.clone(), cursor: 0 }).map_err(ConnError::Request)?;
@@ -178,6 +196,10 @@ impl Connection {
                     let mut push = to_push(room, ev_cursor, &ev);
                     // A client that did not agree to reactions only advances past them (task T341a).
                     if matches!(push, Push::Reacted { .. }) && self.features & crewcraft_proto::request::FEATURE_REACTIONS == 0 {
+                        push = Push::Other { room: room.clone(), cursor: ev_cursor };
+                    }
+                    // Nor to calls, past their history lines (task T360a1).
+                    if matches!(push, Push::CallLine { .. }) && !calls_on {
                         push = Push::Other { room: room.clone(), cursor: ev_cursor };
                     }
                     let posted = matches!(push, Push::Posted { .. });
@@ -228,6 +250,40 @@ impl Connection {
 
         Ok(out)
     }
+}
+
+/// Answer a call request over a durable server (task T360a1): `None` for any other request. `Ok { cursor }` carries
+/// the call's id; a refusal is an `Error`; a storage failure is fatal.
+fn calls(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64) -> Option<Result<Answered, DurableConnError>> {
+    use crate::calls::CallError;
+    let answer = match request {
+        Request::CallStart { room, video } => server.call_start(room, user, *video, now_ms),
+        Request::CallJoin { room, call } => server.call_join(room, user, *call, now_ms).map(|()| *call),
+        Request::CallHeartbeat { room, call } => server.call_heartbeat(room, user, *call, now_ms).map(|()| *call),
+        Request::CallLeave { room, call } => server.call_leave(room, user, *call, now_ms).map(|()| *call),
+        _ => return None,
+    };
+    Some(match answer {
+        Ok(call) => Ok((Response::Ok { cursor: call }, None)),
+        Err(CallError::NotMember) => Ok((refusal_of(crate::dispatch::E_NO_SUCH_ROOM), None)),
+        Err(CallError::NotAllowed) => Ok((refusal_of(crate::dispatch::E_NOT_ALLOWED), None)),
+        Err(CallError::NoSuchCall) => Ok((refusal_of(crate::dispatch::E_NO_SUCH_CALL), None)),
+        Err(CallError::Durable(error)) => Err(DurableConnError::Storage(error)),
+    })
+}
+
+/// The open call of `room` as a `CallState` push (task T360a1).
+fn call_state(server: &DurableServer, room: &str) -> Option<Push> {
+    let call = server.open_call(room)?;
+    Some(Push::CallState {
+        room: room.to_owned(),
+        cursor: 0,
+        call: call.id,
+        video: call.video,
+        started_by: call.started_by.clone(),
+        started_ms: call.started_ms,
+        participants: call.present.keys().take(crewcraft_proto::push::MAX_PARTICIPANTS).cloned().collect(),
+    })
 }
 
 /// Answer an upload request over a durable server (task T330b): `None` for any other request. A refusal is an `Error`

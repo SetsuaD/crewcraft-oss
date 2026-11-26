@@ -1,0 +1,33 @@
+{
+  "id": "T360a1-call-records",
+  "title": "Calls on the chat server: records, liveness, history lines, missed calls",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/server-core/src/calls.rs",
+    "crates/server-core/src/lib.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/server.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/room_search.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/proto/src/request.rs",
+    "crates/proto/src/push.rs",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/inbox.rs",
+    "crates/client-core/src/room_view.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs"
+  ],
+  "test_path": "crates/server-core/tests/t360a1_calls.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t360a1_calls",
+  "depends_on": [
+    "T350a-import-engine"
+  ],
+  "spec": "docs/CALLS.md 'Call records and liveness'. FEATURE_CALLS (64); requests 18 CallStart { room, video }, 19 CallJoin, 20 CallHeartbeat, 21 CallLeave { room, call }, each answered Ok with the call id; E_NO_SUCH_CALL (11). A room has at most one open call: CallStart joins it when there is one; otherwise a member who may post starts one (a Guest or an archive room: NotAllowed). History lines are EventKind::CallLine events ('started a call'; 'call ended after <duration>: <everyone who joined>'), never unread. A person with no heartbeat for HEARTBEAT_TIMEOUT_MS (75 s) leaves at their last heartbeat (sweep_calls, run on every durable receive and call request); an empty call ends at that time. A heartbeat or leave for a call the person is not in is NoSuchCall; removal from the room takes them out of the call at once and later requests are NotMember. Records CallStart/CallJoin/CallLeave/CallEnd (tags 25-28) are replayed; heartbeats are not journaled. missed_calls(user): ended calls in rooms they are still in, started by someone else after they joined the room, never joined by them, newest end first. After Sync a client with FEATURE_CALLS gets CallState (the open call, before the events) and CallLine (push 75; Other for older clients); the inbox keeps RoomView::call (cleared by the end line) and call_lines. The network server advertises FEATURE_CALLS. The memory backend answers call requests E_NO_STORAGE.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}

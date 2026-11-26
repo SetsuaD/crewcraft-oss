@@ -65,6 +65,21 @@ impl Inbox {
             self.views.get_mut(&room)?.sent(cursor, sent_ms);
             return Some((Apply::Duplicate, Notify::None));
         }
+        // A room's open call advances nothing (task T360a1).
+        if let Push::CallState { room, call, video, started_by, started_ms, participants, .. } = push {
+            let open = crate::room_view::OpenCall { call, video, started_by, started_ms, participants };
+            self.views.get_mut(&room)?.set_call(Some(open));
+            return Some((Apply::Duplicate, Notify::None));
+        }
+        // A call's history line is an event of its own; its end closes the room's open call (task T360a1).
+        if let Push::CallLine { room, cursor, call, ended, author, text } = push {
+            let view = self.views.get_mut(&room)?;
+            let apply = view.event(cursor, Change::Other);
+            if apply == Apply::Applied {
+                view.call_line(cursor, crate::room_view::CallLineRow { call, ended, author, text });
+            }
+            return Some((apply, Notify::None));
+        }
         // So does a reply's thread (task T340a).
         if let Push::Threaded { room, cursor, parent } = push {
             self.views.get_mut(&room)?.thread(cursor, parent);
@@ -94,6 +109,7 @@ impl Inbox {
             Push::Deleted { room, cursor, target } => (room.as_str(), *cursor, Change::Deleted { target: *target }, false, None, None),
             Push::Other { room, cursor } => (room.as_str(), *cursor, Change::Other, false, None, None),
             Push::Attached { .. } | Push::Threaded { .. } | Push::Reacted { .. } | Push::Archived { .. } | Push::Sent { .. } => return None,
+            Push::CallLine { .. } | Push::CallState { .. } => return None,
         };
 
         let is_direct = self.direct.get(room).copied().unwrap_or(false);
