@@ -520,7 +520,7 @@ impl Controller {
 /// The window update for one worker event, if any.
 pub fn worker_update(event: Event) -> Vec<Update> {
     match event {
-        Event::Connected | Event::Posted { .. } => Vec::new(),
+        Event::Connected | Event::Posted { .. } | Event::Changed { .. } => Vec::new(),
         Event::SignedIn { email, rooms } => vec![Update::SignedIn { email, rooms }],
         Event::WaitingForBrowser => vec![Update::WaitingForBrowser],
         Event::Room { room, shown } => vec![Update::Snapshot { room, shown }],

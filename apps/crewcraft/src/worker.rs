@@ -87,6 +87,8 @@ pub enum Event {
     Unread { room: String, count: u32 },
     /// The server acknowledged a post at `cursor`.
     Posted { room: String, cursor: u64 },
+    /// The server accepted an edit or a deletion, recorded at `cursor` (task T316). The room's next snapshot shows it.
+    Changed { room: String, cursor: u64 },
     /// A post that was not acknowledged; `text` is returned so the window can restore the draft. After
     /// `Problem::Lost` the post may still have arrived: the room's next snapshot shows it if so.
     PostFailed { room: String, text: String, problem: Problem },
@@ -501,6 +503,10 @@ impl Run {
                 Some(Input::SignInExternal(email)) => self.sign_in_external(&email),
                 Some(Input::Command(Command::Sync { room })) => self.open_room(room),
                 Some(Input::Command(Command::Post { room, text })) => self.post(room, text),
+                Some(Input::Command(Command::Edit { room, target, text })) => {
+                    self.change(room, |session, room| session.edit(room, target, &text));
+                }
+                Some(Input::Command(Command::Delete { room, target })) => self.change(room, |session, room| session.delete(room, target)),
                 Some(Input::SignOut) => {
                     self.retry = None;
                     let was_signed_in = self.session.is_some();
@@ -738,6 +744,26 @@ impl Run {
                 if problem.ends_session() {
                     self.fail_connection(problem, true);
                 }
+            }
+        }
+    }
+
+    /// An edit or a deletion of one of the person's own messages (task T316): report `Changed`, then sync the room.
+    /// A refusal (someone else's message, say) is reported and leaves the session open.
+    fn change(&mut self, room: String, apply: impl FnOnce(&mut SignedInSession, &str) -> Result<u64, LabError>) {
+        if let Err(problem) = self.follow(&room) {
+            return self.emit(Event::Failed(problem));
+        }
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        match apply(session, &room) {
+            Ok(cursor) => {
+                self.emit(Event::Changed { room: room.clone(), cursor });
+                self.sync_room(&room, false);
+            }
+            Err(error) => {
+                self.request_failed(error);
             }
         }
     }

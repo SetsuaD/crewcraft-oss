@@ -23,6 +23,11 @@ pub enum Command {
     Sync { room: String },
     /// Post `text` to `room`. `text` is already trimmed and within `MAX_DRAFT_CHARS`.
     Post { room: String, text: String },
+    /// Replace the text of one of the person's own messages, `target` being its cursor (task T316). `text` is trimmed
+    /// and within `MAX_DRAFT_CHARS`, as for `Post`.
+    Edit { room: String, target: u64, text: String },
+    /// Delete one of the person's own messages, `target` being its cursor (task T316).
+    Delete { room: String, target: u64 },
 }
 
 /// Why the composer did not submit. The draft is kept unchanged in every case.

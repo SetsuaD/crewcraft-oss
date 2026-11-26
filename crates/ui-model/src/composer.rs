@@ -37,6 +37,22 @@ impl Composer {
     /// when more than `MAX_DRAFT_CHARS` characters are left; a refusal keeps the draft unchanged. On success the
     /// room's draft is cleared and `Command::Post` is returned; other rooms' drafts are untouched.
     pub fn submit(&mut self, room: &str) -> Result<Command, DraftError> {
+        let text = self.checked(room)?;
+        let command = Command::Post { room: room.to_owned(), text };
+        self.drafts.remove(room);
+        Ok(command)
+    }
+
+    /// As `submit`, but the draft replaces the text of the message at cursor `target` (task T316): `Command::Edit`,
+    /// with the same trimming and the same refusals.
+    pub fn submit_edit(&mut self, room: &str, target: u64) -> Result<Command, DraftError> {
+        let text = self.checked(room)?;
+        let command = Command::Edit { room: room.to_owned(), target, text };
+        self.drafts.remove(room);
+        Ok(command)
+    }
+
+    fn checked(&self, room: &str) -> Result<String, DraftError> {
         let text = self.draft(room).trim();
         if text.is_empty() {
             return Err(DraftError::Empty);
@@ -44,8 +60,6 @@ impl Composer {
         if text.chars().count() > MAX_DRAFT_CHARS {
             return Err(DraftError::TooLong);
         }
-        let command = Command::Post { room: room.to_owned(), text: text.to_owned() };
-        self.drafts.remove(room);
-        Ok(command)
+        Ok(text.to_owned())
     }
 }
