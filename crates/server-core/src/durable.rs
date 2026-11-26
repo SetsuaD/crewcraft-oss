@@ -15,11 +15,11 @@ use crewcraft_proto::request::{MAX_AUTHOR, MAX_HITS, MAX_SNIPPET, SearchHit};
 
 use crate::cursor_log::Since;
 use crate::html_text::html_text;
-use crate::room_service::EventKind;
 use crate::journal::{Journal, JournalError};
 use crate::op::{Op, decode_op, encode_op};
 use crate::room::Role;
 use crate::room_search::{Hit, RoomSearch};
+use crate::room_service::EventKind;
 use crate::server::{Server, ServerError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

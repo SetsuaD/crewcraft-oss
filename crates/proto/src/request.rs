@@ -60,15 +60,33 @@ const SEARCH: u8 = 9;
 /// A request. `ListRooms` asks for the rooms the signed-in person is a member of.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
-    Post { room: String, text: String },
-    Edit { room: String, target: u64, text: String },
-    Delete { room: String, target: u64 },
-    Sync { room: String, cursor: u64 },
-    MarkRead { room: String, cursor: u64 },
+    Post {
+        room: String,
+        text: String,
+    },
+    Edit {
+        room: String,
+        target: u64,
+        text: String,
+    },
+    Delete {
+        room: String,
+        target: u64,
+    },
+    Sync {
+        room: String,
+        cursor: u64,
+    },
+    MarkRead {
+        room: String,
+        cursor: u64,
+    },
     Ping,
     ListRooms,
     /// Messages the signed-in person can read, by the words they begin with (task T320b).
-    Search { query: String },
+    Search {
+        query: String,
+    },
 }
 
 /// One message a search found (task T320b).

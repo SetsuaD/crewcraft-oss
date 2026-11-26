@@ -4,7 +4,6 @@
 #![allow(clippy::unwrap_used)]
 
 use std::fs;
-use std::path::PathBuf;
 
 use crewcraft_proto::frame::encode;
 use crewcraft_proto::message::CodecError;
@@ -79,7 +78,11 @@ fn a_durable_connection_answers_with_the_current_text_of_the_askers_messages() {
     let output = bob.receive_durable(&mut server, &framed(4, &Request::Search { query: "kick".into() }), 5_000).unwrap();
     let response = encode(&encode_response(4, &Response::Ok { cursor: 2 }).unwrap()).unwrap();
     assert_eq!(&output[..response.len()], response.as_slice(), "Ok counts the hits");
-    let frame = encode(&encode_hits(4, &[hit(&room, lunch, "bob", "Lunch after the kickoff?"), hit(&room, kickoff, "alice", "The kickoff moved to Tuesday")]).unwrap()).unwrap();
+    let frame = encode(
+        &encode_hits(4, &[hit(&room, lunch, "bob", "Lunch after the kickoff?"), hit(&room, kickoff, "alice", "The kickoff moved to Tuesday")])
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(&output[response.len()..], frame.as_slice(), "then the hits, newest first, with the edited text");
 
     // A long message's snippet is cut at a character boundary within the limit.
