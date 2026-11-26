@@ -128,7 +128,11 @@ impl Inbox {
             Push::Deleted { room, cursor, target } => (room.as_str(), *cursor, Change::Deleted { target: *target }, false, None, None),
             Push::Other { room, cursor } => (room.as_str(), *cursor, Change::Other, false, None, None),
             Push::Attached { .. } | Push::Threaded { .. } | Push::Reacted { .. } | Push::Archived { .. } | Push::Sent { .. } => return None,
-            Push::CallLine { .. } | Push::CallState { .. } | Push::CallKeys { .. } | Push::CallSealed { .. } | Push::Pinned { .. }
+            Push::CallLine { .. }
+            | Push::CallState { .. }
+            | Push::CallKeys { .. }
+            | Push::CallSealed { .. }
+            | Push::Pinned { .. }
             | Push::ReadState { .. } => return None,
         };
 

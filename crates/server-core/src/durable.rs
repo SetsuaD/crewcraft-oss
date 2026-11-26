@@ -756,7 +756,10 @@ impl DurableServer {
             0
         } else {
             self.previews.get(slug).map_or(0, |messages| {
-                messages.range((std::ops::Bound::Excluded(position), std::ops::Bound::Unbounded)).filter(|(_, message)| message.author != user).count() as u64
+                messages
+                    .range((std::ops::Bound::Excluded(position), std::ops::Bound::Unbounded))
+                    .filter(|(_, message)| message.author != user)
+                    .count() as u64
             })
         };
         Some(crewcraft_proto::push::Push::ReadState { room: slug.to_owned(), cursor: room.head(), position, revision, unread })
@@ -1079,10 +1082,13 @@ mod pins_saved_tests {
         assert!(matches!(reopened.read_state(&room, "reader"), Some(crewcraft_proto::push::Push::ReadState { unread: 0, .. })));
         drop(reopened);
         let (_, records) = Journal::open(&journal.0).unwrap();
-        let recorded: Vec<_> = records.iter().filter_map(|bytes| match decode_op(bytes).unwrap() {
-            Op::MarkUnread { target, .. } => Some(target),
-            _ => None,
-        }).collect();
+        let recorded: Vec<_> = records
+            .iter()
+            .filter_map(|bytes| match decode_op(bytes).unwrap() {
+                Op::MarkUnread { target, .. } => Some(target),
+                _ => None,
+            })
+            .collect();
         assert_eq!(recorded, vec![chosen, own]);
     }
 
@@ -1104,8 +1110,8 @@ mod pins_saved_tests {
 
     #[test]
     fn unread_feature_refusal_is_nonmutating_and_empty_sync_keeps_the_next_response_aligned() {
-        use crewcraft_proto::request::FEATURE_READ_STATE;
         use crewcraft_proto::push::{Push, decode_push};
+        use crewcraft_proto::request::FEATURE_READ_STATE;
 
         let journal = TestJournal::new();
         let mut server = DurableServer::open(&journal.0).unwrap();
@@ -1117,7 +1123,10 @@ mod pins_saved_tests {
         let answer = Connection::new("owner").receive_durable(&mut server, &request, 10_000).unwrap();
         let mut decoder = Decoder::new();
         decoder.push(&answer);
-        assert!(matches!(decode_response(&decoder.next_frame().unwrap().unwrap()).unwrap(), (1, Response::Error { code: crate::dispatch::E_NOT_ALLOWED, .. })));
+        assert!(matches!(
+            decode_response(&decoder.next_frame().unwrap().unwrap()).unwrap(),
+            (1, Response::Error { code: crate::dispatch::E_NOT_ALLOWED, .. })
+        ));
         assert!(decoder.next_frame().unwrap().is_none());
         assert_eq!(server.journal.len(), before);
         assert_eq!(server.server().room(&room).unwrap().read_position("owner"), Ok((20, 1)));
@@ -1127,7 +1136,10 @@ mod pins_saved_tests {
         let answer = Connection::with_features("owner", FEATURE_READ_STATE).receive_durable(&mut server, &requests, 10_000).unwrap();
         decoder.push(&answer);
         assert_eq!(decode_response(&decoder.next_frame().unwrap().unwrap()).unwrap(), (2, Response::Ok { cursor: head }));
-        assert_eq!(decode_push(&decoder.next_frame().unwrap().unwrap()).unwrap(), Push::ReadState { room, cursor: head, position: 20, revision: 1, unread: 0 });
+        assert_eq!(
+            decode_push(&decoder.next_frame().unwrap().unwrap()).unwrap(),
+            Push::ReadState { room, cursor: head, position: 20, revision: 1, unread: 0 }
+        );
         assert_eq!(decode_response(&decoder.next_frame().unwrap().unwrap()).unwrap(), (3, Response::Ok { cursor: 0 }));
         assert!(decoder.next_frame().unwrap().is_none());
     }

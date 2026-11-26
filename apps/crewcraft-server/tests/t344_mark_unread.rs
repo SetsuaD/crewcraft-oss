@@ -125,9 +125,7 @@ fn start(state: LabInstallation, now_ms: u64, secrets: Vec<[u8; 20]>) -> Running
         address: "127.0.0.1:0".parse().unwrap(),
         capacity: NonZeroUsize::new(8).unwrap(),
         timeouts: Timeouts { handshake: WAIT, sign_in: WAIT, signed_in_frame: WAIT, bootstrap: WAIT },
-        protocol: ServerSide {
-            min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_READ_STATE, name: "read position test".into(),
-        },
+        protocol: ServerSide { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_READ_STATE, name: "read position test".into() },
     };
     let clock = Arc::new(AtomicU64::new(wall_ms()));
     let server_clock = clock.clone();
@@ -203,7 +201,8 @@ impl Fixture {
             Person { email: BOB, secret: [19; 20], invitation: EnrollmentCode::from_bytes([2; 20]) },
         ];
         for person in &people {
-            let invite = Invite { email: person.email.into(), bootstrap_pub: person.invitation.bootstrap_public_key(), expires_ms: setup_time + 600_000 };
+            let invite =
+                Invite { email: person.email.into(), bootstrap_pub: person.invitation.bootstrap_public_key(), expires_ms: setup_time + 600_000 };
             state.accounts.issue_invite(invite, setup_time).unwrap();
         }
         let room = state.rooms.create_room(ALICE, "Project").unwrap();
@@ -214,13 +213,29 @@ impl Fixture {
             source: "fixture".into(),
             rooms: vec![BundleRoom { key: "archive".into(), kind: RoomKind::Group, name: "Archive".into(), members: vec![ALICE.into(), BOB.into()] }],
             messages: vec![BundleMessage {
-                room: "archive".into(), key: "message".into(), author: BOB.into(), sent_ms: setup_time,
-                text: "archived message".into(), reply_to: None, edited_ms: None, deleted: false, files: Vec::new(),
+                room: "archive".into(),
+                key: "message".into(),
+                author: BOB.into(),
+                sent_ms: setup_time,
+                text: "archived message".into(),
+                reply_to: None,
+                edited_ms: None,
+                deleted: false,
+                files: Vec::new(),
             }],
         };
         let first = start(state, setup_time, people.iter().map(|person| person.secret).collect());
         let mut fixture = Self {
-            directory, fingerprint, root_der, room, private_room, own_room, archive_room: String::new(), non_message, people, devices: Vec::new(),
+            directory,
+            fingerprint,
+            root_der,
+            room,
+            private_room,
+            own_room,
+            archive_room: String::new(),
+            non_message,
+            people,
+            devices: Vec::new(),
         };
         let endpoint = fixture.endpoint(&first);
         fixture.devices.push(fixture.people[0].enroll(&endpoint, &first.clock));
@@ -244,10 +259,20 @@ impl Fixture {
         let totp = fixture.people[0].totp();
         let confirmation = totp.generate(registration_time / 1000);
         let counter = totp.verify(&confirmation, registration_time / 1000, 0, None).unwrap();
-        accounts.activate(Activation {
-            bootstrap_pub, device_name: "Secondary Device", certificate: &issued.certificate, spki_sha256: issued.key_id,
-            counter, first_device: None, expected_device_id: Some(device_id),
-        }, registration_time).unwrap();
+        accounts
+            .activate(
+                Activation {
+                    bootstrap_pub,
+                    device_name: "Secondary Device",
+                    certificate: &issued.certificate,
+                    spki_sha256: issued.key_id,
+                    counter,
+                    first_device: None,
+                    expected_device_id: Some(device_id),
+                },
+                registration_time,
+            )
+            .unwrap();
         let alice_devices = accounts.devices_of(ALICE);
         assert_eq!(alice_devices.len(), 2);
         assert_ne!(alice_devices[0].id, alice_devices[1].id);
@@ -379,10 +404,13 @@ fn unread_targets_must_be_live_and_readable_and_archived_rooms_never_count() {
     alice.sync(room).unwrap();
     assert_eq!(alice.read_state(room).unwrap(), before, "refused targets cannot change a person's cursor");
     let (_, archive) = alice.sync(&fixture.archive_room).unwrap();
-    let target = archive.iter().find_map(|entry| match entry {
-        crewcraft_client_core::room_view::Shown::Line(line) => Some(line.cursor),
-        _ => None,
-    }).unwrap();
+    let target = archive
+        .iter()
+        .find_map(|entry| match entry {
+            crewcraft_client_core::room_view::Shown::Line(line) => Some(line.cursor),
+            _ => None,
+        })
+        .unwrap();
     alice.mark_unread(&fixture.archive_room, target).unwrap();
     alice.sync(&fixture.archive_room).unwrap();
     assert_eq!(alice.read_state(&fixture.archive_room).unwrap().unread, 0);
@@ -422,9 +450,8 @@ fn an_open_worker_observes_another_devices_rewind_until_a_deliberate_read() {
     let target = bob.post(room, "remember this incoming message").unwrap();
     let head = bob.post(room, "another incoming message").unwrap();
     alice.mark_read(room, head).unwrap();
-    let config = WorkerConfig {
-        poll_interval: Duration::from_millis(50), first_retry: Duration::from_millis(50), max_retry: Duration::from_millis(200),
-    };
+    let config =
+        WorkerConfig { poll_interval: Duration::from_millis(50), first_retry: Duration::from_millis(50), max_retry: Duration::from_millis(200) };
     let (worker, events) = Worker::start(fixture.endpoint(&running), fixture.devices[2].clone(), config, || {}).unwrap();
     wait_for_event(&events, |event| matches!(event, Event::Connected));
     running.advance(STEP_MS);
@@ -437,7 +464,10 @@ fn an_open_worker_observes_another_devices_rewind_until_a_deliberate_read() {
     alice.mark_unread(room, target).unwrap();
     // No new command is sent to the worker here: its normal background poll must observe the other device's change.
     wait_for_event(&events, |event| matches!(event, Event::Unread { room: reported, count } if reported == room && *count > 0));
-    wait_for_event(&events, |event| matches!(event, Event::ReadState { room: reported, state } if reported == room && state.position == target - 1 && state.unread > 0));
+    wait_for_event(
+        &events,
+        |event| matches!(event, Event::ReadState { room: reported, state } if reported == room && state.position == target - 1 && state.unread > 0),
+    );
     // A forced observation cycle supplies a completion barrier. Refreshing an already-open room must preserve the
     // remote unread position, as ordinary background polling does.
     assert!(worker.send(Command::Sync { room: room.clone() }));
@@ -447,7 +477,10 @@ fn an_open_worker_observes_another_devices_rewind_until_a_deliberate_read() {
     assert_eq!(pending.position, target - 1);
     assert!(pending.unread > 0);
     assert!(worker.send(Command::Read { room: room.clone() }));
-    wait_for_event(&events, |event| matches!(event, Event::ReadState { room: reported, state } if reported == room && state.position == head && state.unread == 0));
+    wait_for_event(
+        &events,
+        |event| matches!(event, Event::ReadState { room: reported, state } if reported == room && state.position == head && state.unread == 0),
+    );
     alice.sync(room).unwrap();
     let read = alice.read_state(room).unwrap();
     assert_eq!(read.unread, 0);

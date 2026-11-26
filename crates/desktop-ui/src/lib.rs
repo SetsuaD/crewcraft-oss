@@ -1142,7 +1142,8 @@ impl Window {
                             ui.add_space(10.0);
                             ui.strong("Archive");
                             for row in archive {
-                                let response = ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, row.name.clone()));
+                                let response =
+                                    ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, row.name.clone()));
                                 if self.focus_room.as_deref() == Some(row.name.as_str()) {
                                     response.request_focus();
                                     self.focus_room = None;
