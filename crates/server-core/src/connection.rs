@@ -92,7 +92,15 @@ impl Connection {
     /// Returns everything to send, in that order. On a fatal error, returns only the error: no bytes from this call
     /// are sent and the caller closes the connection.
     pub fn receive(&mut self, server: &mut Server, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, ConnError> {
-        self.receive_with(server, bytes, now_ms, |s, user, request, now| Ok((handle(s, user, request, now), None)), |s| s, |_, _, _| Vec::new(), |_, _, _| Vec::new())
+        self.receive_with(
+            server,
+            bytes,
+            now_ms,
+            |s, user, request, now| Ok((handle(s, user, request, now), None)),
+            |s| s,
+            |_, _, _| Vec::new(),
+            |_, _, _| Vec::new(),
+        )
     }
 
     /// Handle framed requests with the same wire behavior as [Self::receive].
@@ -161,7 +169,8 @@ impl Connection {
                     if posted && self.features & crewcraft_proto::request::FEATURE_FILES != 0 {
                         let files = attachments(server, room, ev_cursor);
                         if !files.is_empty() {
-                            let attached = encode_push(&Push::Attached { room: room.clone(), cursor: ev_cursor, files }).map_err(ConnError::Request)?;
+                            let attached =
+                                encode_push(&Push::Attached { room: room.clone(), cursor: ev_cursor, files }).map_err(ConnError::Request)?;
                             out.extend_from_slice(&encode(&attached).map_err(ConnError::Frame)?);
                         }
                     }

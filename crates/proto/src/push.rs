@@ -39,12 +39,35 @@ pub struct AttachedFile {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Push {
-    Posted { room: String, cursor: u64, author: String, html: String, mentions: Vec<String> },
-    Edited { room: String, cursor: u64, target: u64, html: String, mentions: Vec<String> },
-    Deleted { room: String, cursor: u64, target: u64 },
-    Other { room: String, cursor: u64 },
+    Posted {
+        room: String,
+        cursor: u64,
+        author: String,
+        html: String,
+        mentions: Vec<String>,
+    },
+    Edited {
+        room: String,
+        cursor: u64,
+        target: u64,
+        html: String,
+        mentions: Vec<String>,
+    },
+    Deleted {
+        room: String,
+        cursor: u64,
+        target: u64,
+    },
+    Other {
+        room: String,
+        cursor: u64,
+    },
     /// The files the message at `cursor` carries (task T330c).
-    Attached { room: String, cursor: u64, files: Vec<AttachedFile> },
+    Attached {
+        room: String,
+        cursor: u64,
+        files: Vec<AttachedFile>,
+    },
 }
 
 fn write_str(out: &mut Vec<u8>, s: &str, min: usize, max: usize) -> Result<(), CodecError> {

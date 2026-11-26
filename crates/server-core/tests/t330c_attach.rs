@@ -173,7 +173,9 @@ fn the_client_keeps_a_messages_files_beside_the_timeline() {
     let mut inbox = Inbox::new("alice", Settings::new("alice"));
     inbox.follow("general", false);
     let files = vec![attached([1; 16], "a.txt", 3)];
-    inbox.on_push(Push::Posted { room: "general".into(), cursor: 1, author: "bob".into(), html: "<p>look</p>".into(), mentions: Vec::new() }, T0, 0).unwrap();
+    inbox
+        .on_push(Push::Posted { room: "general".into(), cursor: 1, author: "bob".into(), html: "<p>look</p>".into(), mentions: Vec::new() }, T0, 0)
+        .unwrap();
     inbox.on_push(Push::Attached { room: "general".into(), cursor: 1, files: files.clone() }, T0, 0).unwrap();
     let view = inbox.view("general").unwrap();
     assert_eq!(view.attachments().get(&1), Some(&files));

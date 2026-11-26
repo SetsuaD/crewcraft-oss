@@ -213,19 +213,7 @@ impl DurableServer {
                 index_event(&server, &mut search, &mut previews, &slug, &actor, cursor);
             }
         }
-        Ok(Self {
-            server,
-            journal,
-            poisoned: false,
-            search,
-            previews,
-            files,
-            store: None,
-            uploads: HashMap::new(),
-            attachments,
-            attached,
-            detached,
-        })
+        Ok(Self { server, journal, poisoned: false, search, previews, files, store: None, uploads: HashMap::new(), attachments, attached, detached })
     }
 
     /// Keep uploaded bytes in `store` (task T330b). Bytes no record refers to are removed now (`FileStore::sweep`).
