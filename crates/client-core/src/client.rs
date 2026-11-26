@@ -32,9 +32,8 @@ pub enum ClientError {
     /// The frame layer refused the bytes.
     Frame(FrameError),
     /// A frame is neither a response nor a push, or does not decode: `Truncated` for an empty frame, `BadKind(byte)` when
-    /// its first byte is neither a response tag (128, 129), a push tag (64 to 67), the room-list tag (131) nor the hits
-    /// tag (132), otherwise the
-    /// decoder's error.
+    /// its first byte is neither a response tag (128, 129), a push tag (64 to 67, or 70 for a message's files), the
+    /// room-list tag (131) nor the hits tag (132), otherwise the decoder's error.
     Malformed(CodecError),
 }
 
@@ -89,13 +88,14 @@ impl Client {
                     Reply::Malformed(e) => return Err(ClientError::Malformed(e)),
                     _ => events.push(ClientEvent::Reply(reply)),
                 }
-            } else if (64..=67).contains(&first) {
+            } else if (64..=67).contains(&first) || first == crewcraft_proto::push::ATTACHED {
                 let push = decode_push(&payload).map_err(ClientError::Malformed)?;
                 let room = match &push {
                     Push::Posted { room, .. } => room.clone(),
                     Push::Edited { room, .. } => room.clone(),
                     Push::Deleted { room, .. } => room.clone(),
                     Push::Other { room, .. } => room.clone(),
+                    Push::Attached { room, .. } => room.clone(),
                 };
                 match self.inbox.on_push(push, now_ms, local_minute) {
                     Some((apply, notify)) => events.push(ClientEvent::Pushed { room, apply, notify }),

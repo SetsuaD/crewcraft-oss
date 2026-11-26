@@ -52,6 +52,12 @@ pub struct DurableServer {
     store: Option<FileStore>,
     /// Uploads in progress, by upload id (task T330b).
     uploads: HashMap<[u8; 16], Upload>,
+    /// The files each message carries, by room and message cursor (task T330c).
+    attachments: HashMap<(String, u64), Vec<[u8; 16]>>,
+    /// Which message each attached file is on.
+    attached: HashMap<[u8; 16], (String, u64)>,
+    /// Files whose message was deleted: they are not found (task T330c).
+    detached: HashSet<[u8; 16]>,
 }
 
 /// An upload in progress (task T330b).
@@ -73,6 +79,19 @@ pub const MAX_UPLOADS: usize = 64;
 pub const MAX_UPLOADS_PER_PERSON: usize = 4;
 /// An upload with no chunk for this long is discarded.
 pub const UPLOAD_IDLE_MS: u64 = 10 * 60 * 1000;
+
+/// Why a post with files was refused (task T330c). Nothing is posted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachError {
+    /// A file is not the poster's own upload in that room, is already attached, appears twice, or there are none or
+    /// more than `MAX_POST_FILES`.
+    BadAttachment,
+    /// The room refused the post (not a member, read-only, rate limit, text too long), or the journal failed.
+    Durable(DurableError),
+}
+
+/// The most files one message carries (task T330c).
+pub const MAX_POST_FILES: usize = 10;
 
 /// Why a download was refused (task T330d).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +178,9 @@ impl DurableServer {
         let mut search = RoomSearch::new();
         let mut previews = HashMap::new();
         let mut files = HashMap::new();
+        let mut attachments: HashMap<(String, u64), Vec<[u8; 16]>> = HashMap::new();
+        let mut attached: HashMap<[u8; 16], (String, u64)> = HashMap::new();
+        let mut detached: HashSet<[u8; 16]> = HashSet::new();
         for (index, record) in records.iter().enumerate() {
             let op = decode_op(record).map_err(|_| DurableError::Corrupt { index })?;
             if let Op::FileStored { slug, uploader, file, sha256, size, name, image } = op {
@@ -166,13 +188,32 @@ impl DurableServer {
                 files.insert(file, StoredFile { room: slug, uploader, sha256, size, name, image });
                 continue;
             }
+            if let Op::PostFiles { slug, author, text, now_ms, files: posted } = op {
+                check_attachments(&files, &attached, &slug, &author, &posted).map_err(|_| DurableError::Corrupt { index })?;
+                let body = attachment_body(&files, &text, &posted);
+                let cursor = server.post(&slug, &author, &body, now_ms).map_err(|_| DurableError::Corrupt { index })?;
+                index_event(&server, &mut search, &mut previews, &slug, &author, cursor);
+                for file in &posted {
+                    attached.insert(*file, (slug.clone(), cursor));
+                }
+                attachments.insert((slug, cursor), posted);
+                continue;
+            }
+            if let Op::Delete { slug, target, .. } = &op
+                && let Some(files) = attachments.remove(&(slug.clone(), *target))
+            {
+                for file in files {
+                    attached.remove(&file);
+                    detached.insert(file);
+                }
+            }
             let indexed = searchable(&op);
             let cursor = replay(&mut server, op).map_err(|_| DurableError::Corrupt { index })?;
             if let Some((slug, actor)) = indexed {
                 index_event(&server, &mut search, &mut previews, &slug, &actor, cursor);
             }
         }
-        Ok(Self { server, journal, poisoned: false, search, previews, files, store: None, uploads: HashMap::new() })
+        Ok(Self { server, journal, poisoned: false, search, previews, files, store: None, uploads: HashMap::new(), attachments, attached, detached })
     }
 
     /// Keep uploaded bytes in `store` (task T330b). Bytes no record refers to are removed now (`FileStore::sweep`).
@@ -267,11 +308,49 @@ impl DurableServer {
     /// see, is answered exactly like one that does not exist.
     pub fn download(&self, user: &str, file: &[u8; 16], offset: u64, length: usize) -> Result<Vec<u8>, DownloadError> {
         let Some(store) = &self.store else { return Err(DownloadError::NoStorage) };
-        let Some(record) = self.files.get(file) else { return Err(DownloadError::NotFound) };
+        let Some(record) = self.files.get(file).filter(|_| !self.detached.contains(file)) else { return Err(DownloadError::NotFound) };
         if !self.server.room(&record.room).is_ok_and(|room| room.role(user).is_some()) {
             return Err(DownloadError::NotFound);
         }
         store.read(&record.sha256, offset, length).map_err(|_| DownloadError::Storage)
+    }
+
+    /// Post `text` with `files` in ONE record (task T330c): each file must be `author`'s own upload in `slug`, not
+    /// attached to anything yet, at most `MAX_POST_FILES`, no file twice. An empty `text` is allowed: the message then
+    /// reads as its files' names. Returns the message's cursor.
+    pub fn post_files(&mut self, slug: &str, author: &str, text: &str, files: &[[u8; 16]], now_ms: u64) -> Result<u64, AttachError> {
+        self.check_alive().map_err(AttachError::Durable)?;
+        check_attachments(&self.files, &self.attached, slug, author, files)?;
+        let body = attachment_body(&self.files, text, files);
+        let cursor = self.server.post(slug, author, &body, now_ms).map_err(|error| AttachError::Durable(DurableError::Server(error)))?;
+        let op = Op::PostFiles { slug: slug.to_owned(), author: author.to_owned(), text: text.to_owned(), now_ms, files: files.to_vec() };
+        self.record(&op).map_err(AttachError::Durable)?;
+        index_event(&self.server, &mut self.search, &mut self.previews, slug, author, cursor);
+        for file in files {
+            self.attached.insert(*file, (slug.to_owned(), cursor));
+        }
+        self.attachments.insert((slug.to_owned(), cursor), files.to_vec());
+        Ok(cursor)
+    }
+
+    /// The files the message at `cursor` in `slug` carries (task T330c), in the order they were posted.
+    pub fn attachments(&self, slug: &str, cursor: u64) -> Vec<crewcraft_proto::push::AttachedFile> {
+        let Some(ids) = self.attachments.get(&(slug.to_owned(), cursor)) else { return Vec::new() };
+        ids.iter()
+            .filter_map(|id| {
+                let file = self.files.get(id)?;
+                Some(crewcraft_proto::push::AttachedFile { file: *id, name: file.name.clone(), size: file.size, image: file.image })
+            })
+            .collect()
+    }
+
+    fn detach(&mut self, slug: &str, target: u64) {
+        if let Some(files) = self.attachments.remove(&(slug.to_owned(), target)) {
+            for file in files {
+                self.attached.remove(&file);
+                self.detached.insert(file);
+            }
+        }
     }
 
     /// How many uploads are in progress (task T330b).
@@ -391,6 +470,8 @@ impl DurableServer {
         self.check_alive()?;
         let cursor = self.server.delete(slug, actor, target).map_err(DurableError::Server)?;
         self.record(&Op::Delete { slug: slug.to_string(), actor: actor.to_string(), target })?;
+        // A deleted message's files are not found any more (task T330c).
+        self.detach(slug, target);
         index_event(&self.server, &mut self.search, &mut self.previews, slug, actor, cursor);
         Ok(cursor)
     }
@@ -435,8 +516,8 @@ fn replay(server: &mut Server, op: Op) -> Result<u64, ServerError> {
         Op::Edit { slug, actor, target, text, now_ms } => server.edit(&slug, &actor, target, &text, now_ms),
         Op::Delete { slug, actor, target } => server.delete(&slug, &actor, target),
         Op::MarkRead { slug, user, cursor } => server.mark_read(&slug, &user, cursor).map(|_| 0),
-        // Handled before `replay` is called: a file record changes no room.
-        Op::FileStored { .. } => Ok(0),
+        // Handled before `replay` is called: a file record changes no room, and a post with files needs the records.
+        Op::FileStored { .. } | Op::PostFiles { .. } => Ok(0),
     }
 }
 
@@ -463,6 +544,37 @@ fn check_file(
         return Err(FileError::DuplicateId);
     }
     Ok(())
+}
+
+/// The checks every file of a post must pass, when it is made and when it is replayed (task T330c).
+fn check_attachments(
+    files: &HashMap<[u8; 16], StoredFile>,
+    attached: &HashMap<[u8; 16], (String, u64)>,
+    slug: &str,
+    author: &str,
+    posted: &[[u8; 16]],
+) -> Result<(), AttachError> {
+    if posted.is_empty() || posted.len() > MAX_POST_FILES {
+        return Err(AttachError::BadAttachment);
+    }
+    let mut seen = HashSet::new();
+    for id in posted {
+        let own = files.get(id).is_some_and(|file| file.room == slug && file.uploader == author);
+        if !own || attached.contains_key(id) || !seen.insert(*id) {
+            return Err(AttachError::BadAttachment);
+        }
+    }
+    Ok(())
+}
+
+/// The body of a post with files: its text, or, when that is empty, the files' names (so every client, also one that
+/// does not show attachments, says what the message is).
+fn attachment_body(files: &HashMap<[u8; 16], StoredFile>, text: &str, posted: &[[u8; 16]]) -> String {
+    if !text.trim().is_empty() {
+        return text.to_owned();
+    }
+    let names: Vec<&str> = posted.iter().filter_map(|id| files.get(id).map(|file| file.name.as_str())).collect();
+    format!("\u{1F4CE} {}", names.join(", "))
 }
 
 /// The room and the person of a change that search indexes: a post, an edit or a deletion.

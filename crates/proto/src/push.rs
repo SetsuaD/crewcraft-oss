@@ -7,6 +7,9 @@
 //! - tag 65 `Edited`: `u64 target | str html | u8 count | count × str mention`
 //! - tag 66 `Deleted`: `u64 target`
 //! - tag 67 `Other` (membership and settings changes): no fields
+//! - tag 70 `Attached` (task T330c; 68 and 69 stay unassigned): `u8 count (1 to MAX_ATTACHMENTS) | count × (16 file id | str name | u64 size |
+//!   u8 has image size | [u32 width | u32 height])`. Its `cursor` is the message's own; it follows that message's
+//!   `Posted` and advances nothing. Only a client that agreed to `request::FEATURE_FILES` is sent it.
 //!
 //! `room`, `author` and each mention are 1 to `message::MAX_NAME` bytes; `html` is 0 to `MAX_HTML` bytes; at most
 //! `MAX_MENTIONS` mentions.
@@ -17,13 +20,54 @@ use crate::message::{CodecError, MAX_NAME};
 /// 24 KB even when every character is escaped.
 pub const MAX_HTML: usize = 60 * 1024;
 pub const MAX_MENTIONS: usize = 32;
+/// The tag of `Push::Attached` (task T330c).
+pub const ATTACHED: u8 = 70;
+/// The most files one message carries (task T330c).
+pub const MAX_ATTACHMENTS: usize = 10;
+/// The longest file name, in bytes (as `request::MAX_FILE_NAME`).
+pub const MAX_ATTACHMENT_NAME: usize = 255;
+
+/// One file a message carries (task T330c).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachedFile {
+    pub file: [u8; 16],
+    pub name: String,
+    pub size: u64,
+    /// Width and height, for an image.
+    pub image: Option<(u32, u32)>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Push {
-    Posted { room: String, cursor: u64, author: String, html: String, mentions: Vec<String> },
-    Edited { room: String, cursor: u64, target: u64, html: String, mentions: Vec<String> },
-    Deleted { room: String, cursor: u64, target: u64 },
-    Other { room: String, cursor: u64 },
+    Posted {
+        room: String,
+        cursor: u64,
+        author: String,
+        html: String,
+        mentions: Vec<String>,
+    },
+    Edited {
+        room: String,
+        cursor: u64,
+        target: u64,
+        html: String,
+        mentions: Vec<String>,
+    },
+    Deleted {
+        room: String,
+        cursor: u64,
+        target: u64,
+    },
+    Other {
+        room: String,
+        cursor: u64,
+    },
+    /// The files the message at `cursor` carries (task T330c).
+    Attached {
+        room: String,
+        cursor: u64,
+        files: Vec<AttachedFile>,
+    },
 }
 
 fn write_str(out: &mut Vec<u8>, s: &str, min: usize, max: usize) -> Result<(), CodecError> {
@@ -123,6 +167,28 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
             write_str(&mut out, room, 1, MAX_NAME)?;
             out.extend_from_slice(&cursor.to_be_bytes());
         }
+        Push::Attached { room, cursor, files } => {
+            if files.is_empty() || files.len() > MAX_ATTACHMENTS {
+                return Err(CodecError::FieldLength);
+            }
+            out.push(ATTACHED);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.push(files.len() as u8);
+            for file in files {
+                out.extend_from_slice(&file.file);
+                write_str(&mut out, &file.name, 1, MAX_ATTACHMENT_NAME)?;
+                out.extend_from_slice(&file.size.to_be_bytes());
+                match file.image {
+                    None => out.push(0),
+                    Some((width, height)) => {
+                        out.push(1);
+                        out.extend_from_slice(&width.to_be_bytes());
+                        out.extend_from_slice(&height.to_be_bytes());
+                    }
+                }
+            }
+        }
     }
     Ok(out)
 }
@@ -135,7 +201,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(64..=67).contains(&tag) {
+    if !(64..=67).contains(&tag) && tag != ATTACHED {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -174,6 +240,35 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
             Push::Deleted { room, cursor, target }
         }
         67 => Push::Other { room, cursor },
+        ATTACHED => {
+            let count = usize::from(*bytes.get(pos).ok_or(CodecError::Truncated)?);
+            pos += 1;
+            if count == 0 || count > MAX_ATTACHMENTS {
+                return Err(CodecError::FieldLength);
+            }
+            let mut files = Vec::with_capacity(count);
+            for _ in 0..count {
+                let end = pos.checked_add(16).filter(|end| *end <= bytes.len()).ok_or(CodecError::Truncated)?;
+                let mut file = [0u8; 16];
+                file.copy_from_slice(&bytes[pos..end]);
+                pos = end;
+                let name = read_string(bytes, &mut pos, 1, MAX_ATTACHMENT_NAME)?;
+                let size = read_u64(bytes, &mut pos)?;
+                let has_image = *bytes.get(pos).ok_or(CodecError::Truncated)?;
+                pos += 1;
+                let image = match has_image {
+                    0 => None,
+                    1 => {
+                        let width = read_u32(bytes, &mut pos)?;
+                        let height = read_u32(bytes, &mut pos)?;
+                        Some((width, height))
+                    }
+                    other => return Err(CodecError::BadKind(other)),
+                };
+                files.push(AttachedFile { file, name, size, image });
+            }
+            Push::Attached { room, cursor, files }
+        }
         _ => return Err(CodecError::BadKind(tag)),
     };
 
@@ -181,4 +276,11 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         return Err(CodecError::TrailingBytes);
     }
     Ok(push)
+}
+
+fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, CodecError> {
+    let end = pos.checked_add(4).filter(|end| *end <= bytes.len()).ok_or(CodecError::Truncated)?;
+    let value = u32::from_be_bytes([bytes[*pos], bytes[*pos + 1], bytes[*pos + 2], bytes[*pos + 3]]);
+    *pos = end;
+    Ok(value)
 }

@@ -70,6 +70,14 @@ pub enum Op {
         name: String,
         image: Option<(u32, u32)>,
     },
+    /// A post with files, in one record (task T330c). Tag 17: the fields of `Post`, then `u8 count | count × 16 file id`.
+    PostFiles {
+        slug: String,
+        author: String,
+        text: String,
+        now_ms: u64,
+        files: Vec<[u8; 16]>,
+    },
 }
 
 /// `FieldLength` if a string is longer than `MAX_STR` bytes. (Strings may be empty here: `Server` decides what is
@@ -143,6 +151,17 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
                     out.extend_from_slice(&width.to_be_bytes());
                     out.extend_from_slice(&height.to_be_bytes());
                 }
+            }
+        }
+        Op::PostFiles { slug, author, text, now_ms, files } => {
+            out.push(POST_FILES);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, author)?;
+            encode_str(&mut out, text)?;
+            out.extend_from_slice(&now_ms.to_be_bytes());
+            out.push(u8::try_from(files.len()).map_err(|_| CodecError::FieldLength)?);
+            for file in files {
+                out.extend_from_slice(file);
             }
         }
     }
@@ -262,12 +281,29 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::FileStored { slug, uploader, file, sha256, size, name, image })
         }
+        POST_FILES => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let author = decode_str(bytes, &mut pos)?;
+            let text = decode_str(bytes, &mut pos)?;
+            let now_ms = decode_u64(bytes, &mut pos)?;
+            let [count] = decode_array::<1>(bytes, &mut pos)?;
+            let mut files = Vec::with_capacity(usize::from(count));
+            for _ in 0..count {
+                files.push(decode_array::<16>(bytes, &mut pos)?);
+            }
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::PostFiles { slug, author, text, now_ms, files })
+        }
         _ => Err(CodecError::BadKind(tag)),
     }
 }
 
 /// The tag of `Op::FileStored` (task T330a).
 const FILE_STORED: u8 = 16;
+/// The tag of `Op::PostFiles` (task T330c).
+const POST_FILES: u8 = 17;
 
 fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;

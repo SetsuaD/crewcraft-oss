@@ -1,0 +1,27 @@
+{
+  "id": "T330c-attach",
+  "title": "Messages that carry files",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/proto/src/push.rs",
+    "crates/proto/src/request.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/server-core/src/session.rs",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/inbox.rs",
+    "crates/client-core/src/room_view.rs"
+  ],
+  "test_path": "crates/server-core/tests/t330c_attach.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t330c_attach",
+  "depends_on": [
+    "T330d-download"
+  ],
+  "spec": "Request 15 PostFiles { room, text (may be empty), files (1 to 10 ids) } and push 70 Attached (68 and 69 stay unassigned) { room, cursor of the message, files (1 to MAX_ATTACHMENTS: id, name, size, image size) }, with exact bytes and limits. DurableServer::post_files attaches only the poster's own uploads in that room that are not attached yet, no file twice (BadAttachment, E_BAD_ATTACHMENT, otherwise), in one journal record (Op::PostFiles, tag 17); an empty text reads as the files' names. attachments(room, cursor) lists them; deleting the message detaches its files, which download then answers NotFound; a restart replays both. After a Sync, a message's Attached push follows its Posted push only on a connection whose handshake agreed to FEATURE_FILES (the session passes its features). The client's inbox keeps a message's files beside the timeline (RoomView::attachments) without moving its cursor.",
+  "status": "done",
+  "context": [
+    "docs/FILES.md"
+  ]
+}

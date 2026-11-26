@@ -23,6 +23,8 @@ pub struct RoomView {
     /// Acked messages: outbox id -> (server cursor, body).
     acked: BTreeMap<u64, (u64, String)>,
     needs_resync: bool,
+    /// The files each message carries, by its cursor (task T330c).
+    attachments: BTreeMap<u64, Vec<crewcraft_proto::push::AttachedFile>>,
 }
 
 impl Default for RoomView {
@@ -34,7 +36,14 @@ impl Default for RoomView {
 impl RoomView {
     /// An empty view at cursor 0 with an empty outbox.
     pub fn new() -> Self {
-        Self { timeline: Timeline::new(), outbox: Outbox::new(), outbox_ids: BTreeSet::new(), acked: BTreeMap::new(), needs_resync: false }
+        Self {
+            timeline: Timeline::new(),
+            outbox: Outbox::new(),
+            outbox_ids: BTreeSet::new(),
+            acked: BTreeMap::new(),
+            needs_resync: false,
+            attachments: BTreeMap::new(),
+        }
     }
 
     /// Queue a message to send (as `Outbox::push`); returns its outbox id.
@@ -85,6 +94,16 @@ impl RoomView {
 
     /// Apply a server event (as `Timeline::apply`). When that returns `NeedsResync`, `needs_resync()` is true until the
     /// next `snapshot`.
+    /// Keep the files the message at `cursor` carries (task T330c).
+    pub fn attach(&mut self, cursor: u64, files: Vec<crewcraft_proto::push::AttachedFile>) {
+        self.attachments.insert(cursor, files);
+    }
+
+    /// The files of each message that has any, by cursor (task T330c).
+    pub fn attachments(&self) -> &BTreeMap<u64, Vec<crewcraft_proto::push::AttachedFile>> {
+        &self.attachments
+    }
+
     pub fn event(&mut self, cursor: u64, change: Change) -> Apply {
         let result = self.timeline.apply(cursor, change);
         if result == Apply::NeedsResync {

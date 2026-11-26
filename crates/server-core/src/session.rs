@@ -148,7 +148,8 @@ impl Session {
         match reply {
             Reply::Welcome { version, features, server: _ } => {
                 self.phase = Phase::Open { version, features };
-                let mut conn = Connection::new(&self.user);
+                // The connection pushes attachments only when the client agreed to files (task T330c).
+                let mut conn = Connection::with_features(&self.user, features);
                 // Feed any remaining bytes (from the same call) to the now-open connection.
                 if !self.buf.is_empty() {
                     let remaining = std::mem::take(&mut self.buf);
