@@ -8,9 +8,9 @@
 
 use std::path::Path;
 
+use crate::cursor_log::Since;
 use crate::journal::{Journal, JournalError};
 use crate::op::{Op, decode_op, encode_op};
-use crate::cursor_log::Since;
 use crate::room::Role;
 use crate::room_search::{Hit, RoomSearch};
 use crate::server::{Server, ServerError};
