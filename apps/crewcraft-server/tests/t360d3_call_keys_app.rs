@@ -293,7 +293,8 @@ fn both_apps_get_the_others_sender_key() {
     poll_until(&mut bob, "the call", |update| matches!(update, Update::Calls { open: Some(open), .. } if open.call == call));
     assert!(bob.act(Action::Room(Command::CallJoin { room: room.clone(), call })).is_empty());
 
-    let has_key_from = |who: &'static str| move |update: &Update| matches!(update, Update::CallSecurity { from, kid: 1, .. } if from.iter().any(|f| f == who));
+    let has_key_from =
+        |who: &'static str| move |update: &Update| matches!(update, Update::CallSecurity { from, kid: 1, .. } if from.iter().any(|f| f == who));
     poll_until(&mut bob, "Alice's key at Bob", has_key_from(ALICE));
     poll_until(&mut alice, "Bob's key at Alice", has_key_from(BOB));
     drop(alice);
