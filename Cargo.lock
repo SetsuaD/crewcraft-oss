@@ -1157,6 +1157,7 @@ dependencies = [
  "crewcraft-authz",
  "crewcraft-client-core",
  "crewcraft-proto",
+ "crewcraft-sframe",
  "crewcraft-totp",
  "rand_core",
  "sha2 0.10.9",

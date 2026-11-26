@@ -35,7 +35,14 @@ pub struct Call {
     pub joined: BTreeSet<String>,
     /// Who is in it now, with their last heartbeat.
     pub present: BTreeMap<String, u64>,
+    /// The call key each present person published (task T360d2). Not journaled: after a restart clients publish again.
+    pub keys: BTreeMap<String, [u8; 32]>,
+    /// Sealed sender keys waiting for their recipient, by (recipient, sender, kid) (task T360d2).
+    pub sealed: BTreeMap<(String, String, u64), Vec<u8>>,
 }
+
+/// The most key ids a sender keeps sealed for one recipient: older ones are dropped as new ones arrive (rotation).
+pub const MAX_KIDS_PER_PAIR: usize = 8;
 
 /// Every call, by id, and each room's open call.
 #[derive(Debug, Clone, Default)]
@@ -80,6 +87,8 @@ impl Calls {
             ended_ms: None,
             joined: BTreeSet::from([actor.to_owned()]),
             present: BTreeMap::from([(actor.to_owned(), now_ms)]),
+            keys: BTreeMap::new(),
+            sealed: BTreeMap::new(),
         };
         self.calls.insert(id, call);
         self.open.insert(room.to_owned(), id);
@@ -99,6 +108,8 @@ impl Calls {
         if let Some(record) = self.calls.get_mut(&call) {
             record.ended_ms = Some(ended_ms);
             record.present.clear();
+            record.keys.clear();
+            record.sealed.clear();
             self.open.remove(&record.room);
         }
     }
@@ -117,6 +128,13 @@ pub fn duration_text(ms: u64) -> String {
 fn end_line(call: &Call, ended_ms: u64) -> String {
     let people: Vec<&str> = call.joined.iter().map(String::as_str).collect();
     format!("call ended after {}: {}", duration_text(ended_ms.saturating_sub(call.started_ms)), people.join(", "))
+}
+
+/// Take `person` out of `call`, with their key and every sealed key to or from them (task T360d2).
+fn forget(call: &mut Call, person: &str) {
+    call.present.remove(person);
+    call.keys.remove(person);
+    call.sealed.retain(|(to, from, _), _| to != person && from != person);
 }
 
 /// The result of `replay`: a call record applied, or any other record, handed back untouched.
@@ -143,7 +161,7 @@ pub(crate) fn replay(server: &mut Server, calls: &mut Calls, op: Op) -> Result<R
         }
         Op::CallLeave { slug, call, actor, .. } => {
             let record = calls.open_in_mut(&slug, call).ok_or(())?;
-            record.present.remove(&actor);
+            forget(record, &actor);
             Ok(Replayed::Done)
         }
         Op::CallEnd { slug, call, ended_ms } => {
@@ -220,7 +238,7 @@ impl DurableServer {
     fn leave_at(&mut self, slug: &str, actor: &str, call: u64, at_ms: u64) -> Result<(), DurableError> {
         self.record(&Op::CallLeave { slug: slug.to_owned(), call, actor: actor.to_owned(), now_ms: at_ms })?;
         let Some(record) = self.calls.open_in_mut(slug, call) else { return Ok(()) };
-        record.present.remove(actor);
+        forget(record, actor);
         if record.present.is_empty() {
             let record = record.clone();
             self.server.call_line(slug, &record.started_by, call, true, &end_line(&record, at_ms)).map_err(DurableError::Server)?;
@@ -247,6 +265,31 @@ impl DurableServer {
         gone.sort_by_key(|(_, _, _, seen)| *seen);
         for (slug, person, call, seen) in gone {
             self.leave_at(&slug, &person, call, seen)?;
+        }
+        Ok(())
+    }
+
+    /// Publish `actor`'s call key for `call` (task T360d2): only someone in the call.
+    pub fn call_key(&mut self, slug: &str, actor: &str, call: u64, public: [u8; 32], now_ms: u64) -> Result<(), CallError> {
+        self.call_heartbeat(slug, actor, call, now_ms)?;
+        if let Some(record) = self.calls.open_in_mut(slug, call) {
+            record.keys.insert(actor.to_owned(), public);
+        }
+        Ok(())
+    }
+
+    /// Leave `actor`'s key `kid`, sealed to `to`, for `to` to collect (task T360d2). Both must be in the call; a
+    /// sender keeps at most `MAX_KIDS_PER_PAIR` keys for one recipient, the oldest dropped first.
+    pub fn call_seal(&mut self, slug: &str, actor: &str, call: u64, to: &str, kid: u64, sealed: Vec<u8>, now_ms: u64) -> Result<(), CallError> {
+        self.call_heartbeat(slug, actor, call, now_ms)?;
+        let record = self.calls.open_in_mut(slug, call).ok_or(CallError::NoSuchCall)?;
+        if !record.present.contains_key(to) || to == actor {
+            return Err(CallError::NoSuchCall);
+        }
+        record.sealed.insert((to.to_owned(), actor.to_owned(), kid), sealed);
+        let mine: Vec<u64> = record.sealed.keys().filter(|(t, f, _)| t == to && f == actor).map(|(_, _, k)| *k).collect();
+        for old in mine.iter().take(mine.len().saturating_sub(MAX_KIDS_PER_PAIR)) {
+            record.sealed.remove(&(to.to_owned(), actor.to_owned(), *old));
         }
         Ok(())
     }

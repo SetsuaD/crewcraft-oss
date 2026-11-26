@@ -56,6 +56,10 @@ pub struct RoomView {
     call: Option<OpenCall>,
     /// Call history lines, by cursor (task T360a1).
     call_lines: BTreeMap<u64, CallLineRow>,
+    /// The open call's participants' call keys, for the call they belong to (task T360d2).
+    call_keys: Option<(u64, BTreeMap<String, [u8; 32]>)>,
+    /// Sender keys sealed to me, by call, then (sender, kid) (task T360d2).
+    sealed: BTreeMap<u64, BTreeMap<(String, u64), Vec<u8>>>,
 }
 
 impl Default for RoomView {
@@ -80,6 +84,8 @@ impl RoomView {
             sent: BTreeMap::new(),
             call: None,
             call_lines: BTreeMap::new(),
+            call_keys: None,
+            sealed: BTreeMap::new(),
         }
     }
 
@@ -197,12 +203,38 @@ impl RoomView {
         if line.ended && self.call.as_ref().is_some_and(|open| open.call == line.call) {
             self.call = None;
         }
+        if line.ended {
+            self.sealed.remove(&line.call);
+            if self.call_keys.as_ref().is_some_and(|(call, _)| *call == line.call) {
+                self.call_keys = None;
+            }
+        }
         self.call_lines.insert(cursor, line);
     }
 
     /// Call history lines, by cursor (task T360a1).
     pub fn call_lines(&self) -> &BTreeMap<u64, CallLineRow> {
         &self.call_lines
+    }
+
+    /// Keep the participants' call keys for `call` (task T360d2): the latest list replaces the last.
+    pub fn set_call_keys(&mut self, call: u64, keys: Vec<(String, [u8; 32])>) {
+        self.call_keys = Some((call, keys.into_iter().collect()));
+    }
+
+    /// The participants' call keys, when they are for `call`.
+    pub fn call_keys(&self, call: u64) -> Option<&BTreeMap<String, [u8; 32]>> {
+        self.call_keys.as_ref().filter(|(of, _)| *of == call).map(|(_, keys)| keys)
+    }
+
+    /// Keep `from`'s key `kid` for `call`, sealed to me (task T360d2).
+    pub fn add_sealed(&mut self, call: u64, from: String, kid: u64, sealed: Vec<u8>) {
+        self.sealed.entry(call).or_default().insert((from, kid), sealed);
+    }
+
+    /// The sender keys sealed to me for `call`, by (sender, kid).
+    pub fn sealed(&self, call: u64) -> Option<&BTreeMap<(String, u64), Vec<u8>>> {
+        self.sealed.get(&call)
     }
 
     /// Who reacted to each message that has reactions, by cursor, then by reaction code (task T341a).

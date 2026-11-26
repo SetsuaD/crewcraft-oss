@@ -71,6 +71,15 @@ impl Inbox {
             self.views.get_mut(&room)?.set_call(Some(open));
             return Some((Apply::Duplicate, Notify::None));
         }
+        // The participants' call keys and the keys sealed to me advance nothing (task T360d2).
+        if let Push::CallKeys { room, call, keys, .. } = push {
+            self.views.get_mut(&room)?.set_call_keys(call, keys);
+            return Some((Apply::Duplicate, Notify::None));
+        }
+        if let Push::CallSealed { room, call, from, kid, sealed, .. } = push {
+            self.views.get_mut(&room)?.add_sealed(call, from, kid, sealed);
+            return Some((Apply::Duplicate, Notify::None));
+        }
         // A call's history line is an event of its own; its end closes the room's open call (task T360a1).
         if let Push::CallLine { room, cursor, call, ended, author, text } = push {
             let view = self.views.get_mut(&room)?;
@@ -109,7 +118,7 @@ impl Inbox {
             Push::Deleted { room, cursor, target } => (room.as_str(), *cursor, Change::Deleted { target: *target }, false, None, None),
             Push::Other { room, cursor } => (room.as_str(), *cursor, Change::Other, false, None, None),
             Push::Attached { .. } | Push::Threaded { .. } | Push::Reacted { .. } | Push::Archived { .. } | Push::Sent { .. } => return None,
-            Push::CallLine { .. } | Push::CallState { .. } => return None,
+            Push::CallLine { .. } | Push::CallState { .. } | Push::CallKeys { .. } | Push::CallSealed { .. } => return None,
         };
 
         let is_direct = self.direct.get(room).copied().unwrap_or(false);
