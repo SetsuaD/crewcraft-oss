@@ -49,11 +49,10 @@ impl SrtpProvider for Srtp {
 /// Encrypt each whole 16-byte block of `input` into `output`, one block at a time (ECB). str0m derives SRTP's session
 /// keys this way; `output` may be longer than `input`, and its extra bytes are left alone.
 fn encrypt_blocks(cipher: &impl BlockCipherEncrypt<BlockSize = aes::cipher::consts::U16>, input: &[u8], output: &mut [u8]) {
-    for (from, to) in input.chunks_exact(16).zip(output.chunks_exact_mut(16)) {
-        let mut block = aes::Block::default();
-        block.copy_from_slice(from);
+    for (from, to) in input.as_chunks::<16>().0.iter().zip(output.as_chunks_mut::<16>().0.iter_mut()) {
+        let mut block = aes::Block::from(*from);
         cipher.encrypt_block(&mut block);
-        to.copy_from_slice(&block);
+        *to = block.into();
     }
 }
 
