@@ -81,12 +81,21 @@ pub struct RoomService {
     deleted: HashSet<u64>,
     /// Who reacted to each message, by its cursor (task T341a).
     reactions: HashMap<u64, Reactions>,
+    /// An archive room (docs/IMPORT.md, task T350a): it never accepts writes again.
+    read_only: bool,
 }
 
 impl RoomService {
     /// A room owned by `owner` whose log keeps the newest `capacity` events. Creating it appends no event.
     pub fn new(owner: &str, capacity: usize) -> Self {
-        Self { room: Room::new(owner), log: EventLog::new(capacity), markers: ReadMarkers::new(), deleted: HashSet::new(), reactions: HashMap::new() }
+        Self {
+            room: Room::new(owner),
+            log: EventLog::new(capacity),
+            markers: ReadMarkers::new(),
+            deleted: HashSet::new(),
+            reactions: HashMap::new(),
+            read_only: false,
+        }
     }
 
     /// `Room::add`, then a `Joined { user, role }` event by `actor`. Returns its cursor.
@@ -121,15 +130,72 @@ impl RoomService {
         if self.room.role(author).is_none() {
             return Err(ServiceError::Room(RoomError::NotMember));
         }
-        if !self.room.can_post(author) {
+        if !self.room.can_post(author) || self.read_only {
             return Err(ServiceError::NotAllowed);
         }
         let trimmed = Self::check_text(text)?;
-        let html = render(&trimmed);
-        let mention_list = mentions(&trimmed);
+        Ok(self.append_post(author, &trimmed))
+    }
+
+    fn append_post(&mut self, author: &str, trimmed: &str) -> u64 {
+        let html = render(trimmed);
+        let mention_list = mentions(trimmed);
         let mentions: Vec<String> = mention_list.into_iter().filter(|m| self.room.role(m).is_some()).filter(|m| m != author).collect();
         let event = Event { cursor: self.log.head() + 1, actor: author.to_string(), kind: EventKind::Posted, html, mentions };
-        Ok(self.log.append(event))
+        self.log.append(event)
+    }
+
+    /// Make this an archive room (task T350a): from now on posting, editing, deleting and reacting are `NotAllowed`
+    /// for everyone, and nothing in it counts as unread. Membership can still change. There is no way back.
+    pub fn set_read_only(&mut self) {
+        self.read_only = true;
+    }
+
+    /// Whether this is an archive room (task T350a).
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// Add an imported message by `author` (task T350a), who need not be a member or have an account. Only in an
+    /// archive room (`NotAllowed` otherwise). The text rules of `post` apply, except that a message the source deleted
+    /// (`deleted`) has no text and is held as redacted from the start.
+    pub fn import_post(&mut self, author: &str, text: &str, deleted: bool) -> Result<u64, ServiceError> {
+        if !self.read_only {
+            return Err(ServiceError::NotAllowed);
+        }
+        if deleted {
+            let event =
+                Event { cursor: self.log.head() + 1, actor: author.to_string(), kind: EventKind::Posted, html: String::new(), mentions: Vec::new() };
+            let cursor = self.log.append(event);
+            self.deleted.insert(cursor);
+            return Ok(cursor);
+        }
+        let trimmed = Self::check_text(text)?;
+        Ok(self.append_post(author, &trimmed))
+    }
+
+    /// Replace an imported message's text with what the source now says (task T350a), as its author. Only in an
+    /// archive room; the target must be a live `Posted` event (`NoSuchMessage`).
+    pub fn import_edit(&mut self, target: u64, text: &str) -> Result<u64, ServiceError> {
+        if !self.read_only {
+            return Err(ServiceError::NotAllowed);
+        }
+        let event = self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
+        let trimmed = Self::check_text(text)?;
+        let html = render(&trimmed);
+        let mentions: Vec<String> = mentions(&trimmed).into_iter().filter(|m| self.room.role(m).is_some()).filter(|m| *m != event.actor).collect();
+        let new_event = Event { cursor: self.log.head() + 1, actor: event.actor, kind: EventKind::Edited { target }, html, mentions };
+        Ok(self.log.append(new_event))
+    }
+
+    /// Redact an imported message the source has since deleted (task T350a), by `actor`. Only in an archive room; the
+    /// target must be a live `Posted` event (`NoSuchMessage`).
+    pub fn import_delete(&mut self, actor: &str, target: u64) -> Result<u64, ServiceError> {
+        if !self.read_only {
+            return Err(ServiceError::NotAllowed);
+        }
+        self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
+        Ok(self.redact(actor, target))
     }
 
     /// Replace the text of the message posted at `target`. Checks, in order: a non-member is `Room(NotMember)`; the
@@ -140,7 +206,7 @@ impl RoomService {
             return Err(ServiceError::Room(RoomError::NotMember));
         }
         let event = self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
-        if event.actor != actor {
+        if event.actor != actor || self.read_only {
             return Err(ServiceError::NotAllowed);
         }
         let trimmed = Self::check_text(text)?;
@@ -161,9 +227,14 @@ impl RoomService {
             None => return Err(ServiceError::Room(RoomError::NotMember)),
         };
         let event = self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
-        if event.actor != actor && role < Role::Admin {
+        if (event.actor != actor && role < Role::Admin) || self.read_only {
             return Err(ServiceError::NotAllowed);
         }
+        Ok(self.redact(actor, target))
+    }
+
+    /// Clear the target and every held revision in place, forget its reactions, and append `Deleted { target }`.
+    fn redact(&mut self, actor: &str, target: u64) -> u64 {
         for (cursor, event) in self.log.events_mut() {
             let redact = match event.kind {
                 EventKind::Posted => cursor == target,
@@ -184,7 +255,7 @@ impl RoomService {
             html: String::new(),
             mentions: Vec::new(),
         };
-        Ok(self.log.append(new_event))
+        self.log.append(new_event)
     }
 
     /// Add (`on`) or take back the actor's `reaction` on the message posted at `target` (task T341a). Checks, in order: a
@@ -196,7 +267,7 @@ impl RoomService {
         if self.room.role(actor).is_none() {
             return Err(ServiceError::Room(RoomError::NotMember));
         }
-        if !self.room.can_post(actor) {
+        if !self.room.can_post(actor) || self.read_only {
             return Err(ServiceError::NotAllowed);
         }
         if crewcraft_proto::push::reaction_name(reaction).is_none() {
@@ -251,6 +322,10 @@ impl RoomService {
     pub fn unread(&self, user: &str) -> Result<usize, ServiceError> {
         if self.room.role(user).is_none() {
             return Err(ServiceError::Room(RoomError::NotMember));
+        }
+        // An archive room never counts towards unread totals (task T350a).
+        if self.read_only {
+            return Ok(0);
         }
         let all = self.all_events();
         let mut owned: Vec<(u64, String)> = Vec::new();
