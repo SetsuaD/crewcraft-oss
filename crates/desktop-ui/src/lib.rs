@@ -140,6 +140,19 @@ pub enum Update {
         room: String,
         parents: Vec<(u64, u64)>,
     },
+    /// `room`'s open call (or none) and its call history lines by cursor (task T360a2).
+    Calls {
+        room: String,
+        open: Option<crewcraft_client_core::room_view::OpenCall>,
+        lines: Vec<(u64, String)>,
+    },
+    /// This app joined call `call` of `room` (`Some`), or left its call there (`None`), with why when it did not choose
+    /// to (task T360a2).
+    InCall {
+        room: String,
+        call: Option<u64>,
+        reason: Option<String>,
+    },
     /// `room` is an archive room (task T350d2): read-only, with its imported messages' original times by cursor.
     Archive {
         room: String,
@@ -175,6 +188,10 @@ impl fmt::Debug for Update {
             Self::Uploaded { room, file } => f.debug_struct("Uploaded").field("room", room).field("name", &file.name).finish(),
             Self::Attachments { room, files } => f.debug_struct("Attachments").field("room", room).field("messages", &files.len()).finish(),
             Self::Threads { room, parents } => f.debug_struct("Threads").field("room", room).field("replies", &parents.len()).finish(),
+            Self::Calls { room, open, lines } => {
+                f.debug_struct("Calls").field("room", room).field("open", &open.as_ref().map(|c| c.call)).field("lines", &lines.len()).finish()
+            }
+            Self::InCall { room, call, .. } => f.debug_struct("InCall").field("room", room).field("call", call).finish(),
             Self::Archive { room, times } => f.debug_struct("Archive").field("room", room).field("times", &times.len()).finish(),
             Self::Reactions { room, reactions } => f.debug_struct("Reactions").field("room", room).field("messages", &reactions.len()).finish(),
             Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
@@ -283,6 +300,12 @@ pub struct Window {
     thread_draft: String,
     /// Who reacted to each message with what, per room and cursor (T341b).
     reactions: HashMap<String, std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>>,
+    /// Each room's open call (T360a2).
+    open_calls: HashMap<String, crewcraft_client_core::room_view::OpenCall>,
+    /// Each room's call history lines by cursor (T360a2).
+    call_lines: HashMap<String, std::collections::BTreeMap<u64, String>>,
+    /// The call this app is in: `(room, call)` (T360a2).
+    in_call: Option<(String, u64)>,
     /// Archive rooms (T350d2): listed under Archive, read-only.
     archived: std::collections::HashSet<String>,
     /// Imported messages' original times, per archive room and cursor (T350d2).
@@ -440,6 +463,31 @@ impl Window {
             Update::Threads { room, parents } => {
                 self.threads.insert(room, parents.into_iter().collect());
             }
+            Update::Calls { room, open, lines } => {
+                // Ring: a call someone else started that this app did not know about (T360a2).
+                if let Some(open) = &open
+                    && open.started_by != self.email
+                    && self.open_calls.get(&room).is_none_or(|known| known.call != open.call)
+                    && self.in_call.as_ref().is_none_or(|(_, call)| *call != open.call)
+                {
+                    self.notice = Some(format!("{} started a call in {room}.", open.started_by));
+                }
+                match open {
+                    Some(open) => {
+                        self.open_calls.insert(room.clone(), open);
+                    }
+                    None => {
+                        self.open_calls.remove(&room);
+                    }
+                }
+                self.call_lines.insert(room, lines.into_iter().collect());
+            }
+            Update::InCall { room, call, reason } => {
+                self.in_call = call.map(|call| (room, call));
+                if let Some(reason) = reason {
+                    self.notice = Some(reason);
+                }
+            }
             Update::Archive { room, times } => {
                 self.archived.insert(room.clone());
                 self.sent_times.insert(room, times.into_iter().collect());
@@ -466,6 +514,9 @@ impl Window {
                 self.reactions.clear();
                 self.archived.clear();
                 self.sent_times.clear();
+                self.open_calls.clear();
+                self.call_lines.clear();
+                self.in_call = None;
                 self.open_thread = None;
                 self.thread_draft.clear();
                 self.feeds.clear();
@@ -697,6 +748,7 @@ impl Window {
         egui::Panel::top("crewcraft-conversation-header").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading(&room);
+                self.call_controls(ui, &room);
             });
         });
         egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
@@ -712,6 +764,7 @@ impl Window {
         let times = self.sent_times.get(&room).cloned().unwrap_or_default();
         let read_only = self.archived.contains(&room);
         let threads = self.threads.get(&room).cloned().unwrap_or_default();
+        let call_lines = self.call_lines.get(&room).cloned().unwrap_or_default();
         let look = Bubbles {
             me: &me,
             colors: self.bubbles,
@@ -727,12 +780,17 @@ impl Window {
         egui::CentralPanel::default_margins().show(ui, |ui| {
             ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
                 // Replies live in their thread, not in the conversation (T340b).
+                let mut shown_lines = 0;
                 for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
+                    if let FeedRow::Message { cursor, .. } = row {
+                        shown_lines = call_lines_ui(ui, &call_lines, shown_lines, *cursor);
+                    }
                     if matches!(row, FeedRow::Message { cursor, .. } if threads.contains_key(cursor)) {
                         continue;
                     }
                     action = bubble_ui(ui, row, &look).or(action.take());
                 }
+                call_lines_ui(ui, &call_lines, shown_lines, u64::MAX);
             });
         });
         self.message_action(&room, action);
@@ -781,6 +839,7 @@ impl Window {
                             self.phone_pane = PhonePane::Chats;
                         }
                         ui.strong(&room);
+                        self.call_controls(ui, &room);
                     });
                 });
                 egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
@@ -797,6 +856,7 @@ impl Window {
                 let times = self.sent_times.get(&room).cloned().unwrap_or_default();
                 let read_only = self.archived.contains(&room);
                 let threads = self.threads.get(&room).cloned().unwrap_or_default();
+                let call_lines = self.call_lines.get(&room).cloned().unwrap_or_default();
                 let look = Bubbles {
                     me: &me,
                     colors: self.bubbles,
@@ -811,12 +871,17 @@ impl Window {
                 };
                 egui::CentralPanel::default_margins().show(ui, |ui| {
                     ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
+                        let mut shown_lines = 0;
                         for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
+                            if let FeedRow::Message { cursor, .. } = row {
+                                shown_lines = call_lines_ui(ui, &call_lines, shown_lines, *cursor);
+                            }
                             if matches!(row, FeedRow::Message { cursor, .. } if threads.contains_key(cursor)) {
                                 continue;
                             }
                             action = bubble_ui(ui, row, &look).or(action.take());
                         }
+                        call_lines_ui(ui, &call_lines, shown_lines, u64::MAX);
                     });
                 });
                 self.message_action(&room, action);
@@ -904,6 +969,41 @@ impl Window {
             self.results = None;
             self.open_room(&room);
         }
+    }
+
+    /// The call this app is in, `(room, call)` (T360a2).
+    pub fn in_call(&self) -> Option<(&str, u64)> {
+        self.in_call.as_ref().map(|(room, call)| (room.as_str(), *call))
+    }
+
+    /// The room header's call controls (T360a2): Call and Video call when the room has no call; "Call in progress"
+    /// with Join when it has one this app is not in; "In call" with Leave when it is. An archive room has none.
+    fn call_controls(&mut self, ui: &mut Ui, room: &str) {
+        if self.archived.contains(room) {
+            return;
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| match self.open_calls.get(room) {
+            Some(open) if self.in_call.as_ref().is_some_and(|(r, c)| r == room && *c == open.call) => {
+                if ui.button("Leave call").clicked() {
+                    self.actions.push(Action::Room(Command::CallLeave { room: room.to_owned(), call: open.call }));
+                }
+                ui.label(format!("In call ({})", open.participants.len()));
+            }
+            Some(open) => {
+                if ui.button("Join call").clicked() {
+                    self.actions.push(Action::Room(Command::CallJoin { room: room.to_owned(), call: open.call }));
+                }
+                ui.label(format!("Call in progress ({})", open.participants.len()));
+            }
+            None => {
+                if ui.button("Video call").clicked() {
+                    self.actions.push(Action::Room(Command::CallStart { room: room.to_owned(), video: true }));
+                }
+                if ui.button("Call").clicked() {
+                    self.actions.push(Action::Room(Command::CallStart { room: room.to_owned(), video: false }));
+                }
+            }
+        });
     }
 
     /// The thread shown beside the conversation, `(room, parent)` (T340b).
@@ -1322,6 +1422,15 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
     }
     ui.add_space(2.0);
     action
+}
+
+/// Draw the call history lines with cursors from `from` up to (not including) `upto`, centred and quiet, and return
+/// `upto` (T360a2).
+fn call_lines_ui(ui: &mut Ui, lines: &std::collections::BTreeMap<u64, String>, from: u64, upto: u64) -> u64 {
+    for text in lines.range(from..upto).map(|(_, text)| text) {
+        ui.vertical_centered(|ui| ui.weak(text));
+    }
+    upto
 }
 
 /// A time as `2024-03-05 14:07 UTC` (T350d2). Imported times are shown in UTC: the window has no time zone database.
