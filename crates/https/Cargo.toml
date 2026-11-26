@@ -1,0 +1,22 @@
+[package]
+name = "crewcraft-https"
+description = "A small, strict HTTPS client for the server's outgoing calls: identity provider documents, token exchange, authorizer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rustls.workspace = true
+# Mozilla's public CA roots (CDLA-Permissive-2.0, allowed in deny.toml), for providers with public certificates.
+webpki-roots = "1"
+
+[dev-dependencies]
+# The test CA's PEM text.
+base64.workspace = true
+# A test server with its own CA, leaf and client certificates.
+rcgen.workspace = true
+
+[lints]
+workspace = true
