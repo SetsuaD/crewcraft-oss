@@ -9,7 +9,7 @@
   documents you edit together, calendar, contacts, user management, plugins and themes, on a server you own.
   Rust from end to end: a Linux server, native egui apps for desktop and mobile, and the same client in the browser
   through WebAssembly.<br>
-  <i>A community app by CRU Technologies, built to the Craft apps' conventions.</i>
+  <i>An independent app, built to the Craft apps' conventions.</i>
 </p>
 
 <p align="center">
@@ -42,8 +42,8 @@
   every person signs in with an authenticator-app code. The server never trusts a name a client claims.
 - **Yours to run.** One server binary on a Linux machine or VM, with its own certificate authority created at install
   time. No third-party service is in the path, and nothing phones home.
-- **Familiar from day one.** The layout and workflow people know from Microsoft Teams, with feature parity as the
-  target ([docs/PARITY.md](docs/PARITY.md)), in CrewCraft's own look.
+- **Familiar from day one.** The layout workplace chat usually has, with chats, teams and their channels, calls and
+  files, worked towards row by row in [docs/PARITY.md](docs/PARITY.md), in CrewCraft's own look.
 - **Keeps itself current.** The server updates itself from signed releases and rolls back if the new version fails its
   health check; every app then updates from its own server, never from the internet (REQUIREMENTS 2.21).
 - **Your look, kept private.** Theme addons are files you install on your own server. They never leave it, and every
@@ -146,7 +146,7 @@ keep it in a plain, owner-only file instead (docs/SECURITY-DESIGN.md section 2).
 | [docs/SECURITY-DESIGN.md](docs/SECURITY-DESIGN.md) | keys, dark enrollment, TOTP, sessions |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | the behaviours CrewCraft must have, section by section |
 | [docs/CLEAN-ROOM.md](docs/CLEAN-ROOM.md) | rules that keep this an independent, publishable codebase |
-| [docs/PARITY.md](docs/PARITY.md) | feature parity with Microsoft Teams, row by row |
+| [docs/PARITY.md](docs/PARITY.md) | the feature parity list, row by row |
 | [docs/NON-RUST-DEPENDENCIES.md](docs/NON-RUST-DEPENDENCIES.md) | the only dependencies allowed to contain non-Rust code |
 | [tasks/README.md](tasks/README.md) | work units, each defined by a test |
 
