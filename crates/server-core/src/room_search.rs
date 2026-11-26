@@ -48,7 +48,7 @@ impl RoomSearch {
             EventKind::Deleted { target } => {
                 index.remove(*target);
             }
-            EventKind::Joined { .. } | EventKind::Left { .. } => {}
+            EventKind::Joined { .. } | EventKind::Left { .. } | EventKind::Reacted { .. } => {}
         }
     }
 

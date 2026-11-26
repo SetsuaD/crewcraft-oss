@@ -151,6 +151,16 @@ impl Server {
     }
 
     /// `RoomService::delete` in the room. `NoSuchRoom` first. No rate limit.
+    /// `RoomService::react` in the room (task T341a), rate limited as `edit` is. `NoSuchRoom` first.
+    pub fn react(&mut self, slug: &str, actor: &str, target: u64, reaction: u8, on: bool, now_ms: u64) -> Result<u64, ServerError> {
+        self.require_member(slug, actor)?;
+        if !self.limiter.check(&actor.to_string(), now_ms) {
+            return Err(ServerError::RateLimited);
+        }
+        let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;
+        service.react(actor, target, reaction, on).map_err(ServerError::Service)
+    }
+
     pub fn delete(&mut self, slug: &str, actor: &str, target: u64) -> Result<u64, ServerError> {
         let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;
         service.delete(actor, target).map_err(ServerError::Service)

@@ -1,0 +1,31 @@
+{
+  "id": "T341a-reactions",
+  "title": "Reactions: a fixed set, on the wire and in the journal",
+  "crate": "crewcraft-server-core",
+  "files": [
+    "crates/proto/src/push.rs",
+    "crates/proto/src/request.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/server.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/room_search.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/inbox.rs",
+    "crates/client-core/src/room_view.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs"
+  ],
+  "test_path": "crates/server-core/tests/t341a_reactions.rs",
+  "test_cmd": "cargo test -p crewcraft-server-core --test t341a_reactions",
+  "depends_on": [
+    "T340a-threads"
+  ],
+  "spec": "push::REACTIONS is the fixed set Like, Heart, Laugh, Surprised, Sad, Angry (code n = REACTIONS[n-1]; words, since the bundled font has no emoji). Request 17 React { room, target, reaction, on } answered Ok with the cursor of the reaction's own event; push 72 Reacted { room, cursor, target, author, reaction, on }; both refuse a code outside the set and an on byte other than 0 or 1. FEATURE_REACTIONS (16). RoomService::react: NotMember, NotAllowed for a Guest, BadReaction, NoSuchMessage for a missing or deleted target; appends EventKind::Reacted even when it changes nothing; reactions(target) gives who reacted, by code; a deleted message keeps none. Recorded as Op::React (tag 19), replayed after a restart; rate limited as edit. On Sync a client without FEATURE_REACTIONS gets Other in its place (still advancing the cursor). The client inbox applies Reacted as an event and keeps who reacted (RoomView::reactions) only when it was applied. The network server advertises FEATURE_REACTIONS.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md"
+  ]
+}

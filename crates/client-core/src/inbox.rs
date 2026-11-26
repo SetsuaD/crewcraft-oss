@@ -61,6 +61,15 @@ impl Inbox {
             self.views.get_mut(&room)?.thread(cursor, parent);
             return Some((Apply::Duplicate, Notify::None));
         }
+        // A reaction is an event of its own (task T341a): it advances the cursor, and is kept once it is applied.
+        if let Push::Reacted { room, cursor, target, author, reaction, on } = push {
+            let view = self.views.get_mut(&room)?;
+            let apply = view.event(cursor, Change::Other);
+            if apply == Apply::Applied {
+                view.react(target, &author, reaction, on);
+            }
+            return Some((apply, Notify::None));
+        }
         let (room, cursor, change, is_posted, author, mentions) = match &push {
             Push::Posted { room, cursor, author, html, mentions } => (
                 room.as_str(),
@@ -75,7 +84,7 @@ impl Inbox {
             }
             Push::Deleted { room, cursor, target } => (room.as_str(), *cursor, Change::Deleted { target: *target }, false, None, None),
             Push::Other { room, cursor } => (room.as_str(), *cursor, Change::Other, false, None, None),
-            Push::Attached { .. } | Push::Threaded { .. } => return None,
+            Push::Attached { .. } | Push::Threaded { .. } | Push::Reacted { .. } => return None,
         };
 
         let is_direct = self.direct.get(room).copied().unwrap_or(false);

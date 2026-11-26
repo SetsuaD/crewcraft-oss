@@ -18,6 +18,8 @@
 //!   `FEATURE_THREADS`
 //! - tag 15 `PostFiles` (task T330c): `str room | str text (0 to MAX_BODY) | u8 count (1 to 10) | count × 16 file id`
 //! - tag 14 `Download`: `16 file id | u64 offset | u32 length (1 to MAX_CHUNK)` (task T330d; tag 13 is unassigned)
+//! - tag 17 `React` (task T341a): `str room | u64 target | u8 reaction (1 to push::REACTIONS.len()) | u8 on (0 or 1)`,
+//!   answered `Ok { cursor }` of the reaction's event; announced by `FEATURE_REACTIONS`
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
@@ -67,6 +69,8 @@ pub const MAX_HITS: usize = 100;
 pub const FEATURE_FILES: u32 = 4;
 /// The handshake feature bit for threads: `Reply` and the `Threaded` push (task T340a).
 pub const FEATURE_THREADS: u32 = 8;
+/// The handshake feature bit for reactions: `React` and the `Reacted` push (task T341a).
+pub const FEATURE_REACTIONS: u32 = 16;
 /// The first byte of an id frame.
 pub const ID_TAG: u8 = 133;
 /// The first byte of a bytes frame (task T330d).
@@ -88,6 +92,7 @@ const UPLOAD_FINISH: u8 = 12;
 const DOWNLOAD: u8 = 14;
 const POST_FILES: u8 = 15;
 const REPLY: u8 = 16;
+const REACT: u8 = 17;
 /// The most files one `PostFiles` attaches (task T330c).
 pub const MAX_POST_FILES: usize = 10;
 
@@ -149,6 +154,14 @@ pub enum Request {
         room: String,
         parent: u64,
         text: String,
+    },
+    /// Add (`on`) or take back the signed-in person's `reaction` (a code, see `push::REACTIONS`) on the message at
+    /// `target` in `room` (task T341a).
+    React {
+        room: String,
+        target: u64,
+        reaction: u8,
+        on: bool,
     },
     /// Up to `length` bytes of file `file` from `offset` (task T330d).
     Download {
@@ -329,6 +342,17 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.extend_from_slice(&parent.to_be_bytes());
             write_str(&mut out, text, 0, MAX_BODY)?;
         }
+        Request::React { room, target, reaction, on } => {
+            if crate::push::reaction_name(*reaction).is_none() {
+                return Err(CodecError::BadKind(*reaction));
+            }
+            out.push(REACT);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&target.to_be_bytes());
+            out.push(*reaction);
+            out.push(u8::from(*on));
+        }
         Request::Download { file, offset, length } => {
             if *length == 0 || *length as usize > MAX_CHUNK {
                 return Err(CodecError::FieldLength);
@@ -351,7 +375,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         return Err(CodecError::Truncated);
     }
     let tag = bytes[0];
-    if !(1..=6).contains(&tag) && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag) && !matches!(tag, DOWNLOAD | POST_FILES | REPLY) {
+    if !(1..=6).contains(&tag) && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag) && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT) {
         return Err(CodecError::BadKind(tag));
     }
     let mut pos: usize = 1;
@@ -425,6 +449,20 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
             let parent = read_u64(bytes, &mut pos)?;
             let text = read_string(bytes, &mut pos, 0, MAX_BODY)?;
             Request::Reply { room, parent, text }
+        }
+        REACT => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let target = read_u64(bytes, &mut pos)?;
+            let [reaction] = read_array::<1>(bytes, &mut pos)?;
+            if crate::push::reaction_name(reaction).is_none() {
+                return Err(CodecError::BadKind(reaction));
+            }
+            let on = match read_array::<1>(bytes, &mut pos)? {
+                [0] => false,
+                [1] => true,
+                [other] => return Err(CodecError::BadKind(other)),
+            };
+            Request::React { room, target, reaction, on }
         }
         DOWNLOAD => {
             let file = read_array::<16>(bytes, &mut pos)?;
