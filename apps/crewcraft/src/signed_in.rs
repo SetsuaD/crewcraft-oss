@@ -18,8 +18,8 @@ use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
 use crewcraft_proto::request::{
-    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, Request,
-    SearchHit,
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS,
+    MAX_CHUNK, Request, SearchHit,
 };
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
 use sha2::{Digest, Sha256};
@@ -134,7 +134,14 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS | FEATURE_FILE_LIST,
+        features: FEATURE_LIST_ROOMS
+            | FEATURE_SEARCH
+            | FEATURE_FILES
+            | FEATURE_THREADS
+            | FEATURE_REACTIONS
+            | FEATURE_ARCHIVE
+            | FEATURE_CALLS
+            | FEATURE_FILE_LIST,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -150,7 +157,14 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS | FEATURE_FILE_LIST,
+        features: FEATURE_LIST_ROOMS
+            | FEATURE_SEARCH
+            | FEATURE_FILES
+            | FEATURE_THREADS
+            | FEATURE_REACTIONS
+            | FEATURE_ARCHIVE
+            | FEATURE_CALLS
+            | FEATURE_FILE_LIST,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -181,7 +195,14 @@ pub(crate) fn finish_external(
     let hello = Hello {
         min_version: 1,
         max_version: 1,
-        features: FEATURE_LIST_ROOMS | FEATURE_SEARCH | FEATURE_FILES | FEATURE_THREADS | FEATURE_REACTIONS | FEATURE_ARCHIVE | FEATURE_CALLS | FEATURE_FILE_LIST,
+        features: FEATURE_LIST_ROOMS
+            | FEATURE_SEARCH
+            | FEATURE_FILES
+            | FEATURE_THREADS
+            | FEATURE_REACTIONS
+            | FEATURE_ARCHIVE
+            | FEATURE_CALLS
+            | FEATURE_FILE_LIST,
         client: client.into(),
     };
     let settings = Settings::new(email);

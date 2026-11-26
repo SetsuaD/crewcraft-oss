@@ -296,7 +296,11 @@ fn a_file_shows_in_the_other_persons_files() {
 
     // Once the post has reached the server (Bob's app sees it), Bob opens Files: the file is there, with its room.
     assert!(bob.act(Action::Room(Command::Sync { room: room.clone() })).is_empty());
-    poll_until(&mut bob, "the post", |update| matches!(update, Update::Attachments { files, .. } if files.iter().any(|(_, chips)| chips.iter().any(|c| c.file == chip.file))));
+    poll_until(
+        &mut bob,
+        "the post",
+        |update| matches!(update, Update::Attachments { files, .. } if files.iter().any(|(_, chips)| chips.iter().any(|c| c.file == chip.file))),
+    );
     assert!(bob.act(Action::Room(Command::ListFiles)).is_empty());
     let updates = poll_until(&mut bob, "the file list", |update| matches!(update, Update::Files { .. }));
     let listed = updates
@@ -307,7 +311,10 @@ fn a_file_shows_in_the_other_persons_files() {
         })
         .unwrap();
     assert_eq!(listed.len(), 1);
-    assert_eq!((listed[0].file, listed[0].name.as_str(), listed[0].size, listed[0].room.as_str()), (chip.file, "quarterly report.bin", chip.size, room.as_str()));
+    assert_eq!(
+        (listed[0].file, listed[0].name.as_str(), listed[0].size, listed[0].room.as_str()),
+        (chip.file, "quarterly report.bin", chip.size, room.as_str())
+    );
     assert_eq!(listed[0].uploader, ALICE);
     let saved = scratch.0.join("saved.bin");
     let save = Command::Save { file: listed[0].file, size: listed[0].size, name: listed[0].name.clone(), to: Some(saved.clone()) };
