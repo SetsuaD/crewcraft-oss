@@ -32,9 +32,8 @@ pub enum ClientError {
     /// The frame layer refused the bytes.
     Frame(FrameError),
     /// A frame is neither a response nor a push, or does not decode: `Truncated` for an empty frame, `BadKind(byte)` when
-    /// its first byte is neither a response tag (128, 129), a push tag (64 to 67), the room-list tag (131) nor the hits
-    /// tag (132), otherwise the
-    /// decoder's error.
+    /// its first byte is neither a response tag (128, 129), a push tag (64 to 67, or 70 for a message's files), the
+    /// room-list tag (131) nor the hits tag (132), otherwise the decoder's error.
     Malformed(CodecError),
 }
 
