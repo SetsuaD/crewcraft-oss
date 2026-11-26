@@ -12,8 +12,8 @@ use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
 use crewcraft_proto::request::{
-    FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, Request, Response,
-    SearchHit,
+    FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS,
+    MAX_SAVED_PAGE, Request, Response, SavedMessage, SavedPage, SearchHit,
 };
 use crewcraft_proto::signin::{self, Opening, SignIn};
 use zeroize::Zeroizing;
@@ -354,6 +354,77 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         self.request(Request::React { room: room.to_owned(), target, reaction, on }, now_ms, 0, deadline)
     }
 
+    /// Whether the server agreed to room pins and personal saved messages (T343).
+    pub fn pins_saved(&self) -> bool {
+        self.features() & FEATURE_PINS_SAVED != 0
+    }
+
+    /// Pin a message, or unpin it only if it is still the room's pin (T343).
+    pub fn pin(&mut self, room: &str, target: u64, on: bool, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
+        if !self.pins_saved() {
+            return Err(ChatError::Unsupported);
+        }
+        self.request(Request::Pin { room: room.to_owned(), target, on }, now_ms, 0, deadline)
+    }
+
+    /// Add or remove a personal bookmark for a message (T343).
+    pub fn save_message(&mut self, room: &str, target: u64, on: bool, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
+        if !self.pins_saved() {
+            return Err(ChatError::Unsupported);
+        }
+        self.request(Request::SaveMessage { room: room.to_owned(), target, on }, now_ms, 0, deadline)
+    }
+
+    /// Fetch every page of the person's saved messages, using their current state (T343). The same operation
+    /// deadline bounds the whole walk. A repeated or unordered continuation closes the connection.
+    pub fn saved_messages(&mut self, now_ms: u64, deadline: Instant) -> Result<Vec<SavedMessage>, ChatError> {
+        if !self.pins_saved() {
+            return Err(ChatError::Unsupported);
+        }
+        let mut after_room = String::new();
+        let mut after_cursor = 0;
+        let mut messages = Vec::new();
+        loop {
+            let page = self.saved_page(&after_room, after_cursor, now_ms, deadline)?;
+            if page.messages.len() > MAX_SAVED_PAGE || (page.more && page.messages.is_empty()) {
+                self.closed = true;
+                return Err(ChatError::UnexpectedResponse);
+            }
+            for message in &page.messages {
+                if (message.room.as_str(), message.cursor) <= (after_room.as_str(), after_cursor) {
+                    self.closed = true;
+                    return Err(ChatError::UnexpectedResponse);
+                }
+                after_room.clone_from(&message.room);
+                after_cursor = message.cursor;
+            }
+            messages.extend(page.messages);
+            if !page.more {
+                return Ok(messages);
+            }
+        }
+    }
+
+    fn saved_page(&mut self, after_room: &str, after_cursor: u64, now_ms: u64, deadline: Instant) -> Result<SavedPage, ChatError> {
+        let (id, count) = match self.exchange(Request::ListSaved { after_room: after_room.to_owned(), after_cursor }, now_ms, 0, deadline)? {
+            (id, Response::Ok { cursor }) => (id, cursor),
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        loop {
+            for event in self.receive(now_ms, 0, deadline)? {
+                if let ClientEvent::Saved { id: answered, page } = event
+                    && answered == id
+                {
+                    if u64::try_from(page.messages.len()).ok() != Some(count) {
+                        self.closed = true;
+                        return Err(ChatError::UnexpectedResponse);
+                    }
+                    return Ok(page);
+                }
+            }
+        }
+    }
+
     /// Reply to the message at `parent`, in its thread (task T340b); returns the reply's cursor. `Unsupported` without
     /// the feature.
     pub fn reply(&mut self, room: &str, parent: u64, text: &str, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
@@ -406,16 +477,32 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         inbox.follow(room, direct);
         let start = inbox.view(room).ok_or(ChatError::Closed)?.cursor();
         let head = self.request(Request::Sync { room: room.to_owned(), cursor: start }, now_ms, local_minute, deadline)?;
+        let pins_saved = self.pins_saved();
+        if pins_saved {
+            // receive() reads exactly one framed payload. Older sideband frames were drained before the matched
+            // response, and this response cannot also consume its following pin snapshot.
+            self.session.client_mut().inbox_mut().view_mut(room).ok_or(ChatError::Closed)?.expect_pin_state();
+        }
 
         loop {
             let view = self.view(room).ok_or(ChatError::Closed)?;
             let reached = view.cursor();
-            if view.needs_resync() || head < start {
+            let pin_received = !view.awaiting_pin() && view.pin_revision().is_some_and(|revision| revision >= head);
+            if head < start {
                 self.closed = true;
                 return Err(ChatError::HistoryGap { reached, head });
             }
-            if reached >= head {
+            if view.needs_resync() && (!pins_saved || pin_received) {
+                self.closed = !pins_saved;
+                return Err(ChatError::HistoryGap { reached, head });
+            }
+            if reached >= head && (!pins_saved || pin_received) {
                 return Ok(head);
+            }
+            // The pin snapshot ends this sync even when retained history cannot replay its prefix. Keep the
+            // authoritative pin and a usable transport for saved messages while reporting the history gap.
+            if pins_saved && pin_received && reached < head {
+                return Err(ChatError::HistoryGap { reached, head });
             }
             match self.receive(now_ms, local_minute, deadline) {
                 Err(ChatError::Io(reason)) => return Err(ChatError::SyncIncomplete { reached, head, reason }),

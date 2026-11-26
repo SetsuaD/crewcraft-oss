@@ -185,6 +185,15 @@ pub enum Update {
         room: String,
         reactions: crewcraft_ui_model::RoomReactions,
     },
+    /// Current pin metadata, including a body outside the held room history page (T343).
+    Pin {
+        room: String,
+        pinned: Option<crewcraft_client_core::room_view::PinnedMessage>,
+    },
+    /// Every readable saved message, resolved against its current state (T343).
+    SavedMessages {
+        messages: Vec<crewcraft_proto::request::SavedMessage>,
+    },
     /// The app was opened from an invitation link (task T405): fill in the enrollment form's link field. Ignored
     /// unless the enrollment screen is showing. `Debug` does not show the link, which holds a one-time secret.
     InvitationLink(Zeroizing<String>),
@@ -222,6 +231,8 @@ impl fmt::Debug for Update {
             Self::InCall { room, call, .. } => f.debug_struct("InCall").field("room", room).field("call", call).finish(),
             Self::Archive { room, times } => f.debug_struct("Archive").field("room", room).field("times", &times.len()).finish(),
             Self::Reactions { room, reactions } => f.debug_struct("Reactions").field("room", room).field("messages", &reactions.len()).finish(),
+            Self::Pin { room, pinned } => f.debug_struct("Pin").field("room", room).field("target", &pinned.as_ref().map(|pin| pin.target)).finish(),
+            Self::SavedMessages { messages } => f.debug_struct("SavedMessages").field("messages", &messages.len()).finish(),
             Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
             Self::WaitingForBrowser => f.write_str("WaitingForBrowser"),
             Self::Failed(text) => f.debug_tuple("Failed").field(text).finish(),
@@ -334,6 +345,11 @@ pub struct Window {
     reactions: HashMap<String, std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>>,
     /// The Files area (T331b): `Some` while it is open, with the list once it arrived.
     files_view: Option<Option<Vec<crewcraft_proto::request::ListedFile>>>,
+    /// The room's authoritative pinned message (T343).
+    pins: HashMap<String, crewcraft_client_core::room_view::PinnedMessage>,
+    /// Current saved-message references, with no stale copies of edited or deleted bodies (T343).
+    saved_messages: Option<Vec<crewcraft_proto::request::SavedMessage>>,
+    saved_view: bool,
     /// The bytes the person's files take, and their quota (T332b).
     storage: Option<(u64, u64)>,
     /// Image previews (T333): asked for, decoded and waiting for a texture, shown, or given up on.
@@ -365,7 +381,9 @@ struct Bubbles<'a> {
     replies: &'a std::collections::BTreeMap<u64, usize>,
     /// Who reacted to each message with what (T341b).
     reactions: &'a std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>,
-    /// Whether messages can be selected and threads opened from here (not inside the thread pane).
+    pinned: Option<u64>,
+    saved: &'a std::collections::BTreeSet<u64>,
+    /// Whether reply, edit and delete controls are offered here (not inside the thread pane).
     actions: bool,
     /// An archive room (T350d2): nothing can be selected, replied to or reacted to.
     read_only: bool,
@@ -386,6 +404,8 @@ enum MessageAction {
     OpenThread(u64),
     /// Add (`true`) or take back a reaction on the message at this cursor (T341b).
     React(u64, u8, bool),
+    Pin(u64, bool),
+    SaveMessage(u64, bool),
     Edit(u64, String),
     AskDelete,
     Delete(u64),
@@ -485,6 +505,9 @@ impl Window {
             }
             Update::SignedIn { email, rooms } => {
                 self.email = email;
+                self.pins.clear();
+                self.saved_messages = None;
+                self.saved_view = false;
                 self.rooms = RoomList::new();
                 for room in &rooms {
                     self.rooms.add(room);
@@ -561,6 +584,15 @@ impl Window {
             Update::Reactions { room, reactions } => {
                 self.reactions.insert(room, reactions.into_iter().collect());
             }
+            Update::Pin { room, pinned } => match pinned {
+                Some(pinned) => {
+                    self.pins.insert(room, pinned);
+                }
+                None => {
+                    self.pins.remove(&room);
+                }
+            },
+            Update::SavedMessages { messages } => self.saved_messages = Some(messages),
             Update::LastEmail(email) => {
                 if self.email.is_empty() {
                     self.email = email;
@@ -582,6 +614,9 @@ impl Window {
                 self.sent_times.clear();
                 self.open_calls.clear();
                 self.files_view = None;
+                self.pins.clear();
+                self.saved_messages = None;
+                self.saved_view = false;
                 self.storage = None;
                 self.previews.clear();
                 self.call_lines.clear();
@@ -779,17 +814,26 @@ impl Window {
             ui.add_space(8.0);
             let total = self.rooms.total_unread();
             let chat = if total > 0 { format!("Chat ({total})") } else { "Chat".to_owned() };
-            if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.files_view.is_none(), chat)).clicked() {
+            if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.files_view.is_none() && !self.saved_view, chat)).clicked() {
                 self.files_view = None;
+                self.saved_view = false;
             }
             // The Files area (T331b): every file in my rooms.
             if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.files_view.is_some(), "Files")).clicked()
                 && self.files_view.is_none()
             {
                 self.files_view = Some(None);
+                self.saved_view = false;
                 self.actions.push(Action::Room(Command::ListFiles));
             }
+            if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.saved_view, "Saved")).clicked() && !self.saved_view {
+                self.open_saved();
+            }
         });
+        if self.saved_view {
+            self.saved_ui(ui);
+            return;
+        }
         if self.files_view.is_some() {
             self.files_ui(ui);
             return;
@@ -842,6 +886,7 @@ impl Window {
                 ui.heading(&room);
                 self.call_controls(ui, &room);
             });
+            self.pin_bar(ui, &room);
         });
         egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
         // A thread opens beside the conversation (T340b).
@@ -854,6 +899,7 @@ impl Window {
         let previews = self.shown_previews();
         let replies = self.reply_counts(&room);
         let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
+        let saved = self.saved_in(&room);
         let times = self.sent_times.get(&room).cloned().unwrap_or_default();
         let focus = self.focus.as_ref().filter(|(r, _)| *r == room).map(|(_, cursor)| *cursor);
         let mut focus_found = false;
@@ -869,6 +915,8 @@ impl Window {
             previews: &previews,
             replies: &replies,
             reactions: &reactions,
+            pinned: self.pins.get(&room).map(|pin| pin.target),
+            saved: &saved,
             read_only,
             times: &times,
             actions: true,
@@ -927,12 +975,18 @@ impl Window {
                     let size = [columns[0].available_width(), TOUCH_TARGET];
                     if columns[0].add_sized(size, egui::Button::selectable(self.phone_pane == PhonePane::Chats, chats)).clicked() {
                         self.phone_pane = PhonePane::Chats;
+                        self.saved_view = false;
                     }
                     if columns[1].add_sized(size, egui::Button::selectable(self.phone_pane == PhonePane::Account, "Account")).clicked() {
                         self.phone_pane = PhonePane::Account;
+                        self.saved_view = false;
                     }
                 });
             });
+        }
+        if self.saved_view {
+            self.saved_ui(ui);
+            return;
         }
         match self.phone_pane {
             PhonePane::Conversation if in_conversation => {
@@ -945,6 +999,7 @@ impl Window {
                         ui.strong(&room);
                         self.call_controls(ui, &room);
                     });
+                    self.pin_bar(ui, &room);
                 });
                 egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
                 // On a phone an open thread takes the conversation's place (T340b).
@@ -958,6 +1013,7 @@ impl Window {
                 let previews = self.shown_previews();
                 let replies = self.reply_counts(&room);
                 let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
+                let saved = self.saved_in(&room);
                 let times = self.sent_times.get(&room).cloned().unwrap_or_default();
                 let focus = self.focus.as_ref().filter(|(r, _)| *r == room).map(|(_, cursor)| *cursor);
                 let mut focus_found = false;
@@ -973,6 +1029,8 @@ impl Window {
                     previews: &previews,
                     replies: &replies,
                     reactions: &reactions,
+                    pinned: self.pins.get(&room).map(|pin| pin.target),
+                    saved: &saved,
                     read_only,
                     times: &times,
                     actions: true,
@@ -1019,6 +1077,9 @@ impl Window {
                 self.phone_pane = PhonePane::Chats;
                 egui::CentralPanel::default_margins().show(ui, |ui| {
                     ui.heading("Your rooms");
+                    if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::new("Saved")).clicked() {
+                        self.open_saved();
+                    }
                     let rows = self.rooms.rows();
                     if rows.is_empty() {
                         ui.label("You are not in any rooms yet.");
@@ -1083,14 +1144,110 @@ impl Window {
         });
         // The room opens on the result's message (T321): a reply opens its thread, on its parent.
         if let Some((room, cursor)) = open {
-            self.results = None;
-            self.open_room(&room);
-            let parent = self.threads.get(&room).and_then(|threads| threads.get(&cursor)).copied();
-            if let Some(parent) = parent {
-                self.open_thread = Some((room.clone(), parent));
+            self.open_message(&room, cursor);
+        }
+    }
+
+    fn open_message(&mut self, room: &str, cursor: u64) {
+        self.results = None;
+        self.saved_view = false;
+        self.open_room(room);
+        let parent = self.threads.get(room).and_then(|threads| threads.get(&cursor)).copied();
+        self.open_thread = parent.map(|parent| (room.to_owned(), parent));
+        self.focus = Some((room.to_owned(), parent.unwrap_or(cursor)));
+        self.focus_scrolled = false;
+        self.phone_pane = PhonePane::Conversation;
+    }
+
+    fn saved_in(&self, room: &str) -> std::collections::BTreeSet<u64> {
+        self.saved_messages.iter().flatten().filter(|message| message.room == room).map(|message| message.cursor).collect()
+    }
+
+    fn open_saved(&mut self) {
+        self.files_view = None;
+        self.saved_view = true;
+        self.actions.push(Action::Room(Command::ListSaved));
+    }
+
+    /// Whether the person's Saved area is open (T343).
+    pub fn saved_open(&self) -> bool {
+        self.saved_view
+    }
+
+    /// The pin's body comes from the current authoritative snapshot, including pins outside the loaded page (T343).
+    fn pin_bar(&mut self, ui: &mut Ui, room: &str) {
+        let Some(pin) = self.pins.get(room).cloned() else { return };
+        let text = message_text(&pin.html);
+        let preview: String = text.chars().take(160).collect();
+        let mut open = false;
+        let mut unpin = false;
+        ui.horizontal_wrapped(|ui| {
+            open = ui.add(egui::Button::new(format!("Pinned: {preview}")).wrap()).clicked();
+            if !self.archived.contains(room) {
+                unpin = ui.small_button("Unpin").clicked();
             }
-            self.focus = Some((room, parent.unwrap_or(cursor)));
-            self.focus_scrolled = false;
+        });
+        if open {
+            self.open_message(room, pin.target);
+        }
+        if unpin {
+            self.actions.push(Action::Room(Command::Pin { room: room.to_owned(), target: pin.target, on: false }));
+        }
+    }
+
+    fn saved_ui(&mut self, ui: &mut Ui) {
+        egui::Panel::top("crewcraft-saved-header").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.heading("Saved messages");
+                if ui.button("Refresh saved messages").clicked() {
+                    self.actions.push(Action::Room(Command::ListSaved));
+                }
+                if ui.button("Close saved messages").clicked() {
+                    self.saved_view = false;
+                }
+            });
+        });
+        let messages = self.saved_messages.clone();
+        let mut open = None;
+        let mut remove = None;
+        egui::CentralPanel::default_margins().show(ui, |ui| match messages {
+            None => {
+                ui.label("Loading saved messages...");
+            }
+            Some(messages) if messages.is_empty() => {
+                ui.label("No saved messages yet.");
+            }
+            Some(messages) => {
+                ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                    for message in &messages {
+                        ui.push_id((&message.room, message.cursor), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.strong(&message.author);
+                                ui.weak(format!("in {}", message.room));
+                                if message.edited {
+                                    ui.weak("Edited");
+                                }
+                            });
+                            ui.add(egui::Label::new(message_text(&message.html)).wrap());
+                            ui.horizontal(|ui| {
+                                if ui.button("Open message").clicked() {
+                                    open = Some((message.room.clone(), message.cursor));
+                                }
+                                if ui.button("Remove from saved").clicked() {
+                                    remove = Some((message.room.clone(), message.cursor));
+                                }
+                            });
+                            ui.separator();
+                        });
+                    }
+                });
+            }
+        });
+        if let Some((room, cursor)) = open {
+            self.open_message(&room, cursor);
+        }
+        if let Some((room, target)) = remove {
+            self.actions.push(Action::Room(Command::SaveMessage { room, target, on: false }));
         }
     }
 
@@ -1266,17 +1423,20 @@ impl Window {
         let previews = self.shown_previews();
         let replies = std::collections::BTreeMap::new();
         let reactions = self.reactions.get(room).cloned().unwrap_or_default();
+        let saved = self.saved_in(room);
         let times = self.sent_times.get(room).cloned().unwrap_or_default();
         let read_only = self.archived.contains(room);
         let look = Bubbles {
             me: &me,
             colors: self.bubbles,
-            selected: None,
+            selected: self.selected_message,
             confirming: false,
             files: &files,
             previews: &previews,
             replies: &replies,
             reactions: &reactions,
+            pinned: self.pins.get(room).map(|pin| pin.target),
+            saved: &saved,
             read_only,
             times: &times,
             actions: false,
@@ -1340,6 +1500,14 @@ impl Window {
             Some(MessageAction::React(target, reaction, on)) => {
                 self.selected_message = None;
                 self.actions.push(Action::Room(Command::React { room: room.to_owned(), target, reaction, on }));
+            }
+            Some(MessageAction::Pin(target, on)) => {
+                self.selected_message = None;
+                self.actions.push(Action::Room(Command::Pin { room: room.to_owned(), target, on }));
+            }
+            Some(MessageAction::SaveMessage(target, on)) => {
+                self.selected_message = None;
+                self.actions.push(Action::Room(Command::SaveMessage { room: room.to_owned(), target, on }));
             }
             Some(MessageAction::OpenThread(parent)) => {
                 self.open_thread = Some((room.to_owned(), parent));
@@ -1479,20 +1647,24 @@ pub fn visible_rooms(rows: Vec<crewcraft_ui_model::RoomRow>, filter: &str) -> Ve
     rows.into_iter().filter(|row| row.name.to_lowercase().contains(&needle)).collect()
 }
 
-/// One feed row as a bubble (T315): the person's own on the right in `bubble-mine`, others on the left in
-/// `bubble-other` with the author's name above the first of a run.
-/// One message. The person's own messages can be clicked to select them; a selected one shows Edit and Delete (with a
-/// confirmation) under it (T316). Returns what the person did, if anything.
+/// A text label for a live message, including valid file-only messages (T343).
+fn message_text(html: &str) -> String {
+    let text = text::html_to_text(html);
+    if text.trim().is_empty() { "Message with attachments".to_owned() } else { text }
+}
+
+/// One feed row as a bubble (T315): the person's own on the right, everyone else's on the left. Selected messages
+/// offer personal bookmarks, room pins and the message's allowed editing/reply actions.
 fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAction> {
     let (me, colors, selected, confirming, files) = (look.me, look.colors, look.selected, look.confirming, look.files);
     let mine = side(row, me) == Side::Mine;
     // Any message can be selected to reply to it; one's own also to edit or delete it (T340b).
     let message_cursor = match row {
-        FeedRow::Message { cursor, .. } if look.actions => Some(*cursor),
+        FeedRow::Message { cursor, .. } => Some(*cursor),
         _ => None,
     };
-    // In an archive room nothing is selected (so nothing is offered), but threads still open (T350d2).
-    let selectable = message_cursor.filter(|_| !look.read_only);
+    // Personal bookmarks work in an archive too; room-changing actions remain read-only (T343).
+    let selectable = message_cursor;
     let chips = match row {
         FeedRow::Message { cursor, .. } => files.get(cursor).cloned().unwrap_or_default(),
         FeedRow::Pending { .. } => Vec::new(),
@@ -1597,7 +1769,7 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
         });
     }
     // The reactions to choose from, for a selected message (T341b).
-    if let Some(cursor) = selectable.filter(|cursor| Some(*cursor) == selected) {
+    if let Some(cursor) = selectable.filter(|cursor| Some(*cursor) == selected && look.actions && !look.read_only) {
         let yours = |code: u8| {
             look.reactions
                 .get(&cursor)
@@ -1610,6 +1782,21 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
                 let code = index as u8 + 1;
                 if ui.small_button(*name).clicked() {
                     action = Some(MessageAction::React(cursor, code, !yours(code)));
+                }
+            }
+        });
+    }
+    if let Some(cursor) = selectable.filter(|cursor| Some(*cursor) == selected) {
+        let saved = look.saved.contains(&cursor);
+        let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
+        ui.with_layout(layout, |ui| {
+            if ui.small_button(if saved { "Remove from saved" } else { "Save message" }).clicked() {
+                action = Some(MessageAction::SaveMessage(cursor, !saved));
+            }
+            if !look.read_only {
+                let pinned = look.pinned == Some(cursor);
+                if ui.small_button(if pinned { "Unpin message" } else { "Pin message" }).clicked() {
+                    action = Some(MessageAction::Pin(cursor, !pinned));
                 }
             }
         });
@@ -1629,6 +1816,8 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
     // Reply, for any selected message (T340b).
     if let Some(cursor) = selectable.filter(|cursor| Some(*cursor) == selected)
         && own_message.is_none()
+        && look.actions
+        && !look.read_only
     {
         ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
             if ui.button("Reply").clicked() {

@@ -537,6 +537,8 @@ pub fn worker_update(event: Event) -> Vec<Update> {
         Event::Saved { path } => vec![Update::Failed(format!("Saved to {}", path.display()))],
         Event::Threads { room, parents } => vec![Update::Threads { room, parents }],
         Event::Reactions { room, reactions } => vec![Update::Reactions { room, reactions }],
+        Event::Pin { room, pinned } => vec![Update::Pin { room, pinned }],
+        Event::SavedMessages { messages } => vec![Update::SavedMessages { messages }],
         Event::Archive { room, times } => vec![Update::Archive { room, times }],
         Event::Calls { room, open, lines } => vec![Update::Calls { room, open, lines }],
         Event::Files { files } => vec![Update::Files { files }],

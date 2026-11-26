@@ -34,6 +34,15 @@ pub struct CallLineRow {
     pub text: String,
 }
 
+/// The current pinned message, including its current body even when it is outside the held history page (T343).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedMessage {
+    pub target: u64,
+    pub author: String,
+    pub html: String,
+    pub edited: bool,
+}
+
 pub struct RoomView {
     timeline: Timeline,
     outbox: Outbox,
@@ -60,6 +69,10 @@ pub struct RoomView {
     call_keys: Option<(u64, BTreeMap<String, [u8; 32]>)>,
     /// Sender keys sealed to me, by call, then (sender, kid) (task T360d2).
     sealed: BTreeMap<u64, BTreeMap<(String, u64), Vec<u8>>>,
+    /// Authoritative pin state and the room-head revision that supplied it (T343).
+    pinned: Option<PinnedMessage>,
+    pin_revision: Option<u64>,
+    awaiting_pin: bool,
 }
 
 impl Default for RoomView {
@@ -86,6 +99,9 @@ impl RoomView {
             call_lines: BTreeMap::new(),
             call_keys: None,
             sealed: BTreeMap::new(),
+            pinned: None,
+            pin_revision: None,
+            awaiting_pin: false,
         }
     }
 
@@ -242,13 +258,55 @@ impl RoomView {
         &self.reactions
     }
 
+    /// Apply current room pin metadata without advancing the message timeline (T343). An older snapshot cannot
+    /// restore a pin after a newer deletion or pin snapshot.
+    pub fn pin_state(&mut self, revision: u64, pinned: Option<PinnedMessage>) {
+        if revision >= self.pin_revision.unwrap_or(0) && revision >= self.timeline.cursor() {
+            self.pin_revision = Some(revision);
+            self.pinned = pinned;
+            self.awaiting_pin = false;
+        }
+    }
+
+    /// The last authoritative pin snapshot's room head, including an explicit empty pin (T343).
+    pub fn pin_revision(&self) -> Option<u64> {
+        self.pin_revision
+    }
+
+    /// A matched sync answer must be followed by its own pin snapshot, even at the same head (T343).
+    pub fn expect_pin_state(&mut self) {
+        self.awaiting_pin = true;
+    }
+
+    /// Whether the current sync still needs its authoritative pin snapshot (T343).
+    pub fn awaiting_pin(&self) -> bool {
+        self.awaiting_pin
+    }
+
+    /// The cursor of the room's current pinned message (T343).
+    pub fn pinned(&self) -> Option<u64> {
+        self.pinned.as_ref().map(|message| message.target)
+    }
+
+    /// The authoritative current body of the room's pinned message (T343).
+    pub fn pinned_message(&self) -> Option<&PinnedMessage> {
+        self.pinned.as_ref()
+    }
+
     /// The files of each message that has any, by cursor (task T330c).
     pub fn attachments(&self) -> &BTreeMap<u64, Vec<crewcraft_proto::push::AttachedFile>> {
         &self.attachments
     }
 
     pub fn event(&mut self, cursor: u64, change: Change) -> Apply {
+        let deleted = match &change {
+            Change::Deleted { target } => Some(*target),
+            _ => None,
+        };
         let result = self.timeline.apply(cursor, change);
+        if result == Apply::Applied && deleted.is_some_and(|target| self.pinned() == Some(target)) {
+            self.pinned = None;
+        }
         if result == Apply::NeedsResync {
             self.needs_resync = true;
         }

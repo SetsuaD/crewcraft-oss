@@ -11,6 +11,8 @@
 //! - tag 6 `Delete`: `str slug | str actor | u64 target`
 //! - tag 7 `MarkRead`: `str slug | str user | u64 cursor`
 //! - tag 19 `React` (task T341a): `str slug | str actor | u64 target | u8 reaction | u8 on (0 or 1) | u64 now_ms`
+//! - tag 29 `Pin` (task T343): `str slug | str actor | u64 target | u8 on (0 or 1) | u64 now_ms`
+//! - tag 30 `SaveMessage` (task T343): `str slug | str actor | u64 target | u8 on (0 or 1)`; a personal reference only
 //! - tag 20 `ImportRoom` (task T350a): `str key | str name`
 //! - tag 21 `ImportMessage`: `str slug | str key | str author | u64 sent_ms | str text | u8 deleted (0 or 1) | u64 parent
 //!   (0 for none)`
@@ -31,6 +33,21 @@ pub const MAX_STR: usize = 1 << 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
+    /// A room pin change, including stale unpin no-ops (task T343).
+    Pin {
+        slug: String,
+        actor: String,
+        target: u64,
+        on: bool,
+        now_ms: u64,
+    },
+    /// A personal bookmark reference, without a copied message body (task T343).
+    SaveMessage {
+        slug: String,
+        actor: String,
+        target: u64,
+        on: bool,
+    },
     CreateRoom {
         owner: String,
         name: String,
@@ -327,6 +344,21 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             out.push(u8::from(*on));
             out.extend_from_slice(&now_ms.to_be_bytes());
         }
+        Op::Pin { slug, actor, target, on, now_ms } => {
+            out.push(PIN);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, actor)?;
+            out.extend_from_slice(&target.to_be_bytes());
+            out.push(u8::from(*on));
+            out.extend_from_slice(&now_ms.to_be_bytes());
+        }
+        Op::SaveMessage { slug, actor, target, on } => {
+            out.push(SAVE_MESSAGE);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, actor)?;
+            out.extend_from_slice(&target.to_be_bytes());
+            out.push(u8::from(*on));
+        }
         Op::Reply { slug, author, parent, text, now_ms } => {
             out.push(REPLY);
             encode_str(&mut out, slug)?;
@@ -494,6 +526,25 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::React { slug, actor, target, reaction, on, now_ms })
         }
+        PIN | SAVE_MESSAGE => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let actor = decode_str(bytes, &mut pos)?;
+            let target = decode_u64(bytes, &mut pos)?;
+            let on = match decode_array::<1>(bytes, &mut pos)? {
+                [0] => false,
+                [1] => true,
+                [other] => return Err(CodecError::BadKind(other)),
+            };
+            let op = if tag == PIN {
+                Op::Pin { slug, actor, target, on, now_ms: decode_u64(bytes, &mut pos)? }
+            } else {
+                Op::SaveMessage { slug, actor, target, on }
+            };
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(op)
+        }
         CALL_START => {
             let slug = decode_str(bytes, &mut pos)?;
             let call = decode_u64(bytes, &mut pos)?;
@@ -614,6 +665,8 @@ const CALL_START: u8 = 25;
 const CALL_JOIN: u8 = 26;
 const CALL_LEAVE: u8 = 27;
 const CALL_END: u8 = 28;
+const PIN: u8 = 29;
+const SAVE_MESSAGE: u8 = 30;
 
 fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;
