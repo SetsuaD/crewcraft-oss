@@ -280,6 +280,7 @@ impl DurableServer {
 
     /// Leave `actor`'s key `kid`, sealed to `to`, for `to` to collect (task T360d2). Both must be in the call; a
     /// sender keeps at most `MAX_KIDS_PER_PAIR` keys for one recipient, the oldest dropped first.
+    #[allow(clippy::too_many_arguments)]
     pub fn call_seal(&mut self, slug: &str, actor: &str, call: u64, to: &str, kid: u64, sealed: Vec<u8>, now_ms: u64) -> Result<(), CallError> {
         self.call_heartbeat(slug, actor, call, now_ms)?;
         let record = self.calls.open_in_mut(slug, call).ok_or(CallError::NoSuchCall)?;
