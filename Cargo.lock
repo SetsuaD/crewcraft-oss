@@ -1108,13 +1108,17 @@ version = "0.1.0-beta.1"
 name = "crewcraft-server"
 version = "0.1.0-beta.1"
 dependencies = [
+ "base64",
  "crewcraft",
  "crewcraft-accounts",
  "crewcraft-admission",
+ "crewcraft-authz",
  "crewcraft-bootstrap",
  "crewcraft-client-core",
  "crewcraft-desktop-ui",
  "crewcraft-enroll",
+ "crewcraft-https",
+ "crewcraft-oidc",
  "crewcraft-pki",
  "crewcraft-proto",
  "crewcraft-server-core",
@@ -1124,7 +1128,9 @@ dependencies = [
  "ctrlc",
  "rand_core",
  "rcgen",
+ "ring",
  "rustls",
+ "serde_json",
  "sha2 0.10.9",
  "x509-parser",
  "zeroize",

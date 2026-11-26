@@ -21,6 +21,8 @@ crewcraft-client-core = { path = "crates/client-core" }
 crewcraft-strict-toml = { path = "crates/strict-toml" }
 crewcraft-theme = { path = "crates/theme" }
 crewcraft-authz = { path = "crates/authz" }
+crewcraft-oidc = { path = "crates/oidc" }
+crewcraft-https = { path = "crates/https" }
 crewcraft-update = { path = "crates/update" }
 crewcraft-tls = { path = "crates/tls" }
 crewcraft-pki = { path = "crates/pki" }
