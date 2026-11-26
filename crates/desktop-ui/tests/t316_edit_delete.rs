@@ -23,7 +23,10 @@ fn chat() -> Harness<'static, Window> {
         .with_context_setup(|ctx| ctx.set_fonts(fonts()))
         .build_ui_state(|ui, window: &mut Window| window.ui(ui), Window::new());
     h.state_mut().apply(Update::SignedIn { email: ME.to_owned(), rooms: vec![ROOM.to_owned()] });
-    h.state_mut().apply(Update::Snapshot { room: ROOM.to_owned(), shown: vec![line(5, ME, "<p>my first try</p>"), line(6, "bo@example.org", "<p>from Bo</p>")] });
+    h.state_mut().apply(Update::Snapshot {
+        room: ROOM.to_owned(),
+        shown: vec![line(5, ME, "<p>my first try</p>"), line(6, "bo@example.org", "<p>from Bo</p>")],
+    });
     h.run();
     h.state_mut().take_actions();
     h

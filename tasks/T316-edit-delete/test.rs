@@ -222,7 +222,6 @@ fn poll_until(controller: &mut Controller, what: &str, want: impl Fn(&Update) ->
     panic!("timed out waiting for {what}; saw {seen:?}");
 }
 
-
 /// The cursor and `edited` flag of the line in `room` whose text contains `text`, in the snapshot `update`, if any.
 fn line_in(update: &Update, room: &str, text: &str) -> Option<(u64, bool)> {
     match update {
