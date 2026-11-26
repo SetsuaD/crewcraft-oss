@@ -1,0 +1,19 @@
+{
+  "id": "T321-search-focus",
+  "title": "Opening a search result opens its room on the message",
+  "crate": "crewcraft-desktop-ui",
+  "files": [
+    "crates/desktop-ui/src/lib.rs"
+  ],
+  "test_path": "crates/desktop-ui/tests/t321_search_focus_window.rs",
+  "test_cmd": "cargo test -p crewcraft-desktop-ui --test t321_search_focus_window",
+  "depends_on": [
+    "T320c-search-app",
+    "T340b-threads-app"
+  ],
+  "spec": "REQUIREMENTS 2.1: opening a search result opens the room around it. Clicking a result opens its room and makes its message the window's focus (Window::focus): the bubble is outlined and the feed scrolls it to the middle once (the feed does not stick to the bottom until then); the focus waits for the room's messages if they have not arrived. A result that is a reply opens its thread and focuses its parent in the conversation. Opening another room drops the focus.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md"
+  ]
+}

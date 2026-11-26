@@ -298,6 +298,9 @@ pub struct Window {
     open_thread: Option<(String, u64)>,
     /// The thread composer's text (T340b).
     thread_draft: String,
+    /// The message a search result opened, `(room, cursor)`: highlighted, and scrolled to once (T321).
+    focus: Option<(String, u64)>,
+    focus_scrolled: bool,
     /// Who reacted to each message with what, per room and cursor (T341b).
     reactions: HashMap<String, std::collections::BTreeMap<u64, crewcraft_ui_model::MessageReactions>>,
     /// Each room's open call (T360a2).
@@ -329,6 +332,9 @@ struct Bubbles<'a> {
     read_only: bool,
     /// Imported messages' original times, by cursor (T350d2).
     times: &'a std::collections::BTreeMap<u64, u64>,
+    /// The message to highlight (a search result), and whether to scroll to it (T321).
+    focus: Option<u64>,
+    scroll: bool,
 }
 
 /// What the person did to a message in the feed (T316).
@@ -771,6 +777,8 @@ impl Window {
         let replies = self.reply_counts(&room);
         let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
         let times = self.sent_times.get(&room).cloned().unwrap_or_default();
+        let focus = self.focus.as_ref().filter(|(r, _)| *r == room).map(|(_, cursor)| *cursor);
+        let mut focus_found = false;
         let read_only = self.archived.contains(&room);
         let threads = self.threads.get(&room).cloned().unwrap_or_default();
         let call_lines = self.call_lines.get(&room).cloned().unwrap_or_default();
@@ -785,9 +793,11 @@ impl Window {
             read_only,
             times: &times,
             actions: true,
+            focus,
+            scroll: !self.focus_scrolled,
         };
         egui::CentralPanel::default_margins().show(ui, |ui| {
-            ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
+            ScrollArea::vertical().stick_to_bottom(focus.is_none() || self.focus_scrolled).auto_shrink(false).show(ui, |ui| {
                 // Replies live in their thread, not in the conversation (T340b).
                 let mut shown_lines = 0;
                 for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
@@ -797,12 +807,18 @@ impl Window {
                     if matches!(row, FeedRow::Message { cursor, .. } if threads.contains_key(cursor)) {
                         continue;
                     }
+                    if matches!(row, FeedRow::Message { cursor, .. } if Some(*cursor) == focus) {
+                        focus_found = true;
+                    }
                     action = bubble_ui(ui, row, &look).or(action.take());
                 }
                 call_lines_ui(ui, &call_lines, shown_lines, u64::MAX);
             });
         });
         self.message_action(&room, action);
+        if focus_found {
+            self.focus_scrolled = true;
+        }
         if !self.archived.contains(&room) {
             self.take_dropped_files(ui, &room);
         }
@@ -863,6 +879,8 @@ impl Window {
                 let replies = self.reply_counts(&room);
                 let reactions = self.reactions.get(&room).cloned().unwrap_or_default();
                 let times = self.sent_times.get(&room).cloned().unwrap_or_default();
+                let focus = self.focus.as_ref().filter(|(r, _)| *r == room).map(|(_, cursor)| *cursor);
+                let mut focus_found = false;
                 let read_only = self.archived.contains(&room);
                 let threads = self.threads.get(&room).cloned().unwrap_or_default();
                 let call_lines = self.call_lines.get(&room).cloned().unwrap_or_default();
@@ -877,9 +895,11 @@ impl Window {
                     read_only,
                     times: &times,
                     actions: true,
+                    focus,
+                    scroll: !self.focus_scrolled,
                 };
                 egui::CentralPanel::default_margins().show(ui, |ui| {
-                    ScrollArea::vertical().stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
+                    ScrollArea::vertical().stick_to_bottom(focus.is_none() || self.focus_scrolled).auto_shrink(false).show(ui, |ui| {
                         let mut shown_lines = 0;
                         for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
                             if let FeedRow::Message { cursor, .. } = row {
@@ -888,12 +908,18 @@ impl Window {
                             if matches!(row, FeedRow::Message { cursor, .. } if threads.contains_key(cursor)) {
                                 continue;
                             }
+                            if matches!(row, FeedRow::Message { cursor, .. } if Some(*cursor) == focus) {
+                                focus_found = true;
+                            }
                             action = bubble_ui(ui, row, &look).or(action.take());
                         }
                         call_lines_ui(ui, &call_lines, shown_lines, u64::MAX);
                     });
                 });
                 self.message_action(&room, action);
+                if focus_found {
+                    self.focus_scrolled = true;
+                }
             }
             PhonePane::Account => {
                 egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -969,15 +995,27 @@ impl Window {
                     let who = if result.author.is_empty() { String::new() } else { format!("{} ", result.author) };
                     let text = format!("{who}in {}: {}", result.room, result.snippet);
                     if ui.add(egui::Button::new(text).wrap()).clicked() {
-                        open = Some(result.room.clone());
+                        open = Some((result.room.clone(), result.cursor));
                     }
                 }
             });
         });
-        if let Some(room) = open {
+        // The room opens on the result's message (T321): a reply opens its thread, on its parent.
+        if let Some((room, cursor)) = open {
             self.results = None;
             self.open_room(&room);
+            let parent = self.threads.get(&room).and_then(|threads| threads.get(&cursor)).copied();
+            if let Some(parent) = parent {
+                self.open_thread = Some((room.clone(), parent));
+            }
+            self.focus = Some((room, parent.unwrap_or(cursor)));
+            self.focus_scrolled = false;
         }
+    }
+
+    /// The message a search result opened, `(room, cursor)` (T321).
+    pub fn focus(&self) -> Option<(&str, u64)> {
+        self.focus.as_ref().map(|(room, cursor)| (room.as_str(), *cursor))
     }
 
     /// The call this app is in, `(room, call)` (T360a2).
@@ -1064,6 +1102,8 @@ impl Window {
             read_only,
             times: &times,
             actions: false,
+            focus: None,
+            scroll: false,
         };
         let mut action = None;
         ScrollArea::vertical().max_height(ui.available_height() - 90.0).auto_shrink(false).show(ui, |ui| {
@@ -1225,6 +1265,7 @@ impl Window {
 
     fn open_room(&mut self, room: &str) {
         if let Some(command) = self.rooms.select(room) {
+            self.focus = None;
             self.selected_message = None;
             self.confirm_delete = false;
             self.editing = None;
@@ -1308,7 +1349,9 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
     ui.with_layout(layout, |ui| {
         let max = (ui.available_width() * 0.72).max(120.0);
         let radius = ui.visuals().window_corner_radius;
-        egui::Frame::new().fill(fill).corner_radius(radius).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+        let focused = matches!(row, FeedRow::Message { cursor, .. } if Some(*cursor) == look.focus);
+        let stroke = if focused { egui::Stroke::new(2.0, ui.visuals().selection.stroke.color) } else { egui::Stroke::NONE };
+        let shown = egui::Frame::new().fill(fill).stroke(stroke).corner_radius(radius).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
             ui.set_max_width(max);
             let rich = RichText::new(text);
             let rich = if failed {
@@ -1326,6 +1369,10 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
                 action = Some(MessageAction::Select(cursor));
             }
         });
+        // A search result's message comes into view once (T321).
+        if focused && look.scroll {
+            shown.response.scroll_to_me(Some(Align::Center));
+        }
     });
     // When an imported message was first sent (T350d2).
     if let FeedRow::Message { cursor, .. } = row
