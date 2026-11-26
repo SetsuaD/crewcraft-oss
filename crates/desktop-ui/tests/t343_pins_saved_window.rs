@@ -106,6 +106,21 @@ fn a_saved_message_can_be_removed_or_opened_in_its_room() {
 #[test]
 fn file_only_saved_and_pinned_messages_stay_actionable() {
     let mut h = chat([1100.0, 700.0]);
+    h.state_mut().apply(Update::Snapshot {
+        room: ROOM.into(),
+        shown: vec![Shown::Line(Line { cursor: 5, author: "bo@example.org".into(), html: String::new(), edited: false })],
+    });
+    h.run();
+    h.get_by_label("Message with attachments").click();
+    h.run();
+    h.get_by_label("Pin message").click();
+    h.run();
+    assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::Pin { room: ROOM.into(), target: 5, on: true })]);
+    h.get_by_label("Message with attachments").click();
+    h.run();
+    h.get_by_label("Save message").click();
+    h.run();
+    assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::SaveMessage { room: ROOM.into(), target: 5, on: true })]);
     h.state_mut().apply(Update::Pin { room: ROOM.into(), pinned: Some(pin(5, "")) });
     h.run();
     h.get_by_label("Pinned: Message with attachments");

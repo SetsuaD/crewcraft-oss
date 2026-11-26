@@ -714,8 +714,7 @@ impl DurableServer {
             return SavedPage { messages: Vec::new(), more: false };
         };
         let mut messages: Vec<SavedMessage> = references
-            .iter()
-            .filter(|(room, cursor)| (room.as_str(), *cursor) > (after_room, after_cursor))
+            .range((std::ops::Bound::Excluded((after_room.to_owned(), after_cursor)), std::ops::Bound::Unbounded))
             .filter_map(|(room, cursor)| {
                 let message = live_message(&self.server, &self.previews, room, user, *cursor).ok()?;
                 Some(SavedMessage {
@@ -1086,5 +1085,29 @@ mod pins_saved_tests {
             );
         }
         assert_eq!(server.edit(&room, "owner", target, "changed", 10_000), Err(DurableError::Server(ServerError::RateLimited)));
+    }
+
+    #[test]
+    fn an_exclusive_saved_cursor_skips_removed_rooms_and_keeps_later_rooms() {
+        let journal = TestJournal::new();
+        let mut server = DurableServer::open(&journal.0).unwrap();
+        let mut saved = Vec::new();
+        for name in ["Alpha", "Bravo", "Charlie"] {
+            let room = server.create_room("owner", name).unwrap();
+            server.add_member(&room, "owner", "reader", Role::Member).unwrap();
+            let first = server.post(&room, "owner", "first", 10_000).unwrap();
+            let second = server.post(&room, "owner", "second", 10_000).unwrap();
+            server.save_message(&room, "reader", first, true).unwrap();
+            server.save_message(&room, "reader", second, true).unwrap();
+            saved.push((room, first, second));
+        }
+        server.remove_member(&saved[1].0, "owner", "reader").unwrap();
+        let keys = |page: SavedPage| page.messages.into_iter().map(|message| (message.room, message.cursor)).collect::<Vec<_>>();
+        assert_eq!(
+            keys(server.saved("reader", &saved[0].0, saved[0].1)),
+            vec![(saved[0].0.clone(), saved[0].2), (saved[2].0.clone(), saved[2].1), (saved[2].0.clone(), saved[2].2)]
+        );
+        assert_eq!(keys(server.saved("reader", &saved[0].0, saved[0].2)), vec![(saved[2].0.clone(), saved[2].1), (saved[2].0.clone(), saved[2].2)]);
+        assert!(server.saved("reader", &saved[2].0, saved[2].2).messages.is_empty());
     }
 }

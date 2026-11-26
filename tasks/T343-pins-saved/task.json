@@ -33,7 +33,7 @@
     "T145-durable-connection"
   ],
   "spec": "FEATURE_PINS_SAVED (256) announces requests Pin (26), SaveMessage (27) and ListSaved (28). A writable room has one pin. Pinning another replaces it, stale unpin clears only a matching target, deleted targets cannot be pinned, and deleting the current target clears the pin. Successful Sync sends a Pinned snapshot (79) at the room head even when no events were returned or the original pin is outside the retained log. The client ignores an older snapshot. Personal saved references are journaled by person, room and message cursor. Saving requires current read access, including in an archive. ListSaved returns full current sanitized message HTML, original author and edited flag, omits deletions and rooms the person cannot read, and pages deterministically by room and message cursor using SavedPage (136) with at most 16 messages. The client follows every page and refuses non-progressing cursors. Pins and saved references survive journal reopen. The signed-in app exposes Pin, Unpin, Save message and Remove from saved actions, a current room pin bar, and Saved navigation on desktop and phone layouts. Saved rows update after edits and disappear after deletion. Existing protocol versions and clients without the feature keep their existing behavior.",
-  "status": "open",
+  "status": "done",
   "context": [
     "docs/REQUIREMENTS.md"
   ]

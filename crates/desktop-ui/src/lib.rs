@@ -1681,7 +1681,7 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
     };
     let (text, pending, failed) = match row {
         FeedRow::Message { author, html, edited, first_of_group, .. } => {
-            let mut text = text::html_to_text(html);
+            let mut text = message_text(html);
             if *edited {
                 text.push_str("  (edited)");
             }
