@@ -22,9 +22,9 @@ use crate::bootstrap_transport::{EXTERNAL_BROWSER_TIMEOUT, MAX_CONFIRMATION_WIND
 use crate::device::{DeviceError, NewDevice, StoredDevice};
 use crate::enroll_client::{FirstTotpCode, browser_problem};
 use crate::external_flow::browse;
-use crate::worker::Browser;
 use crate::hardware_key::HardwareKeys;
 use crate::server_endpoint::ServerEndpoint;
+use crate::worker::Browser;
 
 /// The authenticator setup link (`otpauth://...`). It holds the person's TOTP secret: show it only as a QR code or a
 /// setup key in a protected view, and never log it. `Debug` prints nothing of it, and it is wiped on drop.

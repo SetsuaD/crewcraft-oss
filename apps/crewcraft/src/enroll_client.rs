@@ -30,6 +30,9 @@ const MAX_EXTERNAL_START_REPLY: usize =
     1 + 4 + 4 * 2 + 2 * crewcraft_proto::signin::MAX_URL_BYTES + crewcraft_proto::signin::MAX_CLIENT_ID_BYTES + crewcraft_proto::signin::TOKEN_LEN;
 /// The server's code for "this server enrolls the other way" (`crewcraft_bootstrap::ERR_WRONG_PATH`).
 const ERR_WRONG_PATH: u16 = 6;
+/// The server's code for "the provider's sign-in does not match the invitation, or was not allowed", answering
+/// `ConfirmExternal` (`crewcraft_bootstrap::ERR_EXTERNAL_REFUSED`).
+pub const ERR_EXTERNAL_REFUSED: u16 = 7;
 
 /// A device's signing request for enrolling through the server's identity provider: no password (task T611i).
 pub struct ExternalEnrollmentRequest<'a> {

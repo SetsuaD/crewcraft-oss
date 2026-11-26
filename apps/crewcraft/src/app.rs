@@ -27,7 +27,7 @@ use zeroize::Zeroizing;
 use crate::bootstrap_transport::MAX_CONFIRMATION_WINDOW;
 use crate::device::{DeviceError, StoredDevice};
 use crate::device_store::{DeviceStore, StoreError};
-use crate::enroll_client::BrowserProblem;
+use crate::enroll_client::{BrowserProblem, ERR_EXTERNAL_REFUSED};
 use crate::enrollment::{Enrollment, EnrollmentEvent, KeySource};
 use crate::hardware_key::{HardwareKeys, new_alias};
 use crate::key_vault::{OpenVault, SystemVault};
@@ -309,7 +309,11 @@ impl Controller {
     }
 
     /// Join from `link` on a short-lived thread, then start the enrollment `start` makes from the endpoint and code.
-    fn join_then(&mut self, link: Zeroizing<String>, start: impl FnOnce(ServerEndpoint, EnrollmentCode, Wake) -> Started + Send + 'static) -> Vec<Update> {
+    fn join_then(
+        &mut self,
+        link: Zeroizing<String>,
+        start: impl FnOnce(ServerEndpoint, EnrollmentCode, Wake) -> Started + Send + 'static,
+    ) -> Vec<Update> {
         let (sender, receiver) = mpsc::channel();
         let (join, wake) = (self.join.clone(), self.wake.clone());
         let spawned = thread::Builder::new().name("crewcraft-join".into()).spawn(move || {
@@ -539,19 +543,20 @@ pub fn enrollment_problem(error: DeviceError) -> String {
         DeviceError::Bootstrap(Transport::ConfirmationWindow) | DeviceError::Enrollment(Exchange::PromptCancelled) => {
             "Enrollment took too long. Ask for a new invitation if this one has expired.".to_owned()
         }
+        // The two answers of an enrollment through the provider come before the general refusals (task T611i).
+        DeviceError::Enrollment(Exchange::WrongPath) => {
+            "This server enrolls the other way: with your organization's sign-in, or with a password. Use the other button.".to_owned()
+        }
+        DeviceError::Enrollment(Exchange::ConfirmRefused(ERR_EXTERNAL_REFUSED)) => {
+            "Your organization's sign-in did not match this invitation, or you do not have access to this chat. Ask your \
+             administrator."
+                .to_owned()
+        }
         DeviceError::Enrollment(Exchange::SetupRefused(_)) => {
             "The server refused the invitation. It may have expired or already been used.".to_owned()
         }
         DeviceError::Enrollment(Exchange::ConfirmRefused(_)) => {
             "The server refused that authenticator code. Start again with the invitation.".to_owned()
-        }
-        DeviceError::Enrollment(Exchange::WrongPath) => "This server enrolls the other way: with your organization's sign-in, or \
-                                                         with a password. Use the other button."
-            .to_owned(),
-        DeviceError::Enrollment(Exchange::ConfirmRefused(7)) => {
-            "Your organization's sign-in did not match this invitation, or you do not have access to this chat. Ask your \
-             administrator."
-                .to_owned()
         }
         DeviceError::Enrollment(Exchange::Browser(problem)) => match problem {
             BrowserProblem::Cancelled => "Enrollment cancelled.".to_owned(),

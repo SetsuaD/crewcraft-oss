@@ -15,8 +15,8 @@ use rustls::sign::{CertifiedKey, Signer, SigningKey, SingleCertAndKey};
 use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
-use crate::connect::Transport;
 use crate::chat_session::ExternalStart;
+use crate::connect::Transport;
 use crate::enroll_client::{
     BrowserProblem, EnrollmentError, EnrollmentRequest, ExternalEnrollmentRequest, FirstTotpCode, TotpSetup, VerifiedDeviceChain, enroll,
     enroll_external,

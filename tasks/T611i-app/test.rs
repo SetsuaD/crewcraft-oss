@@ -189,7 +189,8 @@ fn start(state: LabInstallation, clock: &Arc<AtomicU64>, secrets: Vec<[u8; 20]>,
     };
     let server_clock = clock.clone();
     let name = ServerName::parse(SERVER_NAME).unwrap();
-    let server = LabRuntime::bind_network(state, options, &name, move || server_clock.load(Ordering::SeqCst)).unwrap().with_external(external.clone());
+    let server =
+        LabRuntime::bind_network(state, options, &name, move || server_clock.load(Ordering::SeqCst)).unwrap().with_external(external.clone());
     let address = server.local_addr().unwrap();
     let environment = TestEnvironment { clock: clock.clone(), secrets: VecDeque::from(secrets) };
     let stop = Arc::new(AtomicBool::new(false));
