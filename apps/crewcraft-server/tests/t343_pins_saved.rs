@@ -33,8 +33,8 @@ use crewcraft_server::lab_bootstrap::bootstrap_handler;
 use crewcraft_server::lab_installation::LabInstallation;
 use crewcraft_server::lab_runtime::LabRuntime;
 use crewcraft_server::lab_server::{LabOptions, Timeouts};
-use crewcraft_server_core::dispatch::{E_NO_SUCH_MESSAGE, E_NO_SUCH_ROOM, E_NOT_ALLOWED};
 use crewcraft_server_core::connection::Connection;
+use crewcraft_server_core::dispatch::{E_NO_SUCH_MESSAGE, E_NO_SUCH_ROOM, E_NOT_ALLOWED};
 use crewcraft_server_core::durable::DurableServer;
 use crewcraft_server_core::invites::Invite;
 use crewcraft_server_core::journal::{Journal, MAX_RECORD};
@@ -120,7 +120,12 @@ fn start(state: LabInstallation, now_ms: u64, secrets: Vec<[u8; 20]>) -> Running
         address: "127.0.0.1:0".parse().unwrap(),
         capacity: NonZeroUsize::new(8).unwrap(),
         timeouts: Timeouts { handshake: WAIT, sign_in: WAIT, signed_in_frame: WAIT, bootstrap: WAIT },
-        protocol: ServerSide { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_PINS_SAVED, name: "saved messages test".into() },
+        protocol: ServerSide {
+            min_version: 1,
+            max_version: 1,
+            features: FEATURE_LIST_ROOMS | FEATURE_PINS_SAVED,
+            name: "saved messages test".into(),
+        },
     };
     let clock = Arc::new(AtomicU64::new(wall_ms()));
     let server_clock = clock.clone();
@@ -150,7 +155,8 @@ impl Person {
         let csr = CertificateParams::new(Vec::<String>::new()).unwrap().serialize_request(&key).unwrap();
         let spki = key.subject_public_key_info();
         let request = EnrollmentRequest { device_name: "Synthetic Device", csr: csr.der().as_ref(), password: PASSWORD, expected_spki: &spki };
-        let chain = endpoint.open_bootstrap(&self.invitation, WAIT).unwrap().enroll(request, |_, _| FirstTotpCode::parse(self.code_at(now_ms))).unwrap();
+        let chain =
+            endpoint.open_bootstrap(&self.invitation, WAIT).unwrap().enroll(request, |_, _| FirstTotpCode::parse(self.code_at(now_ms))).unwrap();
         let mut roots = RootCertStore::empty();
         roots.add(CertificateDer::from(endpoint.root_der().to_vec())).unwrap();
         let identity = (vec![chain.leaf, chain.issuer], PrivatePkcs8KeyDer::from(key.serialize_der()).into());
@@ -181,7 +187,8 @@ impl Fixture {
             Person { email: GUEST, secret: [23; 20], invitation: EnrollmentCode::from_bytes([3; 20]) },
         ];
         for person in &people {
-            let invite = Invite { email: person.email.into(), bootstrap_pub: person.invitation.bootstrap_public_key(), expires_ms: setup_time + 600_000 };
+            let invite =
+                Invite { email: person.email.into(), bootstrap_pub: person.invitation.bootstrap_public_key(), expires_ms: setup_time + 600_000 };
             state.accounts.issue_invite(invite, setup_time).unwrap();
         }
         let room = state.rooms.create_room(ALICE, "Project").unwrap();
@@ -216,9 +223,7 @@ impl Fixture {
 fn pin_metadata_accepts_empty_live_bodies_and_ignores_older_snapshots_after_a_clear() {
     let mut inbox = Inbox::new(ALICE, Settings::new(ALICE));
     inbox.follow("project", false);
-    let pinned = |cursor, target| Push::Pinned {
-        room: "project".into(), cursor, target, author: ALICE.into(), html: String::new(), edited: false,
-    };
+    let pinned = |cursor, target| Push::Pinned { room: "project".into(), cursor, target, author: ALICE.into(), html: String::new(), edited: false };
     let push = pinned(10, 3);
     assert_eq!(decode_push(&encode_push(&push).unwrap()).unwrap(), push, "an empty body can belong to a live message");
     inbox.on_push(push, 0, 0).unwrap();
@@ -227,7 +232,9 @@ fn pin_metadata_accepts_empty_live_bodies_and_ignores_older_snapshots_after_a_cl
     assert_eq!(view.pinned(), Some(3));
     inbox.on_push(pinned(9, 2), 0, 0).unwrap();
     assert_eq!(inbox.view("project").unwrap().pinned(), Some(3));
-    inbox.on_push(Push::Pinned { room: "project".into(), cursor: 11, target: 0, author: String::new(), html: String::new(), edited: false }, 0, 0).unwrap();
+    inbox
+        .on_push(Push::Pinned { room: "project".into(), cursor: 11, target: 0, author: String::new(), html: String::new(), edited: false }, 0, 0)
+        .unwrap();
     assert!(inbox.view("project").unwrap().pinned().is_none());
     inbox.on_push(pinned(10, 3), 0, 0).unwrap();
     assert!(inbox.view("project").unwrap().pinned().is_none(), "an older snapshot cannot restore a deleted or unpinned message");

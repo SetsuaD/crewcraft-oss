@@ -250,9 +250,7 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
     let mut out = Vec::new();
     match push {
         Push::Pinned { room, cursor, target, author, html, edited } => {
-            if (*target == 0 && (!author.is_empty() || !html.is_empty() || *edited))
-                || (*target != 0 && author.is_empty())
-            {
+            if (*target == 0 && (!author.is_empty() || !html.is_empty() || *edited)) || (*target != 0 && author.is_empty()) {
                 return Err(CodecError::FieldLength);
             }
             out.push(PINNED);
@@ -445,9 +443,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
                 1 => true,
                 other => return Err(CodecError::BadKind(other)),
             };
-            if (target == 0 && (!author.is_empty() || !html.is_empty() || edited))
-                || (target != 0 && author.is_empty())
-            {
+            if (target == 0 && (!author.is_empty() || !html.is_empty() || edited)) || (target != 0 && author.is_empty()) {
                 return Err(CodecError::FieldLength);
             }
             Push::Pinned { room, cursor, target, author, html, edited }
@@ -622,7 +618,13 @@ mod pinned_tests {
             bad_bool[last] = 2;
             assert_eq!(decode_push(&bad_bool), Err(CodecError::BadKind(2)));
         }
-        assert!(encode_push(&Push::Pinned { room: "room".into(), cursor: 8, target: 0, author: "author".into(), html: String::new(), edited: false }).is_err());
-        assert!(encode_push(&Push::Pinned { room: "room".into(), cursor: 8, target: 3, author: String::new(), html: "body".into(), edited: false }).is_err());
+        assert!(
+            encode_push(&Push::Pinned { room: "room".into(), cursor: 8, target: 0, author: "author".into(), html: String::new(), edited: false })
+                .is_err()
+        );
+        assert!(
+            encode_push(&Push::Pinned { room: "room".into(), cursor: 8, target: 3, author: String::new(), html: "body".into(), edited: false })
+                .is_err()
+        );
     }
 }

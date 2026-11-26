@@ -185,7 +185,15 @@ impl Server {
     }
 
     /// Edit a live message whose author was read from the durable full-history projection.
-    pub(crate) fn edit_validated(&mut self, slug: &str, actor: &str, target: u64, author: Option<&str>, text: &str, now_ms: u64) -> Result<u64, ServerError> {
+    pub(crate) fn edit_validated(
+        &mut self,
+        slug: &str,
+        actor: &str,
+        target: u64,
+        author: Option<&str>,
+        text: &str,
+        now_ms: u64,
+    ) -> Result<u64, ServerError> {
         self.require_member(slug, actor)?;
         if !self.limiter.check(&actor.to_owned(), now_ms) {
             return Err(ServerError::RateLimited);

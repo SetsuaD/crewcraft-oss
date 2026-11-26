@@ -737,7 +737,8 @@ impl DurableServer {
     pub fn pin_state(&self, slug: &str, user: &str) -> Option<crewcraft_proto::push::Push> {
         let room = self.server.room(slug).ok()?;
         room.role(user)?;
-        let pinned = room.pinned().and_then(|target| self.previews.get(slug).and_then(|messages| messages.get(&target)).map(|message| (target, message)));
+        let pinned =
+            room.pinned().and_then(|target| self.previews.get(slug).and_then(|messages| messages.get(&target)).map(|message| (target, message)));
         let (target, author, html, edited) = match pinned {
             Some((target, message)) => (target, clip(&message.author, MAX_AUTHOR), message.html.clone(), message.edited),
             None => (0, String::new(), String::new(), false),
@@ -1010,7 +1011,10 @@ mod pins_saved_tests {
         assert!(page.messages[0].html.contains("current text"));
         assert!(page.messages[0].edited);
         assert_eq!(reopened.server().room(&room).unwrap().pinned(), Some(message));
-        assert_eq!(reopened.edit(&room, "member", message, "forged", 13_000), Err(DurableError::Server(ServerError::Service(ServiceError::NotAllowed))));
+        assert_eq!(
+            reopened.edit(&room, "member", message, "forged", 13_000),
+            Err(DurableError::Server(ServerError::Service(ServiceError::NotAllowed)))
+        );
         reopened.remove_member(&room, "owner", "member").unwrap();
         assert!(reopened.saved("member", "", 0).messages.is_empty());
         reopened.add_member(&room, "owner", "member", Role::Member).unwrap();
@@ -1030,11 +1034,15 @@ mod pins_saved_tests {
         let mut server = Server::new();
         let room = server.create_archive_room("Archive").unwrap();
         server.add_member(&room, crate::import::ARCHIVE_OWNER, "reader", Role::Guest).unwrap();
-        let messages = HashMap::from([(room.clone(), HashMap::from([(1, CurrentMessage { author: "author".into(), html: String::new(), edited: false })]))]);
+        let messages =
+            HashMap::from([(room.clone(), HashMap::from([(1, CurrentMessage { author: "author".into(), html: String::new(), edited: false })]))]);
         let mut saved = HashMap::new();
         assert_eq!(change_saved(&server, &messages, &mut saved, &room, "reader", 1, true), Ok(true));
         assert_eq!(validate_pin(&server, &messages, &room, "reader", 1, true), Err(ServerError::Service(ServiceError::NotAllowed)));
-        assert_eq!(change_saved(&server, &messages, &mut saved, &room, "outsider", 1, true), Err(ServerError::Service(ServiceError::Room(RoomError::NotMember))));
+        assert_eq!(
+            change_saved(&server, &messages, &mut saved, &room, "outsider", 1, true),
+            Err(ServerError::Service(ServiceError::Room(RoomError::NotMember)))
+        );
     }
 
     #[test]
@@ -1055,7 +1063,10 @@ mod pins_saved_tests {
             let mut decoder = Decoder::new();
             decoder.push(&output);
             let payload = decoder.next_frame().unwrap().unwrap();
-            assert_eq!(decode_response(&payload).unwrap(), (id as u32, Response::Error { code: crate::dispatch::E_NOT_ALLOWED, detail: String::new() }));
+            assert_eq!(
+                decode_response(&payload).unwrap(),
+                (id as u32, Response::Error { code: crate::dispatch::E_NOT_ALLOWED, detail: String::new() })
+            );
             assert!(decoder.next_frame().unwrap().is_none());
         }
         assert_eq!(server.server().room(&room).unwrap().pinned(), None);

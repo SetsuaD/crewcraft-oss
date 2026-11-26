@@ -1117,7 +1117,10 @@ mod pins_saved_tests {
 
     #[test]
     fn pin_and_save_requests_refuse_malformed_booleans_and_continuations() {
-        for (tag, request) in [(PIN, Request::Pin { room: "room".into(), target: 4, on: true }), (SAVE_MESSAGE, Request::SaveMessage { room: "room".into(), target: 4, on: false })] {
+        for (tag, request) in [
+            (PIN, Request::Pin { room: "room".into(), target: 4, on: true }),
+            (SAVE_MESSAGE, Request::SaveMessage { room: "room".into(), target: 4, on: false }),
+        ] {
             let mut bytes = encode_request(7, &request).unwrap();
             assert_eq!(bytes[0], tag);
             assert_eq!(decode_request(&bytes).unwrap(), (7, request));
