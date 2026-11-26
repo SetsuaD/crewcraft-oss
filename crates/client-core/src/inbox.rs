@@ -51,6 +51,11 @@ impl Inbox {
     /// `mentioned` is whether the push's mentions contain `me` (ASCII case-insensitively) and whose `direct` is the room's
     /// flag; every other push is `Notify::None`.
     pub fn on_push(&mut self, push: Push, now_ms: u64, local_minute: u16) -> Option<(Apply, Notify)> {
+        // A message's files (task T330c) advance nothing: they are kept beside the timeline.
+        if let Push::Attached { room, cursor, files } = push {
+            self.views.get_mut(&room)?.attach(cursor, files);
+            return Some((Apply::Duplicate, Notify::None));
+        }
         let (room, cursor, change, is_posted, author, mentions) = match &push {
             Push::Posted { room, cursor, author, html, mentions } => (
                 room.as_str(),
@@ -65,6 +70,7 @@ impl Inbox {
             }
             Push::Deleted { room, cursor, target } => (room.as_str(), *cursor, Change::Deleted { target: *target }, false, None, None),
             Push::Other { room, cursor } => (room.as_str(), *cursor, Change::Other, false, None, None),
+            Push::Attached { .. } => return None,
         };
 
         let is_direct = self.direct.get(room).copied().unwrap_or(false);

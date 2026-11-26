@@ -61,12 +61,19 @@ fn first_mentions(event: &Event) -> Vec<String> {
 pub struct Connection {
     user: String,
     decoder: Decoder,
+    /// The features the handshake agreed on: attachments are pushed only with `FEATURE_FILES` (task T330c).
+    features: u32,
 }
 
 impl Connection {
     /// A connection for `user` (already signed in), with nothing buffered.
     pub fn new(user: &str) -> Self {
-        Self { user: user.to_string(), decoder: Decoder::new() }
+        Self { user: user.to_string(), decoder: Decoder::new(), features: 0 }
+    }
+
+    /// As `new`, for a session whose handshake agreed on `features` (task T330c).
+    pub fn with_features(user: &str, features: u32) -> Self {
+        Self { user: user.to_string(), decoder: Decoder::new(), features }
     }
 
     /// Feed bytes received from the client at `now_ms`. Bytes are buffered until they form whole frames, so a request
@@ -85,7 +92,7 @@ impl Connection {
     /// Returns everything to send, in that order. On a fatal error, returns only the error: no bytes from this call
     /// are sent and the caller closes the connection.
     pub fn receive(&mut self, server: &mut Server, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, ConnError> {
-        self.receive_with(server, bytes, now_ms, |s, user, request, now| Ok((handle(s, user, request, now), None)), |s| s, |_, _, _| Vec::new())
+        self.receive_with(server, bytes, now_ms, |s, user, request, now| Ok((handle(s, user, request, now), None)), |s| s, |_, _, _| Vec::new(), |_, _, _| Vec::new())
     }
 
     /// Handle framed requests with the same wire behavior as [Self::receive].
@@ -104,6 +111,7 @@ impl Connection {
             },
             DurableServer::server,
             DurableServer::found,
+            DurableServer::attachments,
         )
     }
 
@@ -115,6 +123,7 @@ impl Connection {
         mut dispatch: impl FnMut(&mut S, &str, &Request, u64) -> Result<Answered, E>,
         read: impl Fn(&S) -> &Server,
         found: impl Fn(&S, &str, &str) -> Vec<SearchHit>,
+        attachments: impl Fn(&S, &str, u64) -> Vec<crewcraft_proto::push::AttachedFile>,
     ) -> Result<Vec<u8>, E> {
         self.decoder.push(bytes);
         let mut out = Vec::new();
@@ -143,9 +152,18 @@ impl Connection {
             {
                 for (ev_cursor, ev) in events {
                     let push = to_push(room, ev_cursor, &ev);
+                    let posted = matches!(push, Push::Posted { .. });
                     let push_bytes = encode_push(&push).map_err(ConnError::Request)?;
                     let framed_push = encode(&push_bytes).map_err(ConnError::Frame)?;
                     out.extend_from_slice(&framed_push);
+                    // A message's files follow its push, for a client that agreed to them (task T330c).
+                    if posted && self.features & crewcraft_proto::request::FEATURE_FILES != 0 {
+                        let files = attachments(server, room, ev_cursor);
+                        if !files.is_empty() {
+                            let attached = encode_push(&Push::Attached { room: room.clone(), cursor: ev_cursor, files }).map_err(ConnError::Request)?;
+                            out.extend_from_slice(&encode(&attached).map_err(ConnError::Frame)?);
+                        }
+                    }
                 }
             }
             if let Request::ListRooms = request
@@ -177,6 +195,14 @@ fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64
         }
         Request::UploadChunk { upload, offset, bytes } => server.upload_chunk(user, upload, *offset, bytes, now_ms).map(|received| (received, None)),
         Request::UploadFinish { upload } => server.finish_upload(user, upload, now_ms).map(|file| (0, Some(Follow::Id(file)))),
+        Request::PostFiles { room, text, files } => {
+            return Some(match server.post_files(room, user, text, files, now_ms) {
+                Ok(cursor) => Ok((Response::Ok { cursor }, None)),
+                Err(crate::durable::AttachError::BadAttachment) => Ok((refusal_of(crate::dispatch::E_BAD_ATTACHMENT), None)),
+                Err(crate::durable::AttachError::Durable(DurableError::Server(error))) => Ok((refusal_of(crate::dispatch::error_code(error)), None)),
+                Err(crate::durable::AttachError::Durable(error)) => Err(DurableConnError::Storage(error)),
+            });
+        }
         Request::Download { file, offset, length } => {
             return Some(Ok(match server.download(user, file, *offset, *length as usize) {
                 Ok(data) => (Response::Ok { cursor: data.len() as u64 }, Some(Follow::Bytes(data))),

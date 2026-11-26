@@ -89,13 +89,14 @@ impl Client {
                     Reply::Malformed(e) => return Err(ClientError::Malformed(e)),
                     _ => events.push(ClientEvent::Reply(reply)),
                 }
-            } else if (64..=67).contains(&first) {
+            } else if (64..=68).contains(&first) {
                 let push = decode_push(&payload).map_err(ClientError::Malformed)?;
                 let room = match &push {
                     Push::Posted { room, .. } => room.clone(),
                     Push::Edited { room, .. } => room.clone(),
                     Push::Deleted { room, .. } => room.clone(),
                     Push::Other { room, .. } => room.clone(),
+                    Push::Attached { room, .. } => room.clone(),
                 };
                 match self.inbox.on_push(push, now_ms, local_minute) {
                     Some((apply, notify)) => events.push(ClientEvent::Pushed { room, apply, notify }),
