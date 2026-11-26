@@ -4,7 +4,6 @@
 #![allow(clippy::unwrap_used)]
 
 use std::fs;
-use std::path::PathBuf;
 
 use crewcraft_proto::frame::encode;
 use crewcraft_proto::message::CodecError;
