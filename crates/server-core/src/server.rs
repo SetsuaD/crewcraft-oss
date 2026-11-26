@@ -95,6 +95,12 @@ impl Server {
         Ok(slug)
     }
 
+    /// `RoomService::call_line` in the room (task T360a1). `NoSuchRoom` first.
+    pub fn call_line(&mut self, slug: &str, actor: &str, call: u64, ended: bool, text: &str) -> Result<u64, ServerError> {
+        let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;
+        Ok(service.call_line(actor, call, ended, text))
+    }
+
     /// `RoomService::import_post` in the room (task T350a). `NoSuchRoom` first; no rate limit.
     pub fn import_post(&mut self, slug: &str, author: &str, text: &str, deleted: bool) -> Result<u64, ServerError> {
         let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;

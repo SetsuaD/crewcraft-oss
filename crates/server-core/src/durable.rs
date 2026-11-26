@@ -62,6 +62,8 @@ pub struct DurableServer {
     pub(crate) parents: HashMap<(String, u64), u64>,
     /// What imports have made: archive rooms and messages by external key (docs/IMPORT.md, task T350a).
     pub(crate) imports: crate::import::Imports,
+    /// Calls, open and ended (docs/CALLS.md, task T360a1).
+    pub(crate) calls: crate::calls::Calls,
 }
 
 /// An upload in progress (task T330b).
@@ -198,6 +200,7 @@ impl DurableServer {
         let mut detached: HashSet<[u8; 16]> = HashSet::new();
         let mut parents: HashMap<(String, u64), u64> = HashMap::new();
         let mut imports = crate::import::Imports::default();
+        let mut calls = crate::calls::Calls::default();
         for (index, record) in records.iter().enumerate() {
             let op = decode_op(record).map_err(|_| DurableError::Corrupt { index })?;
             // An import record (task T350a) changes the import's own bookkeeping as well as a room.
@@ -209,6 +212,12 @@ impl DurableServer {
                     continue;
                 }
                 Ok(crate::import::Replayed::NotImport(op)) => op,
+                Err(()) => return Err(DurableError::Corrupt { index }),
+            };
+            // So does a call record (task T360a1).
+            let op = match crate::calls::replay(&mut server, &mut calls, op) {
+                Ok(crate::calls::Replayed::Done) => continue,
+                Ok(crate::calls::Replayed::NotCall(op)) => op,
                 Err(()) => return Err(DurableError::Corrupt { index }),
             };
             if let Op::FileStored { slug, uploader, file, sha256, size, name, image } = op {
@@ -261,6 +270,7 @@ impl DurableServer {
             detached,
             parents,
             imports,
+            calls,
         })
     }
 
@@ -546,6 +556,8 @@ impl DurableServer {
         self.check_alive()?;
         let cursor = self.server.remove_member(slug, actor, user).map_err(DurableError::Server)?;
         self.record(&Op::RemoveMember { slug: slug.to_string(), actor: actor.to_string(), user: user.to_string() })?;
+        // Removed means removed: out of the room's call at once, at their last heartbeat (task T360a1).
+        self.sweep_calls(0)?;
         Ok(cursor)
     }
 
@@ -628,6 +640,8 @@ fn replay(server: &mut Server, op: Op) -> Result<u64, ServerError> {
         Op::FileStored { .. } | Op::PostFiles { .. } | Op::Reply { .. } => Ok(0),
         // Handled by `import::replay` (task T350a).
         Op::ImportRoom { .. } | Op::ImportMessage { .. } | Op::ImportEdit { .. } | Op::ImportDelete { .. } | Op::ImportFiles { .. } => Ok(0),
+        // Handled by `calls::replay` (task T360a1).
+        Op::CallStart { .. } | Op::CallJoin { .. } | Op::CallLeave { .. } | Op::CallEnd { .. } => Ok(0),
     }
 }
 
@@ -723,7 +737,7 @@ pub(crate) fn index_event(
         EventKind::Deleted { target } => {
             room.remove(target);
         }
-        EventKind::Joined { .. } | EventKind::Left { .. } | EventKind::Reacted { .. } => {}
+        EventKind::Joined { .. } | EventKind::Left { .. } | EventKind::Reacted { .. } | EventKind::CallLine { .. } => {}
     }
 }
 

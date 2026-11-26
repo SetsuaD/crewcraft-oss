@@ -31,6 +31,8 @@ pub const E_NO_SUCH_UPLOAD: u16 = 8;
 pub const E_NO_SUCH_FILE: u16 = 9;
 /// A post's files are not the poster's own unattached uploads in that room (task T330c).
 pub const E_BAD_ATTACHMENT: u16 = 10;
+/// No such open call in the room, or the person is not in it (task T360a1): the client leaves the call.
+pub const E_NO_SUCH_CALL: u16 = 11;
 /// Anything else (`AlreadyMember`, `LastOwner`, `BadName`).
 pub const E_OTHER: u16 = 99;
 
@@ -140,6 +142,10 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         | Request::UploadChunk { .. }
         | Request::UploadFinish { .. }
         | Request::Download { .. }
+        | Request::CallStart { .. }
+        | Request::CallJoin { .. }
+        | Request::CallHeartbeat { .. }
+        | Request::CallLeave { .. }
         | Request::PostFiles { .. }
         | Request::Reply { .. } => {
             return Ok(refusal(E_NO_STORAGE));

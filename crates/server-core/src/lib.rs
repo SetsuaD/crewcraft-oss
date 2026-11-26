@@ -11,6 +11,7 @@ pub mod account_store;
 pub mod activation;
 pub mod admin;
 pub mod audit;
+pub mod calls;
 pub mod cert_policy;
 pub mod connection;
 pub mod cursor_log;
