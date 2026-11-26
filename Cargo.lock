@@ -1200,7 +1200,6 @@ dependencies = [
  "crewcraft-media-auth",
  "crewcraft-media-crypto",
  "crewcraft-strict-toml",
- "ctrlc",
  "str0m",
 ]
 
@@ -1230,6 +1229,24 @@ dependencies = [
  "str0m-proto",
  "x509-cert",
  "zeroize",
+]
+
+[[package]]
+name = "crewcraft-media-server"
+version = "0.1.0-beta.1"
+dependencies = [
+ "base64",
+ "crewcraft-media",
+ "crewcraft-media-auth",
+ "crewcraft-media-crypto",
+ "crewcraft-proto",
+ "crewcraft-server",
+ "crewcraft-server-core",
+ "crewcraft-tls",
+ "ctrlc",
+ "rcgen",
+ "rustls",
+ "str0m",
 ]
 
 [[package]]
@@ -1276,6 +1293,7 @@ dependencies = [
  "crewcraft-desktop-ui",
  "crewcraft-enroll",
  "crewcraft-https",
+ "crewcraft-media-auth",
  "crewcraft-oidc",
  "crewcraft-pki",
  "crewcraft-proto",

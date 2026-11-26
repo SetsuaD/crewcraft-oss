@@ -78,6 +78,23 @@ impl Drop for Scratch {
     }
 }
 
+/// `der` as PEM with `label` (rcgen is built here without its PEM feature).
+fn pem(label: &str, der: &[u8]) -> String {
+    use base64::Engine;
+    let text = base64::engine::general_purpose::STANDARD.encode(der);
+    let lines: Vec<&str> = text.as_bytes().chunks(64).map(|line| std::str::from_utf8(line).unwrap()).collect();
+    format!(
+        "-----BEGIN {label}-----
+{}
+-----END {label}-----
+",
+        lines.join(
+            "
+"
+        )
+    )
+}
+
 /// A test CA: its certificate (PEM) and what signs with it.
 struct Ca {
     pem: String,
@@ -90,7 +107,7 @@ fn ca(name: &str) -> Ca {
     params.distinguished_name.push(DnType::CommonName, name);
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-    let pem = params.self_signed(&key).unwrap().pem();
+    let pem = pem("CERTIFICATE", params.self_signed(&key).unwrap().der());
     Ca { pem, issuer: rcgen::Issuer::new(params, key) }
 }
 
@@ -99,7 +116,7 @@ fn leaf(ca: &Ca, names: Vec<String>, usage: ExtendedKeyUsagePurpose) -> (String,
     let key = KeyPair::generate().unwrap();
     let mut params = CertificateParams::new(names).unwrap();
     params.extended_key_usages = vec![usage];
-    (params.signed_by(&key, &ca.issuer).unwrap().pem(), key.serialize_pem())
+    (pem("CERTIFICATE", params.signed_by(&key, &ca.issuer).unwrap().der()), pem("PRIVATE KEY", &key.serialize_der()))
 }
 
 /// A str0m client on its own loopback UDP socket.
@@ -261,7 +278,8 @@ fn removal_and_the_end_of_a_call_reach_the_media_server_over_mutual_tls() {
     tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut forged = crewcraft_tls::connect(tcp, tls, MEDIA.try_into().unwrap()).unwrap();
     let drop_ana = encode_control(&ControlMessage::DropPerson { seq: 1, call, person: ANA.to_owned() }).unwrap();
-    let refused = forged.write_all(&encode(&drop_ana).unwrap()).and_then(|()| forged.flush()).and_then(|()| read_frame(&mut forged, MAX_CONTROL_MESSAGE));
+    let refused =
+        forged.write_all(&encode(&drop_ana).unwrap()).and_then(|()| forged.flush()).and_then(|()| read_frame(&mut forged, MAX_CONTROL_MESSAGE));
     assert!(!matches!(refused, Ok(Some(_))), "the media server answered a stranger");
     drive(&mut ana, &mut bo, Duration::from_millis(500), |_, _| false);
     assert!(!ana.closed() && !bo.closed(), "a stranger dropped someone");
@@ -330,7 +348,8 @@ fn the_binary_refuses_bad_settings() {
     assert_eq!(usage.status.code(), Some(2), "no settings file is a usage error");
 
     let files = Scratch::new("binary");
-    let settings = "[media]\nserver-name = \"media.example.org\"\nlisten = \"127.0.0.1:0\"\nchat-server-key = \"chat-server.key\"\ncolour = \"blue\"\n";
+    let settings =
+        "[media]\nserver-name = \"media.example.org\"\nlisten = \"127.0.0.1:0\"\nchat-server-key = \"chat-server.key\"\ncolour = \"blue\"\n";
     let path = files.write("media/media.toml", settings.as_bytes(), 0o644);
     let refused = Command::new(binary).arg(&path).output().unwrap();
     assert_eq!(refused.status.code(), Some(1));

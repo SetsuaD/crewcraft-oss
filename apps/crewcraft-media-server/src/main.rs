@@ -19,12 +19,7 @@ fn start(path: &Path) -> io::Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     ctrlc::set_handler(move || flag.store(true, Ordering::Release)).map_err(|error| io::Error::other(error.to_string()))?;
-    println!(
-        "crewcraft-media-server: {} listening on {} (ICE candidate {})",
-        config.settings.server_name,
-        socket.local_addr()?,
-        server.address()
-    );
+    println!("crewcraft-media-server: {} listening on {} (ICE candidate {})", config.settings.server_name, socket.local_addr()?, server.address());
     match &config.settings.control {
         Some(control) => {
             let dir = path.parent().unwrap_or(Path::new("."));
