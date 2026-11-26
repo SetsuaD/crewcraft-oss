@@ -33,6 +33,9 @@ pub enum Command {
     /// Reply to the message at `parent` in `room`, in its thread (task T340b). `text` is trimmed and within
     /// `MAX_DRAFT_CHARS`.
     Reply { room: String, parent: u64, text: String },
+    /// Add (`on`) or take back the reaction with code `reaction` (see `crewcraft_proto::push::REACTIONS`) on the message
+    /// at `target` in `room` (task T341b).
+    React { room: String, target: u64, reaction: u8, on: bool },
     /// Upload the file at `path` to `room`, to attach to the next post there (task T330e).
     Attach { room: String, path: std::path::PathBuf },
     /// Post `text` (may be empty) with `files`, uploads made with `Attach` (task T330e).

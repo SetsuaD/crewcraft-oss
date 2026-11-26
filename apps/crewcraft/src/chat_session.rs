@@ -11,7 +11,7 @@ use crewcraft_client_core::session::{ClientSession, Phase, SessionError};
 use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
-use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_SEARCH, FEATURE_THREADS, Request, Response, SearchHit};
+use crewcraft_proto::request::{FEATURE_FILES, FEATURE_LIST_ROOMS, FEATURE_REACTIONS, FEATURE_SEARCH, FEATURE_THREADS, Request, Response, SearchHit};
 use crewcraft_proto::signin::{self, Opening, SignIn};
 use zeroize::Zeroizing;
 
@@ -291,6 +291,20 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
     /// Whether the server agreed to threads (`request::FEATURE_THREADS`, task T340b).
     pub fn threads(&self) -> bool {
         self.features() & FEATURE_THREADS != 0
+    }
+
+    /// Whether the server agreed to reactions (`request::FEATURE_REACTIONS`, task T341b).
+    pub fn reactions(&self) -> bool {
+        self.features() & FEATURE_REACTIONS != 0
+    }
+
+    /// Add (`on`) or take back a reaction on the message at `target` (task T341b); returns the reaction's cursor.
+    /// `Unsupported` without the feature.
+    pub fn react(&mut self, room: &str, target: u64, reaction: u8, on: bool, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
+        if !self.reactions() {
+            return Err(ChatError::Unsupported);
+        }
+        self.request(Request::React { room: room.to_owned(), target, reaction, on }, now_ms, 0, deadline)
     }
 
     /// Reply to the message at `parent`, in its thread (task T340b); returns the reply's cursor. `Unsupported` without

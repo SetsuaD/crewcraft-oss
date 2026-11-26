@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 crewcraft-client-core.workspace = true
+# The reaction names (T341b).
+crewcraft-proto.workspace = true
 # Themes and the appearance settings file (T314).
 crewcraft-strict-toml.workspace = true
 crewcraft-theme.workspace = true

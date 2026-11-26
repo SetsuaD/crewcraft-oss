@@ -1,0 +1,27 @@
+{
+  "id": "T341b-reactions-app",
+  "title": "Reactions in the app: the choice on a selected message, chips that toggle",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/ui-model/src/lib.rs",
+    "crates/desktop-ui/Cargo.toml",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t341b_reactions_window.rs",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t341b_reactions.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t341b_reactions && cargo test -p crewcraft-desktop-ui --test t341b_reactions_window",
+  "depends_on": [
+    "T341a-reactions",
+    "T340b-threads-app"
+  ],
+  "spec": "The app agrees to FEATURE_REACTIONS. ChatSession::react and SignedInSession::react send Request::React (Unsupported without the feature; Usage for a code outside REACTIONS); SignedInSession::reactions reads RoomView::reactions. Command::React { room, target, reaction, on } goes through the worker as edit does (Failed on refusal), and the worker emits Event::Reactions (Update::Reactions) whenever who reacted with what changes, including an empty list once the last reaction goes. In the window a selected message offers the six reactions by name; choosing one sends React (taking it back when it is already yours) and clears the selection. Under a message, one chip per reaction reads 'Name N', is highlighted when it includes you, names the people on hover, and a click adds yours or takes it back; chips show in the thread pane too.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md"
+  ]
+}
