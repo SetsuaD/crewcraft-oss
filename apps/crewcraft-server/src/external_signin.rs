@@ -124,6 +124,11 @@ impl ExternalSignIn {
         Self { provider, authorizer, require_mfa, pending: Mutex::new(HashMap::new()), last_key_refresh_ms: Mutex::new(None) }
     }
 
+    /// The external authorizer, if one is configured (the session layer re-asks it, task T611j).
+    pub fn authorizer(&self) -> Option<&Arc<dyn Authorizer>> {
+        self.authorizer.as_ref()
+    }
+
     /// Begin a sign-in for `device_id`: a fresh nonce from `random` (replacing any earlier one for this device).
     pub fn begin(&self, device_id: u64, random: [u8; 32], now_ms: u64) -> Result<Start, Refusal> {
         self.start(Pending::Device(device_id), random, now_ms)

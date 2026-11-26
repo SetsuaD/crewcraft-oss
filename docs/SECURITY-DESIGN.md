@@ -410,7 +410,7 @@ bootstrap connection open for up to 330 seconds (the app's window), so the perso
 24 hours of grace from the last confirmation, none for the visitor module). A `deny` ends the person's sessions at the
 next check; signing out and device revocation work as before.
 
-**What is built (tasks T611a to T611i).** The opening and reply for steps 1 and 3 in `crewcraft-proto`, the account
+**What is built (tasks T611a to T611j).** The opening and reply for steps 1 and 3 in `crewcraft-proto`, the account
 binding and the authorization record in the account store, an https client on the server (`crates/https`) for
 discovery, keys, the token exchange and the authorizer, the server's sign-in and its `identity.toml`, and in the app the
 loopback listener, the browser launch, the whole flow, and the sign-in screen's "Sign in with your organization" button
@@ -418,5 +418,7 @@ with a Cancel while the browser page is open (the connection worker runs the flo
 the wait at once). Enrollment through the provider (T611i): the bootstrap messages, the account store's one-record
 activation with the binding, the bootstrap connection's external path (provider calls with no lock held), the server's
 nonces per invitation, and the app's "Enroll with your organization"; an end-to-end test enrolls, signs in and chats
-against a running server with a provider that signs real ID tokens. **Still to build:** an administrator re-binding an
+against a running server with a provider that signs real ID tokens. The recheck while signed in (T611j): each request
+of a bound person checks the stored record, asks the authorizer again when it is due (with no lock held), stores the
+answer first, and a refusal ends that session in the store, so it cannot be resumed. **Still to build:** an administrator re-binding an
 account (audited), and the invitation link naming the way in so the app can show only the right button.

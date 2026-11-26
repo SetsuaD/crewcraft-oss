@@ -1,5 +1,12 @@
 //! Sign-in and per-frame authorization for an admitted CrewCraft device. Task T223. Task T611e adds sign-in through an
 //! external identity provider (`with_external`), for this device's own person only.
+//!
+//! While signed in (task T611j, SECURITY-DESIGN.md section 9): for a person bound to the provider, on a server with an
+//! external authorizer, every request checks the person's stored authorization record by the T600 rules
+//! (`crewcraft_authz`). When the record is due (10 minutes after a good answer, 60 seconds after a failed ask) the
+//! authorizer is asked again (`purpose: recheck`) with no lock held, and the new record is stored before it is used. A
+//! refusal (a `deny`, or no confirmation for longer than the grace) ends this session in the store, so it cannot be
+//! resumed either; the person's other devices stop at their own next request, by the same record.
 
 use std::ops::RangeInclusive;
 use std::sync::{Arc, Mutex};
@@ -7,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use crewcraft_accounts::sessions::token_hash;
 use crewcraft_accounts::sign_in::{Credentials, OwnAccount, verify_own};
 use crewcraft_accounts::throttle::Throttle;
+use crewcraft_authz::{Access, Area, Capability, commit_decision};
+use crewcraft_oidc::Identity;
 use crewcraft_proto::signin::SignIn;
 use crewcraft_server_core::account_store::AccountStore;
 use crewcraft_server_core::devices::Device;
@@ -172,6 +181,9 @@ impl DeviceAuth for StoredDeviceAuth {
         if !self.validity.contains(&unix_seconds(now_ms)) {
             return Ok(None);
         }
+        if !self.still_authorized(session, now_ms)? {
+            return Ok(None);
+        }
         let mut store = self.store.lock().map_err(|_| AuthError::Unavailable)?;
         if !store.healthy() {
             return Err(AuthError::Unavailable);
@@ -186,6 +198,47 @@ impl DeviceAuth for StoredDeviceAuth {
         let result = action();
         drop(store);
         Ok(Some(result))
+    }
+}
+
+impl StoredDeviceAuth {
+    /// Whether this person may still use the session by the external authorizer (task T611j). Always true for a person
+    /// not bound to the provider, or on a server without an authorizer. A refusal ends this session in the store.
+    fn still_authorized(&self, session: &StoredSession, now_ms: u64) -> Result<bool, AuthError> {
+        let Some(authorizer) = self.external.as_ref().and_then(|external| external.authorizer()) else { return Ok(true) };
+        let now = now_ms / 1000;
+        let (record, identity) = {
+            let store = self.store.lock().map_err(|_| AuthError::Unavailable)?;
+            let Some((issuer, subject)) = store.external_of(&self.user) else { return Ok(true) };
+            let identity = Identity {
+                issuer: issuer.to_owned(),
+                subject: subject.to_owned(),
+                email: Some(self.user.clone()),
+                email_verified: false,
+                name: None,
+                amr: Vec::new(),
+            };
+            (store.authorization(&self.user).cloned().unwrap_or_default(), identity)
+        };
+        let access = if now < record.next_check_at {
+            record.current(Area::Staff, now)
+        } else {
+            // The authorizer may be slow or unreachable: it is asked with no lock held.
+            let answer = authorizer.ask(&identity, "recheck");
+            let mut store = self.store.lock().map_err(|_| AuthError::Unavailable)?;
+            // Another connection of this person may have stored a newer record meanwhile: build on what is stored now.
+            let current = store.authorization(&self.user).cloned().unwrap_or_default();
+            let (next, access) = current.recheck(&answer, Area::Staff, now);
+            commit_decision(&mut *store, &self.user, &next, access)
+        };
+        match access {
+            Access::Allowed(capabilities) if capabilities.has(Capability::Use) => Ok(true),
+            _ => {
+                let mut store = self.store.lock().map_err(|_| AuthError::Unavailable)?;
+                let _ = store.end_session_by_hash(&session.0, &self.leaf_der, now_ms);
+                Ok(false)
+            }
+        }
     }
 }
 
