@@ -57,14 +57,7 @@ fn bundle() -> Bundle {
             BundleRoom { key: "ch1".into(), kind: RoomKind::Channel, name: "Project launch".into(), members: vec![ANA.into(), BO.into(), CY.into()] },
         ],
         // Out of time order on purpose: the engine imports oldest first.
-        messages: vec![
-            reply,
-            message("dm1", "d1", ANA, 1, "hello Bo"),
-            message("ch1", "m2", ANA, 2, "launch on Friday?"),
-            with_file,
-            nested,
-            gone,
-        ],
+        messages: vec![reply, message("dm1", "d1", ANA, 1, "hello Bo"), message("ch1", "m2", ANA, 2, "launch on Friday?"), with_file, nested, gone],
     }
 }
 

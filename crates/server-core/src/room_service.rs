@@ -88,7 +88,14 @@ pub struct RoomService {
 impl RoomService {
     /// A room owned by `owner` whose log keeps the newest `capacity` events. Creating it appends no event.
     pub fn new(owner: &str, capacity: usize) -> Self {
-        Self { room: Room::new(owner), log: EventLog::new(capacity), markers: ReadMarkers::new(), deleted: HashSet::new(), reactions: HashMap::new(), read_only: false }
+        Self {
+            room: Room::new(owner),
+            log: EventLog::new(capacity),
+            markers: ReadMarkers::new(),
+            deleted: HashSet::new(),
+            reactions: HashMap::new(),
+            read_only: false,
+        }
     }
 
     /// `Room::add`, then a `Joined { user, role }` event by `actor`. Returns its cursor.
@@ -157,7 +164,8 @@ impl RoomService {
             return Err(ServiceError::NotAllowed);
         }
         if deleted {
-            let event = Event { cursor: self.log.head() + 1, actor: author.to_string(), kind: EventKind::Posted, html: String::new(), mentions: Vec::new() };
+            let event =
+                Event { cursor: self.log.head() + 1, actor: author.to_string(), kind: EventKind::Posted, html: String::new(), mentions: Vec::new() };
             let cursor = self.log.append(event);
             self.deleted.insert(cursor);
             return Ok(cursor);
@@ -175,8 +183,7 @@ impl RoomService {
         let event = self.find_posted(target).ok_or(ServiceError::NoSuchMessage)?;
         let trimmed = Self::check_text(text)?;
         let html = render(&trimmed);
-        let mentions: Vec<String> =
-            mentions(&trimmed).into_iter().filter(|m| self.room.role(m).is_some()).filter(|m| *m != event.actor).collect();
+        let mentions: Vec<String> = mentions(&trimmed).into_iter().filter(|m| self.room.role(m).is_some()).filter(|m| *m != event.actor).collect();
         let new_event = Event { cursor: self.log.head() + 1, actor: event.actor, kind: EventKind::Edited { target }, html, mentions };
         Ok(self.log.append(new_event))
     }

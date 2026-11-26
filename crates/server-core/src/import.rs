@@ -420,8 +420,14 @@ impl DurableServer {
         if parent != 0 {
             self.parents.insert((slug.to_owned(), cursor), parent);
         }
-        let imported =
-            Imported { slug: slug.to_owned(), cursor, sent_ms: message.sent_ms, text: text.to_owned(), deleted: message.deleted, top_level: parent == 0 };
+        let imported = Imported {
+            slug: slug.to_owned(),
+            cursor,
+            sent_ms: message.sent_ms,
+            text: text.to_owned(),
+            deleted: message.deleted,
+            top_level: parent == 0,
+        };
         self.imports.insert_message(external.to_owned(), imported);
         Ok(())
     }
@@ -434,7 +440,12 @@ impl DurableServer {
             cursor
         } else {
             let cursor = self.server.import_edit(&slug, existing.cursor, text).map_err(DurableError::Server)?;
-            self.record(&Op::ImportEdit { slug: slug.clone(), key: external.to_owned(), text: text.to_owned(), edited_ms: message.edited_ms.unwrap_or(0) })?;
+            self.record(&Op::ImportEdit {
+                slug: slug.clone(),
+                key: external.to_owned(),
+                text: text.to_owned(),
+                edited_ms: message.edited_ms.unwrap_or(0),
+            })?;
             cursor
         };
         index_event(&self.server, &mut self.search, &mut self.previews, &slug, ARCHIVE_OWNER, cursor);
