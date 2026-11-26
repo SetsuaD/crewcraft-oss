@@ -1,0 +1,37 @@
+[package]
+name = "crewcraft-media-crypto"
+description = "CrewCraft's own pure-Rust crypto provider for the str0m WebRTC stack: DTLS, SRTP and its hashes, no C"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Everything here is pure Rust (docs/CALLS.md, "The media server's crypto"): no aws-lc, ring, OpenSSL, cc or cmake.
+# The RustCrypto versions are the ones dimpl's RustCrypto mode already uses, so the build carries one copy of each.
+[dependencies]
+# The provider interface str0m calls; "dtls" brings the DTLS types, no backend.
+str0m-proto = { version = "0.8", default-features = false, features = ["dtls"] }
+# DTLS 1.2 and 1.3 in its RustCrypto mode; its default features pull aws-lc and rcgen, so they stay off.
+dimpl = { version = "0.9", default-features = false, features = ["rust-crypto"] }
+# SRTP: AES counter mode (AES_CM_128_HMAC_SHA1_80) and AES-GCM (RFC 7714).
+aes = { version = "0.9", features = ["zeroize"] }
+ctr = "0.10"
+aes-gcm = { version = "0.11", features = ["zeroize"] }
+# HMAC-SHA1 for SRTP and STUN message integrity, SHA-1 and SHA-256 for STUN and certificate fingerprints.
+hmac = "0.13"
+sha1 = "0.11"
+sha2 = "0.11"
+# The DTLS certificate: a P-256 key and a self-signed X.509 certificate, made here instead of with rcgen (which
+# needs aws-lc or ring).
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "pkcs8", "alloc", "std"] }
+x509-cert = { version = "0.3", default-features = false, features = ["builder", "std"] }
+getrandom = "0.3"
+zeroize.workspace = true
+
+[dev-dependencies]
+# The whole stack over the provider: two str0m peers in memory (task T362a's test), with no backend of str0m's own.
+str0m = { version = "0.26", default-features = false }
+
+[lints]
+workspace = true
