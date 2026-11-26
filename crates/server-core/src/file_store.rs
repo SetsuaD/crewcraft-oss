@@ -27,7 +27,10 @@ pub const IMAGE_HEADER_BYTES: usize = 64 * 1024;
 #[derive(Debug)]
 pub enum FinishError {
     /// The bytes written are not the declared length.
-    WrongSize { declared: u64, written: u64 },
+    WrongSize {
+        declared: u64,
+        written: u64,
+    },
     /// The bytes do not hash to the declared SHA-256.
     WrongHash,
     Io(io::Error),

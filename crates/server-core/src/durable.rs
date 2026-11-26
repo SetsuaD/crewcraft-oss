@@ -79,11 +79,7 @@ pub const MAX_FILE_NAME: usize = 255;
 
 /// Whether `name` can name a file: 1 to `MAX_FILE_NAME` bytes, not `.` or `..`, no `/`, `\\` or control character.
 pub fn valid_file_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= MAX_FILE_NAME
-        && name != "."
-        && name != ".."
-        && !name.chars().any(|c| c == '/' || c == '\\' || c.is_control())
+    !name.is_empty() && name.len() <= MAX_FILE_NAME && name != "." && name != ".." && !name.chars().any(|c| c == '/' || c == '\\' || c.is_control())
 }
 
 /// The most hits one search returns (task T320a).

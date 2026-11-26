@@ -20,17 +20,56 @@ pub const MAX_STR: usize = 1 << 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
-    CreateRoom { owner: String, name: String },
-    AddMember { slug: String, actor: String, user: String, role: Role },
-    RemoveMember { slug: String, actor: String, user: String },
-    Post { slug: String, author: String, text: String, now_ms: u64 },
-    Edit { slug: String, actor: String, target: u64, text: String, now_ms: u64 },
-    Delete { slug: String, actor: String, target: u64 },
-    MarkRead { slug: String, user: String, cursor: u64 },
+    CreateRoom {
+        owner: String,
+        name: String,
+    },
+    AddMember {
+        slug: String,
+        actor: String,
+        user: String,
+        role: Role,
+    },
+    RemoveMember {
+        slug: String,
+        actor: String,
+        user: String,
+    },
+    Post {
+        slug: String,
+        author: String,
+        text: String,
+        now_ms: u64,
+    },
+    Edit {
+        slug: String,
+        actor: String,
+        target: u64,
+        text: String,
+        now_ms: u64,
+    },
+    Delete {
+        slug: String,
+        actor: String,
+        target: u64,
+    },
+    MarkRead {
+        slug: String,
+        user: String,
+        cursor: u64,
+    },
     /// A finished upload's record (docs/FILES.md, task T330a): who uploaded which bytes to which room, under which name.
     /// Tag 16 (8 to 15 stay unassigned): `str slug | str uploader | 16 file id | 32 SHA-256 | u64 size | str name | u8 has image size |
     /// [u32 width | u32 height]`.
-    FileStored { slug: String, uploader: String, file: [u8; 16], sha256: [u8; 32], size: u64, name: String, image: Option<(u32, u32)> },
+    FileStored {
+        slug: String,
+        uploader: String,
+        file: [u8; 16],
+        sha256: [u8; 32],
+        size: u64,
+        name: String,
+        image: Option<(u32, u32)>,
+    },
 }
 
 /// `FieldLength` if a string is longer than `MAX_STR` bytes. (Strings may be empty here: `Server` decides what is
