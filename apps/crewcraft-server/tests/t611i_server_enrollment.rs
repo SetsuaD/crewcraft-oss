@@ -115,7 +115,10 @@ fn an_enrollment_is_verified_once_and_apart_from_device_sign_ins() {
     let mut store = AccountStore::create(&path, ServiceKey::from_bytes([7; 32])).unwrap();
     let mut device_bytes = [0; 32];
     device_bytes[0] = 77;
-    assert_eq!(ext.finish(&mut store, "new@example.org", 1, "good-code", VERIFIER, REDIRECT, device_bytes, T0 + 1000).unwrap_err(), Refusal::NoPendingSignIn);
+    assert_eq!(
+        ext.finish(&mut store, "new@example.org", 1, "good-code", VERIFIER, REDIRECT, device_bytes, T0 + 1000).unwrap_err(),
+        Refusal::NoPendingSignIn
+    );
     assert!(verify(&ext, INVITATION, REDIRECT, T0 + 1000).is_ok(), "the enrollment's nonce was still there");
     fs::remove_file(&path).unwrap();
 }
