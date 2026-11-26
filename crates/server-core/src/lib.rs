@@ -25,6 +25,7 @@ pub mod import;
 pub mod import_media;
 pub mod invites;
 pub mod journal;
+pub mod media;
 pub mod mentions;
 pub mod op;
 pub mod presence;

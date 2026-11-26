@@ -3,8 +3,9 @@
 //! media server's (later tasks).
 //!
 //! Owns: `Calls` (the state, rebuilt from the journal), the call journal records' replay (`replay`, called by
-//! `DurableServer::open`), and `DurableServer::call_start/join/heartbeat/leave`, `sweep_calls`, `open_call`,
-//! `missed_calls`. Calls `server::Server` (membership, history lines) and `durable` (records).
+//! `DurableServer::open`), and `DurableServer::call_start/join/heartbeat/leave`, `sweep_calls`, `drop_from_calls`,
+//! `open_call`, `missed_calls`. Calls `server::Server` (membership, history lines), `durable` (records) and `media`
+//! (every leave and end is a `MediaEvent` for the media server, task T360b2).
 //!
 //! Heartbeats are not journaled (one every 20 seconds per person would fill the journal); after a restart each person
 //! still in an open call counts from their last journaled join, so a call nobody returns to is closed then.
@@ -13,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::cursor_log::Since;
 use crate::durable::{DurableError, DurableServer};
+use crate::media::MediaEvent;
 use crate::op::Op;
 use crate::room_service::EventKind;
 use crate::server::Server;
@@ -239,11 +241,14 @@ impl DurableServer {
         self.record(&Op::CallLeave { slug: slug.to_owned(), call, actor: actor.to_owned(), now_ms: at_ms })?;
         let Some(record) = self.calls.open_in_mut(slug, call) else { return Ok(()) };
         forget(record, actor);
-        if record.present.is_empty() {
-            let record = record.clone();
+        let ended = record.present.is_empty().then(|| record.clone());
+        // Out of the call means out of its media at once (task T360b2).
+        self.media.push(MediaEvent::DropPerson { call, person: actor.to_owned() });
+        if let Some(record) = ended {
             self.server.call_line(slug, &record.started_by, call, true, &end_line(&record, at_ms)).map_err(DurableError::Server)?;
             self.record(&Op::CallEnd { slug: slug.to_owned(), call, ended_ms: at_ms })?;
             self.calls.end(call, at_ms);
+            self.media.push(MediaEvent::EndCall { call });
         }
         Ok(())
     }
@@ -267,6 +272,23 @@ impl DurableServer {
             self.leave_at(&slug, &person, call, seen)?;
         }
         Ok(())
+    }
+
+    /// Take `person` out of every open call now (task T360b2): they lost the right to be in any, such as when their
+    /// devices are revoked or the authorizer withdraws their access. Returns how many calls they left.
+    pub fn drop_from_calls(&mut self, person: &str, now_ms: u64) -> Result<usize, DurableError> {
+        self.check_alive()?;
+        let calls: Vec<(String, u64)> = self
+            .calls
+            .calls
+            .values()
+            .filter(|call| call.ended_ms.is_none() && call.present.contains_key(person))
+            .map(|call| (call.room.clone(), call.id))
+            .collect();
+        for (slug, call) in &calls {
+            self.leave_at(slug, person, *call, now_ms)?;
+        }
+        Ok(calls.len())
     }
 
     /// Publish `actor`'s call key for `call` (task T360d2): only someone in the call.

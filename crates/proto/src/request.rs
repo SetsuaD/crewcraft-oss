@@ -62,6 +62,11 @@
 //! `Download` is answered `Ok { cursor: n }` and then by one bytes frame (`encode_bytes`): `u8 tag (134) | u32 id |
 //! u32 n | n bytes`, the file's bytes from `offset`, at most `length` (fewer at the end of the file, none past it).
 //!
+//! With `FEATURE_MEDIA` (task T360b2, docs/CALLS.md "Admission"), a successful `CallStart` or `CallJoin` is followed by
+//! one media frame (`encode_media`): `u8 tag (137) | u32 id | str media server address (1 to MAX_MEDIA_ADDRESS) | u16 n
+//! | n bytes`, the media credential (`crewcraft-media-auth`, 1 to `MAX_CREDENTIAL` bytes) for the signed-in device to
+//! join that call on that media server. A server with no media server configured does not announce the bit.
+//!
 //! `room` is 1 to `message::MAX_NAME` bytes, `text` 0 to `message::MAX_BODY` bytes, `detail` 0 to `MAX_DETAIL` bytes.
 //!
 //! `ListRooms` is an addition to protocol version 1, announced by the handshake feature bit `FEATURE_LIST_ROOMS`. A
@@ -111,6 +116,14 @@ pub const MAX_LISTED_FILES: usize = 500;
 pub const ID_TAG: u8 = 133;
 /// The first byte of a bytes frame (task T330d).
 pub const BYTES_TAG: u8 = 134;
+/// The handshake feature bit for media credentials: the media frame after `CallStart` and `CallJoin` (task T360b2).
+pub const FEATURE_MEDIA: u32 = 512;
+/// The first byte of a media frame (task T360b2).
+pub const MEDIA_TAG: u8 = 137;
+/// The longest media server address in a media frame, in bytes.
+pub const MAX_MEDIA_ADDRESS: usize = 255;
+/// The longest media credential in a media frame, in bytes (a credential with three names of the longest is 1,071).
+pub const MAX_CREDENTIAL: usize = 1200;
 /// The longest file name, in bytes.
 pub const MAX_FILE_NAME: usize = 255;
 /// The most bytes one upload chunk carries.
@@ -1034,6 +1047,45 @@ pub fn decode_bytes(bytes: &[u8]) -> Result<(u32, Vec<u8>), CodecError> {
         return Err(CodecError::TrailingBytes);
     }
     Ok((id, data))
+}
+
+/// Encode the media frame that follows the `Ok` answering `CallStart` or `CallJoin` request `id` (task T360b2): the
+/// media server's `address` and the `credential`. `FieldLength` when either is empty or too long.
+pub fn encode_media(id: u32, address: &str, credential: &[u8]) -> Result<Vec<u8>, CodecError> {
+    if credential.is_empty() || credential.len() > MAX_CREDENTIAL {
+        return Err(CodecError::FieldLength);
+    }
+    let mut out = vec![MEDIA_TAG];
+    out.extend_from_slice(&id.to_be_bytes());
+    write_str(&mut out, address, 1, MAX_MEDIA_ADDRESS)?;
+    out.extend_from_slice(&(credential.len() as u16).to_be_bytes());
+    out.extend_from_slice(credential);
+    Ok(out)
+}
+
+/// Decode exactly one media frame: its request id, the media server's address and the credential. `BadKind` for any
+/// tag but `MEDIA_TAG`, `FieldLength` for an empty or too long field, `Truncated`, then `TrailingBytes`.
+pub fn decode_media(bytes: &[u8]) -> Result<(u32, String, Vec<u8>), CodecError> {
+    let Some(&tag) = bytes.first() else {
+        return Err(CodecError::Truncated);
+    };
+    if tag != MEDIA_TAG {
+        return Err(CodecError::BadKind(tag));
+    }
+    let mut pos: usize = 1;
+    let id = read_u32(bytes, &mut pos)?;
+    let address = read_string(bytes, &mut pos, 1, MAX_MEDIA_ADDRESS)?;
+    let [high, low] = read_array::<2>(bytes, &mut pos)?;
+    let count = usize::from(u16::from_be_bytes([high, low]));
+    if count == 0 || count > MAX_CREDENTIAL {
+        return Err(CodecError::FieldLength);
+    }
+    let end = pos.checked_add(count).filter(|end| *end <= bytes.len()).ok_or(CodecError::Truncated)?;
+    let credential = bytes[pos..end].to_vec();
+    if end != bytes.len() {
+        return Err(CodecError::TrailingBytes);
+    }
+    Ok((id, address, credential))
 }
 
 /// Encode one bounded page of current saved messages (task T343). Rows are strictly ordered so pagination advances.

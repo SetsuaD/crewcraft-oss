@@ -74,17 +74,26 @@ pub struct Connection {
     decoder: Decoder,
     /// The features the handshake agreed on: attachments are pushed only with `FEATURE_FILES` (task T330c).
     features: u32,
+    /// The signed-in device, when the transport knows it: media credentials name it (task T360b2).
+    device: Option<u64>,
 }
 
 impl Connection {
     /// A connection for `user` (already signed in), with nothing buffered.
     pub fn new(user: &str) -> Self {
-        Self { user: user.to_string(), decoder: Decoder::new(), features: 0 }
+        Self { user: user.to_string(), decoder: Decoder::new(), features: 0, device: None }
     }
 
     /// As `new`, for a session whose handshake agreed on `features` (task T330c).
     pub fn with_features(user: &str, features: u32) -> Self {
-        Self { user: user.to_string(), decoder: Decoder::new(), features }
+        Self { user: user.to_string(), decoder: Decoder::new(), features, device: None }
+    }
+
+    /// The same connection, for the signed-in `device` (task T360b2): with `FEATURE_MEDIA` and a media server set, a
+    /// successful `CallStart` or `CallJoin` is followed by a media credential for this device.
+    pub fn with_device(mut self, device: Option<u64>) -> Self {
+        self.device = device;
+        self
     }
 
     /// Feed bytes received from the client at `now_ms`. Bytes are buffered until they form whole frames, so a request
@@ -126,11 +135,12 @@ impl Connection {
         server.check_alive().map_err(DurableConnError::Storage)?;
         // Calls whose people stopped sending heartbeats close first (task T360a1).
         server.sweep_calls(now_ms).map_err(DurableConnError::Storage)?;
+        let media_device = self.device.filter(|_| self.features & crewcraft_proto::request::FEATURE_MEDIA != 0);
         self.receive_with(
             server,
             bytes,
             now_ms,
-            |s, user, request, now| match upload(s, user, request, now).or_else(|| calls(s, user, request, now)) {
+            |s, user, request, now| match upload(s, user, request, now).or_else(|| calls(s, user, request, now, media_device)) {
                 Some(answer) => answer,
                 None => handle_backend(&mut Backend::Durable(s), user, request, now).map(|r| (r, None)).map_err(DurableConnError::Storage),
             },
@@ -187,6 +197,10 @@ impl Connection {
                 }
                 Some(Follow::Saved(page)) => {
                     let frame = crewcraft_proto::request::encode_saved(id, &page).map_err(ConnError::Request)?;
+                    out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
+                }
+                Some(Follow::Media { address, credential }) => {
+                    let frame = crewcraft_proto::request::encode_media(id, &address, &credential).map_err(ConnError::Request)?;
                     out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
                 }
                 None => {}
@@ -289,8 +303,10 @@ fn memory_pin_state(server: &Server, slug: &str, user: &str) -> Option<Push> {
 }
 
 /// Answer a call request over a durable server (task T360a1): `None` for any other request. `Ok { cursor }` carries
-/// the call's id; a refusal is an `Error`; a storage failure is fatal.
-fn calls(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64) -> Option<Result<Answered, DurableConnError>> {
+/// the call's id; a refusal is an `Error`; a storage failure is fatal. With `media_device` (the client agreed to
+/// `FEATURE_MEDIA` and its device is known), a started or joined call is followed by that device's media credential
+/// (task T360b2).
+fn calls(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64, media_device: Option<u64>) -> Option<Result<Answered, DurableConnError>> {
     use crate::calls::CallError;
     let answer = match request {
         Request::CallStart { room, video } => server.call_start(room, user, *video, now_ms),
@@ -302,12 +318,26 @@ fn calls(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64)
         _ => return None,
     };
     Some(match answer {
-        Ok(call) => Ok((Response::Ok { cursor: call }, None)),
+        Ok(call) => {
+            let follow = match (media_device, request) {
+                (Some(device), Request::CallStart { room, .. } | Request::CallJoin { room, .. }) => media_follow(server, room, user, call, device, now_ms),
+                _ => None,
+            };
+            Ok((Response::Ok { cursor: call }, follow))
+        }
         Err(CallError::NotMember) => Ok((refusal_of(crate::dispatch::E_NO_SUCH_ROOM), None)),
         Err(CallError::NotAllowed) => Ok((refusal_of(crate::dispatch::E_NOT_ALLOWED), None)),
         Err(CallError::NoSuchCall) => Ok((refusal_of(crate::dispatch::E_NO_SUCH_CALL), None)),
         Err(CallError::Durable(error)) => Err(DurableConnError::Storage(error)),
     })
+}
+
+/// The media credential frame for `device` of `user`, just admitted to `call` of `room` (task T360b2): none without a
+/// media server.
+fn media_follow(server: &DurableServer, room: &str, user: &str, call: u64, device: u64, now_ms: u64) -> Option<Follow> {
+    let credential = server.media_credential(room, user, call, device, now_ms).ok()??;
+    let address = server.media_address()?.to_owned();
+    Some(Follow::Media { address, credential })
 }
 
 /// The open call of `room` for `user`: its `CallState`, the participants' call keys, and the sender keys sealed to
@@ -406,6 +436,8 @@ enum Follow {
     /// The files frame answering `ListFiles` (task T331a).
     Files(Vec<crewcraft_proto::request::ListedFile>),
     Saved(crewcraft_proto::request::SavedPage),
+    /// The media frame after a started or joined call (task T360b2).
+    Media { address: String, credential: Vec<u8> },
 }
 
 /// A request's answer, and what follows it.

@@ -177,6 +177,10 @@ impl DeviceAuth for StoredDeviceAuth {
         }
     }
 
+    fn device(&self) -> Option<u64> {
+        Some(self.device_id)
+    }
+
     fn with_live_session<T>(&self, session: &Self::Session, now_ms: u64, action: impl FnOnce() -> T) -> Result<Option<T>, AuthError> {
         if !self.validity.contains(&unix_seconds(now_ms)) {
             return Ok(None);
