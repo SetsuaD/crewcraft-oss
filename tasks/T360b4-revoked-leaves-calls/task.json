@@ -1,0 +1,24 @@
+{
+  "id": "T360b4-revoked-leaves-calls",
+  "title": "Withdrawn access takes the person out of every call and its media",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/device_session.rs",
+    "apps/crewcraft-server/src/stored_device_auth.rs",
+    "apps/crewcraft-server/src/lab_server.rs",
+    "apps/crewcraft-server/Cargo.toml",
+    "docs/CALLS.md",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t360b4_revoked_leaves_calls.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t360b4_revoked_leaves_calls",
+  "depends_on": [
+    "T611j-recheck",
+    "T360b2-call-join-credential"
+  ],
+  "spec": "docs/CALLS.md 'Admission: removed means removed'. DeviceAuth::revoked (default false) says a session ended because the person's access was withdrawn; StoredDeviceAuth sets it when the T611j re-check refuses the person (a deny, or no confirmation past the grace) and ends the session. device_session::serve, when with_live_session ends the session and revoked() is true, calls DurableServer::drop_from_calls for the person before returning SessionEnded, so a MediaEvent::DropPerson for each open call they were in goes to the media server. An ordinary end (signing out, an expired certificate) does not. Test: Alice (bound to the provider) and Bob are in a call and admitted to the media core; the authorizer denies Alice at her next request: serving ends with SessionEnded, the room store has exactly DropPerson for Alice, she is out of the call and the media core drops her and keeps Bob; with an authorizer that allows, serving ends normally and nothing changes.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}

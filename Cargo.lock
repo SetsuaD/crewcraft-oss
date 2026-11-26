@@ -1294,7 +1294,9 @@ dependencies = [
  "crewcraft-desktop-ui",
  "crewcraft-enroll",
  "crewcraft-https",
+ "crewcraft-media",
  "crewcraft-media-auth",
+ "crewcraft-media-crypto",
  "crewcraft-oidc",
  "crewcraft-pki",
  "crewcraft-proto",
@@ -1310,6 +1312,7 @@ dependencies = [
  "rustls",
  "serde_json",
  "sha2 0.10.9",
+ "str0m",
  "x509-parser",
  "zeroize",
 ]

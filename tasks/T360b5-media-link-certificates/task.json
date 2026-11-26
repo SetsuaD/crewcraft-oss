@@ -1,0 +1,23 @@
+{
+  "id": "T360b5-media-link-certificates",
+  "title": "The media control link's certificates, issued by the chat server",
+  "crate": "crewcraft-media-server",
+  "files": [
+    "crates/pki/src/lib.rs",
+    "apps/crewcraft-server/src/media_link.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/tests/t360b5_media_link_cert_command.rs",
+    "docs/CALLS.md",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft-media-server/tests/t360b5_media_link_certificates.rs",
+  "test_cmd": "cargo test -p crewcraft-media-server --test t360b5_media_link_certificates",
+  "depends_on": [
+    "T360b3-media-control"
+  ],
+  "spec": "docs/CALLS.md 'Built (T360b3)' and 'Built (T360b5)'. crewcraft-pki: LINK_LIFETIME_SECS (30 days), Authority::server_certificate_for(name, now, lifetime) and client_certificate(common name, now, lifetime) (client authentication only, fresh P-256 key). media_link::issue_link(data, media_out, media server name, now) makes a new link CA (Authority::create_root, its key never written), a server certificate for the media server and a client certificate for the chat server, each LINK_LIFETIME_SECS, and writes CHAT_LINK_FILES (media-ca.pem, media-client.pem, media-client-key.pem) into data and MEDIA_LINK_FILES (media.pem, media-key.pem, chat-ca.pem) into media_out, owner-only, each replaced in one step; it returns the expiry. The chat server's device CA is never used: every enrolled device holds a client certificate from it. `crewcraft-server media-link-cert <data> <name> <out>` runs it. Operator-supplied PEM files keep working. Test: the issued files exist, owner-only, expiring in 30 days; the pair completes the mutual-TLS link (an event from the chat server's link reaches the media server's intake); a client certificate from another issue is answered with nothing and changes nothing; issuing again replaces the files. The command writes both ends and refuses a bad name.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}

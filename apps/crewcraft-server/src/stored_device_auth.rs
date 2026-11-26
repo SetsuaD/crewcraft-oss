@@ -6,9 +6,12 @@
 //! (`crewcraft_authz`). When the record is due (10 minutes after a good answer, 60 seconds after a failed ask) the
 //! authorizer is asked again (`purpose: recheck`) with no lock held, and the new record is stored before it is used. A
 //! refusal (a `deny`, or no confirmation for longer than the grace) ends this session in the store, so it cannot be
-//! resumed either; the person's other devices stop at their own next request, by the same record.
+//! resumed either; the person's other devices stop at their own next request, by the same record. The session layer then
+//! also takes the person out of any open call, so the media server drops them at once (`DeviceAuth::revoked`, task
+//! T360b4).
 
 use std::ops::RangeInclusive;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crewcraft_accounts::sessions::token_hash;
@@ -38,6 +41,8 @@ pub struct StoredDeviceAuth {
     user: String,
     device_id: u64,
     external: Option<Arc<ExternalSignIn>>,
+    /// Set when the authorizer refused this person and their session was ended for it (task T360b4).
+    revoked: AtomicBool,
 }
 
 impl StoredDeviceAuth {
@@ -58,7 +63,16 @@ impl StoredDeviceAuth {
             let mut store = store.lock().map_err(|_| AuthError::Unavailable)?;
             enrolled_device(&mut store, verified_peer_der, now_ms)?
         };
-        Ok(Self { store, throttle, leaf_der: verified_peer_der.to_vec(), validity, user: device.user, device_id: device.id, external: None })
+        Ok(Self {
+            store,
+            throttle,
+            leaf_der: verified_peer_der.to_vec(),
+            validity,
+            user: device.user,
+            device_id: device.id,
+            external: None,
+            revoked: AtomicBool::new(false),
+        })
     }
 }
 
@@ -181,6 +195,10 @@ impl DeviceAuth for StoredDeviceAuth {
         Some(self.device_id)
     }
 
+    fn revoked(&self) -> bool {
+        self.revoked.load(Ordering::Acquire)
+    }
+
     fn with_live_session<T>(&self, session: &Self::Session, now_ms: u64, action: impl FnOnce() -> T) -> Result<Option<T>, AuthError> {
         if !self.validity.contains(&unix_seconds(now_ms)) {
             return Ok(None);
@@ -238,6 +256,7 @@ impl StoredDeviceAuth {
         match access {
             Access::Allowed(capabilities) if capabilities.has(Capability::Use) => Ok(true),
             _ => {
+                self.revoked.store(true, Ordering::Release);
                 let mut store = self.store.lock().map_err(|_| AuthError::Unavailable)?;
                 let _ = store.end_session_by_hash(&session.0, &self.leaf_der, now_ms);
                 Ok(false)
