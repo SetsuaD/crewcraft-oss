@@ -12,7 +12,7 @@ use crewcraft_client_core::notify::Settings;
 use crewcraft_client_core::room_view::Shown;
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
-use crewcraft_proto::request::FEATURE_LIST_ROOMS;
+use crewcraft_proto::request::{FEATURE_LIST_ROOMS, FEATURE_SEARCH, SearchHit};
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
 use zeroize::Zeroizing;
 
@@ -107,7 +107,7 @@ pub(crate) fn valid_room(room: &str) -> bool {
 /// Sign in over a verified device connection and negotiate the chat protocol, all within one operation deadline. The
 /// client offers `FEATURE_LIST_ROOMS`; a server that does not agree to it is still used, without the room list.
 pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str) -> Result<SignedInSession, LabError> {
-    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS, client: client.into() };
+    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH, client: client.into() };
     let settings = Settings::new(credentials.email);
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
@@ -118,7 +118,7 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
 /// As `sign_in`, reopening the session `ticket` names instead (task T240). A ticket the server no longer accepts is
 /// `LabError::Chat(ChatError::SignInRefused)`.
 pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> Result<SignedInSession, LabError> {
-    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS, client: client.into() };
+    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH, client: client.into() };
     let settings = Settings::new(ticket.email());
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
@@ -144,7 +144,7 @@ pub(crate) fn finish_external(
     redirect_uri: &str,
     client: &str,
 ) -> Result<SignedInSession, LabError> {
-    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS, client: client.into() };
+    let hello = Hello { min_version: 1, max_version: 1, features: FEATURE_LIST_ROOMS | FEATURE_SEARCH, client: client.into() };
     let settings = Settings::new(email);
     let set_deadline: SetDeadline = |stream, deadline| stream.get_mut().set_deadline(deadline);
     let deadline = Instant::now() + OPERATION_TIMEOUT;
@@ -212,6 +212,18 @@ impl SignedInSession {
             return Ok(None);
         }
         self.chat.list_rooms(0, Instant::now() + OPERATION_TIMEOUT).map(Some).map_err(LabError::Chat)
+    }
+
+    /// The messages the person can read that match `query`, newest first (task T320c). `None` when the server did not
+    /// agree to `FEATURE_SEARCH` (nothing is sent then). `query` must be 1 to `request::MAX_QUERY` bytes.
+    pub fn search(&mut self, query: &str) -> Result<Option<Vec<SearchHit>>, LabError> {
+        if query.is_empty() || query.len() > crewcraft_proto::request::MAX_QUERY {
+            return Err(LabError::Usage);
+        }
+        if !self.chat.searches() {
+            return Ok(None);
+        }
+        self.chat.search(query, 0, Instant::now() + OPERATION_TIMEOUT).map(Some).map_err(LabError::Chat)
     }
 
     /// Fetch the room's events after the cursor already held and return the acknowledged head and the whole room as

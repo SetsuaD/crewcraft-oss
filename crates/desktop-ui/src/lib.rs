@@ -120,6 +120,11 @@ pub enum Update {
     },
     /// The email address last used to sign in on this device, to fill in the sign-in form.
     LastEmail(String),
+    /// What a message search found (task T320c), newest first.
+    SearchResults {
+        query: String,
+        results: Vec<SearchResult>,
+    },
     /// The app was opened from an invitation link (task T405): fill in the enrollment form's link field. Ignored
     /// unless the enrollment screen is showing. `Debug` does not show the link, which holds a one-time secret.
     InvitationLink(Zeroizing<String>),
@@ -141,6 +146,9 @@ impl fmt::Debug for Update {
             Self::Snapshot { room, shown } => f.debug_struct("Snapshot").field("room", room).field("rows", &shown.len()).finish(),
             Self::Unread { room, unread } => f.debug_struct("Unread").field("room", room).field("unread", unread).finish(),
             Self::LastEmail(email) => f.debug_tuple("LastEmail").field(email).finish(),
+            Self::SearchResults { query, results } => {
+                f.debug_struct("SearchResults").field("query", query).field("results", &results.len()).finish()
+            }
             Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
             Self::WaitingForBrowser => f.write_str("WaitingForBrowser"),
             Self::Failed(text) => f.debug_tuple("Failed").field(text).finish(),
@@ -148,6 +156,18 @@ impl fmt::Debug for Update {
         }
     }
 }
+
+/// One message a search found (task T320c).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchResult {
+    pub room: String,
+    pub cursor: u64,
+    pub author: String,
+    pub snippet: String,
+}
+
+/// The longest message search the window sends, in bytes (`proto::request::MAX_QUERY`).
+pub const MAX_SEARCH_BYTES: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -191,6 +211,10 @@ pub struct Window {
     confirm_delete: bool,
     /// The composer is replacing the text of this message, `(room, cursor)` (T316).
     editing: Option<(String, u64)>,
+    /// The message search box's text (T320c).
+    message_query: String,
+    /// The last search's query and what it found; while set, the main pane shows the results (T320c).
+    results: Option<(String, Vec<SearchResult>)>,
 }
 
 /// What the person did to a message in the feed (T316).
@@ -311,6 +335,7 @@ impl Window {
             Update::Unread { room, unread } => {
                 self.rooms.set_unread(&room, unread);
             }
+            Update::SearchResults { query, results } => self.results = Some((query, results)),
             Update::LastEmail(email) => {
                 if self.email.is_empty() {
                     self.email = email;
@@ -322,6 +347,8 @@ impl Window {
                 self.phone_pane = PhonePane::Chats;
                 self.selected_message = None;
                 self.editing = None;
+                self.results = None;
+                self.message_query.clear();
                 self.feeds.clear();
                 self.rooms = RoomList::new();
                 self.composer = Composer::new();
@@ -468,6 +495,17 @@ impl Window {
                 ui.add_space(16.0);
                 let label = ui.label("Search rooms");
                 ui.add(TextEdit::singleline(&mut self.room_filter).hint_text("Type to filter").desired_width(220.0)).labelled_by(label.id);
+                ui.add_space(16.0);
+                // Message search (T320c): Enter or the button sends it; the main pane then shows what it found.
+                let label = ui.label("Search messages");
+                let search = ui.add(TextEdit::singleline(&mut self.message_query).hint_text("Find a message").desired_width(220.0)).labelled_by(label.id);
+                let enter = search.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+                if ui.button("Search").clicked() || enter {
+                    let query = self.message_query.trim();
+                    if !query.is_empty() && query.len() <= MAX_SEARCH_BYTES {
+                        self.actions.push(Action::Room(Command::Search { query: query.to_owned() }));
+                    }
+                }
                 let total = self.rooms.total_unread();
                 if total > 0 {
                     ui.label(format!("{total} unread"));
@@ -519,6 +557,10 @@ impl Window {
             });
             return;
         };
+        if self.results.is_some() {
+            self.results_ui(ui);
+            return;
+        }
         egui::Panel::top("crewcraft-conversation-header").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading(&room);
@@ -620,6 +662,44 @@ impl Window {
                 });
             }
         }
+    }
+
+    /// What the last message search found, in the main pane (T320c). Opening a result opens its room and closes the
+    /// results.
+    fn results_ui(&mut self, ui: &mut Ui) {
+        let Some((query, results)) = self.results.clone() else { return };
+        let mut open = None;
+        egui::Panel::top("crewcraft-results-header").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading(format!("Messages matching \"{query}\""));
+                if ui.button("Close search").clicked() {
+                    self.results = None;
+                }
+            });
+        });
+        egui::CentralPanel::default_margins().show(ui, |ui| {
+            if results.is_empty() {
+                ui.label("No messages match.");
+            }
+            ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                for result in &results {
+                    let who = if result.author.is_empty() { String::new() } else { format!("{} ", result.author) };
+                    let text = format!("{who}in {}: {}", result.room, result.snippet);
+                    if ui.add(egui::Button::new(text).wrap()).clicked() {
+                        open = Some(result.room.clone());
+                    }
+                }
+            });
+        });
+        if let Some(room) = open {
+            self.results = None;
+            self.open_room(&room);
+        }
+    }
+
+    /// The last message search's query and how many messages it found, while the results are showing (T320c).
+    pub fn search_results(&self) -> Option<(&str, usize)> {
+        self.results.as_ref().map(|(query, results)| (query.as_str(), results.len()))
     }
 
     /// Apply what the person did to a message (T316).

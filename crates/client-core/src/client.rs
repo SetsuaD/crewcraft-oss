@@ -5,7 +5,7 @@
 use crewcraft_proto::frame::{Decoder, FrameError};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{Push, decode_push};
-use crewcraft_proto::request::{ROOMS_TAG, Request, decode_rooms};
+use crewcraft_proto::request::{HITS_TAG, ROOMS_TAG, Request, SearchHit, decode_hits, decode_rooms};
 
 use crate::inbox::Inbox;
 use crate::notify::{Notify, Settings};
@@ -22,6 +22,8 @@ pub enum ClientEvent {
     Ignored { room: String },
     /// The room list that follows the `Ok` answering `ListRooms` request `id`.
     Rooms { id: u32, rooms: Vec<String> },
+    /// The hits that follow the `Ok` answering `Search` request `id` (task T320c).
+    Hits { id: u32, hits: Vec<SearchHit> },
 }
 
 /// A fatal error: the connection must be closed.
@@ -30,7 +32,8 @@ pub enum ClientError {
     /// The frame layer refused the bytes.
     Frame(FrameError),
     /// A frame is neither a response nor a push, or does not decode: `Truncated` for an empty frame, `BadKind(byte)` when
-    /// its first byte is neither a response tag (128, 129), a push tag (64 to 67) nor the room-list tag (131), otherwise the
+    /// its first byte is neither a response tag (128, 129), a push tag (64 to 67), the room-list tag (131) nor the hits
+    /// tag (132), otherwise the
     /// decoder's error.
     Malformed(CodecError),
 }
@@ -101,6 +104,9 @@ impl Client {
             } else if first == ROOMS_TAG {
                 let (id, rooms) = decode_rooms(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Rooms { id, rooms });
+            } else if first == HITS_TAG {
+                let (id, hits) = decode_hits(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Hits { id, hits });
             } else {
                 return Err(ClientError::Malformed(CodecError::BadKind(first)));
             }

@@ -11,7 +11,7 @@ use crewcraft_client_core::session::{ClientSession, Phase, SessionError};
 use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
-use crewcraft_proto::request::{FEATURE_LIST_ROOMS, Request, Response};
+use crewcraft_proto::request::{FEATURE_LIST_ROOMS, FEATURE_SEARCH, Request, Response, SearchHit};
 use crewcraft_proto::signin::{self, Opening, SignIn};
 use zeroize::Zeroizing;
 
@@ -191,6 +191,37 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
                         return Err(ChatError::UnexpectedResponse);
                     }
                     return Ok(rooms);
+                }
+            }
+        }
+    }
+
+    /// Whether the server agreed to `Search` (`request::FEATURE_SEARCH`, task T320c).
+    pub fn searches(&self) -> bool {
+        self.features() & FEATURE_SEARCH != 0
+    }
+
+    /// The messages the signed-in person can read that match `query`, newest first, as the server finds them (task
+    /// T320c). `Unsupported`, with nothing sent, when the server did not agree to `FEATURE_SEARCH`. The answer counts
+    /// the hits that follow; a hits frame of another length is `UnexpectedResponse` and closes the session.
+    pub fn search(&mut self, query: &str, now_ms: u64, deadline: Instant) -> Result<Vec<SearchHit>, ChatError> {
+        if !self.searches() {
+            return Err(ChatError::Unsupported);
+        }
+        let (id, count) = match self.exchange(Request::Search { query: query.to_owned() }, now_ms, 0, deadline)? {
+            (id, Response::Ok { cursor }) => (id, cursor),
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        loop {
+            for event in self.receive(now_ms, 0, deadline)? {
+                if let ClientEvent::Hits { id: answered, hits } = event
+                    && answered == id
+                {
+                    if u64::try_from(hits.len()).ok() != Some(count) {
+                        self.closed = true;
+                        return Err(ChatError::UnexpectedResponse);
+                    }
+                    return Ok(hits);
                 }
             }
         }
