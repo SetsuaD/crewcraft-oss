@@ -948,6 +948,7 @@ dependencies = [
  "crewcraft-pki",
  "crewcraft-proto",
  "crewcraft-server-core",
+ "crewcraft-theme",
  "crewcraft-tls",
  "crewcraft-totp",
  "crewcraft-ui-model",
@@ -1042,6 +1043,8 @@ name = "crewcraft-desktop-ui"
 version = "0.1.0-beta.1"
 dependencies = [
  "crewcraft-client-core",
+ "crewcraft-strict-toml",
+ "crewcraft-theme",
  "crewcraft-ui-model",
  "egui",
  "egui_kittest",

@@ -91,6 +91,8 @@ zbus-secret-service-keyring-store = { version = "1.0.1", default-features = fals
 crewcraft-admission.workspace = true
 crewcraft-pki.workspace = true
 crewcraft-server-core.workspace = true
+# The built-in theme file, as a base for test addons (T314).
+crewcraft-theme.workspace = true
 crewcraft-totp.workspace = true
 # The window, driven headless for the T405 test (as crewcraft-desktop-ui's own tests do).
 egui_kittest = "0.37"
