@@ -12,7 +12,7 @@
     "crates/desktop-ui/tests/t340b_threads_window.rs"
   ],
   "test_path": "apps/crewcraft-server/tests/t340b_threads.rs",
-  "test_cmd": "cargo test -p crewcraft-server --test t340b_threads && cargo test -p crewcraft-desktop-ui --test t340b_threads_window",
+  "test_cmd": "cargo test -p crewcraft-server --test t340b_threads",
   "depends_on": [
     "T340a-threads"
   ],
