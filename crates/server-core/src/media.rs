@@ -80,7 +80,7 @@ impl DurableServer {
 
     /// A media credential for `device` of `actor` to join `call` of `slug`, good for `crewcraft_media_auth::LIFETIME_MS`
     /// from `now_ms`. Only for someone who is a member of the room and in the open call now (`NotMember`,
-    /// `NoSuchCall`). `Ok(None)` when no media server is set, or a name is too long to carry.
+    /// `NoSuchCall`). `Ok(None)` only when no media server is set; `MediaUnusable` when one is set but issuing failed.
     pub fn media_credential(&self, slug: &str, actor: &str, call: u64, device: u64, now_ms: u64) -> Result<Option<Vec<u8>>, CallError> {
         match self.server.room(slug) {
             Ok(room) if room.role(actor).is_some() => {}
@@ -91,7 +91,7 @@ impl DurableServer {
             return Err(CallError::NoSuchCall);
         }
         let Some(media) = &self.media.issuer else { return Ok(None) };
-        Ok(media.issuer.issue(call, slug, actor, device, &media.server_name, now_ms).ok())
+        media.issuer.issue(call, slug, actor, device, &media.server_name, now_ms).map(Some).map_err(|_| CallError::MediaUnusable)
     }
 
     /// The events for the media server since the last call, oldest first.

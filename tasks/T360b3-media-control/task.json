@@ -1,0 +1,43 @@
+{
+  "id": "T360b3-media-control",
+  "title": "The chat server's mutual-TLS control connection to the media server",
+  "crate": "crewcraft-media-server",
+  "files": [
+    "crates/proto/src/lib.rs",
+    "crates/proto/src/media_control.rs",
+    "crates/tls/src/lib.rs",
+    "crates/tls/src/pem.rs",
+    "apps/crewcraft-media/Cargo.toml",
+    "apps/crewcraft-media/src/lib.rs",
+    "apps/crewcraft-media/src/config.rs",
+    "apps/crewcraft-media/src/intake.rs",
+    "apps/crewcraft-media/src/serve.rs",
+    "apps/crewcraft-media/tests/t363b_media_binary.rs",
+    "tasks/T363b-media-binary/test.rs",
+    "tasks/T363b-media-binary/task.json",
+    "apps/crewcraft-media-server/Cargo.toml",
+    "apps/crewcraft-media-server/src/lib.rs",
+    "apps/crewcraft-media-server/src/control.rs",
+    "apps/crewcraft-media-server/src/main.rs",
+    "apps/crewcraft-server/Cargo.toml",
+    "apps/crewcraft-server/src/lib.rs",
+    "apps/crewcraft-server/src/media_link.rs",
+    "apps/crewcraft-server/src/lab_runtime.rs",
+    "apps/crewcraft-server/src/server_install.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "docs/CALLS.md",
+    "docs/NON-RUST-DEPENDENCIES.md",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft-media-server/tests/t360b3_media_control.rs",
+  "test_cmd": "cargo test -p crewcraft-media-server --test t360b3_media_control",
+  "depends_on": [
+    "T360b2-call-join-credential",
+    "T363b-media-binary"
+  ],
+  "spec": "docs/CALLS.md 'Admission' and the control-channel decision of 2026-11-26. crewcraft_proto::media_control: DropPerson (kind 1: u64 seq | u64 call | str person, 1 to 320 bytes), EndCall (kind 2: u64 seq | u64 call), Ack (kind 128: u64 seq), each one frame. The media server binary moves to apps/crewcraft-media-server (crewcraft-media stays the pure-Rust media path); media.toml gains an optional [control] (listen, certificate, owner-only key, chat-server-ca: plain file names). ControlListener accepts TLS 1.3 with a client certificate that must chain to chat-server-ca (crewcraft-tls), at most 4 connections, feeds each message to the serving loop through intake::Handle and acknowledges it. The chat server reads media.toml in its data directory (server-name, address, control, key, ca-bundle, client-certificate, client-key; strict, files owner-only where secret); the media key is made at the first start (owner-only) with key.pub (64 hex characters) beside it; the server announces FEATURE_MEDIA and runs MediaLink beside the listener: every 50 ms it sweeps the calls, takes the MediaEvents and sends each until acknowledged, reconnecting after a second and resending what was not acknowledged. Test: both servers on loopback, two str0m clients over real UDP with credentials from the chat server: removing one from the room closes their media session within three seconds, the call's end closes the other, a client certificate from another CA gets no answer and drops no one; the chat server's media.toml is strict, missing means no media, the key is made once and kept, and a client key others can read is refused; the binary exits 2 without arguments and 1 naming a bad key.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}

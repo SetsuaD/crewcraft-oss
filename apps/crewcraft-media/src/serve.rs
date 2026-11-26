@@ -2,7 +2,7 @@
 //!
 //! Owns: binding the socket from the settings ([`bind`]), the loop itself ([`run`]): requests from the intake,
 //! datagrams in, str0m's timeouts through [`MediaServer::poll`], datagrams out, and the clean shutdown (every session
-//! closed, its goodbye sent). Called by: `main.rs`, and the T363b test on loopback.
+//! closed, its goodbye sent). Called by: the binary (`apps/crewcraft-media-server`), and the T363b test on loopback.
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};

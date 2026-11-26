@@ -1,12 +1,12 @@
 //! T363b: the media server's binary parts (docs/CALLS.md): `media.toml` and the chat server's key are read strictly,
 //! the serving loop runs on a real loopback UDP socket, two str0m clients join through the in-process intake and A1's
 //! audio reaches A2 over real UDP; stopping the loop closes every session (each client is told) and returns, after
-//! which the intake answers that the server has stopped.
+//! which the intake answers that the server has stopped. (The binary itself, and its test, moved to
+//! `apps/crewcraft-media-server` with T360b3.)
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::net::{SocketAddr, UdpSocket};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -207,6 +207,7 @@ fn settings_and_key_are_read_strictly() {
             public_address: None,
             chat_server_key: "chat-server.key".to_owned(),
             max_call_size: 8,
+            control: None,
         }
     );
     let with = |extra: &str| config::parse(&format!("{SETTINGS}{extra}\n"));
@@ -244,18 +245,4 @@ fn settings_and_key_are_read_strictly() {
         let refused = config::load(&path).unwrap_err().to_string();
         assert!(refused.contains("owner-only"), "{refused}");
     }
-}
-
-#[test]
-fn the_binary_refuses_bad_settings() {
-    let binary = Path::new(env!("CARGO_BIN_EXE_crewcraft-media"));
-    let usage = Command::new(binary).output().unwrap();
-    assert_eq!(usage.status.code(), Some(2), "no settings file is a usage error");
-
-    let scratch = Scratch::new("binary");
-    let path = scratch.write("media.toml", &format!("{SETTINGS}colour = \"blue\"\n"), 0o644);
-    let refused = Command::new(binary).arg(&path).output().unwrap();
-    assert_eq!(refused.status.code(), Some(1));
-    let message = String::from_utf8_lossy(&refused.stderr);
-    assert!(message.contains("colour"), "the error names the bad key: {message}");
 }

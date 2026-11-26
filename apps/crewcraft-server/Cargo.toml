@@ -21,6 +21,8 @@ crewcraft-authz.workspace = true
 crewcraft-bootstrap.workspace = true
 crewcraft-enroll.workspace = true
 crewcraft-https.workspace = true
+# media.toml (T360b3): the media key the chat server signs credentials with.
+crewcraft-media-auth = { path = "../../crates/media-auth" }
 crewcraft-oidc.workspace = true
 crewcraft-pki.workspace = true
 crewcraft-proto.workspace = true

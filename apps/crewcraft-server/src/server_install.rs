@@ -240,7 +240,7 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -255,7 +255,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// Read a regular file of at most `limit` bytes. `private` (settings) also requires owner-only permissions on Unix;
 /// the public root may be made readable to others so it can be handed out.
-fn read_file(path: &Path, limit: u64, private: bool) -> io::Result<Vec<u8>> {
+pub(crate) fn read_file(path: &Path, limit: u64, private: bool) -> io::Result<Vec<u8>> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_file() {
         return Err(invalid("installation files must be regular files"));

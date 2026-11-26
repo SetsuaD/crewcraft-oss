@@ -19,8 +19,6 @@ crewcraft-media-crypto = { path = "../../crates/media-crypto" }
 crewcraft-media-auth = { path = "../../crates/media-auth" }
 # media.toml, in the same strict TOML subset as the chat server's settings (T363b).
 crewcraft-strict-toml.workspace = true
-# Stop serving cleanly on Ctrl+C and SIGTERM, as the chat server does (`termination`).
-ctrlc = { version = "3.4", features = ["termination"] }
 
 [lints]
 workspace = true

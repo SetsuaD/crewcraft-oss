@@ -366,14 +366,16 @@ fn calls(
         Err(CallError::NotMember) => Ok((refusal_of(crate::dispatch::E_NO_SUCH_ROOM), None)),
         Err(CallError::NotAllowed) => Ok((refusal_of(crate::dispatch::E_NOT_ALLOWED), None)),
         Err(CallError::NoSuchCall) => Ok((refusal_of(crate::dispatch::E_NO_SUCH_CALL), None)),
+        Err(CallError::MediaUnusable) => Ok((refusal_of(crate::dispatch::E_NOT_ALLOWED), None)),
         Err(CallError::Durable(error)) => Err(DurableConnError::Storage(error)),
     })
 }
 
-/// The media credential frame for `device` of `user`, just admitted to `call` of `room` (task T360b2): none without a
-/// media server.
+/// The media credential frame for `device` of `user`, just admitted to `call` of `room` (task T360b2). None when
+/// issuing failed (`CallError::MediaUnusable`): the person is in the call, without media. A server announces
+/// `FEATURE_MEDIA` only with a media server set, so a client that agreed to it and gets no frame knows issuing failed.
 fn media_follow(server: &DurableServer, room: &str, user: &str, call: u64, device: u64, now_ms: u64) -> Option<Follow> {
-    let credential = server.media_credential(room, user, call, device, now_ms).ok()??;
+    let credential = server.media_credential(room, user, call, device, now_ms).ok().flatten()?;
     let address = server.media_address()?.to_owned();
     Some(Follow::Media { address, credential })
 }

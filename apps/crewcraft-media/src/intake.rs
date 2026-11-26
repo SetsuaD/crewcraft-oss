@@ -4,8 +4,8 @@
 //! Owns: the request shape and an in-process intake ([`channel`]): a [`Handle`] any thread can call, and the
 //! [`ChannelIntake`] the loop drains. Called by: [`crate::serve::run`].
 //!
-//! The chat server's control connection (mutual TLS, docs/CALLS.md "Admission") implements [`Intake`], or feeds a
-//! [`Handle`], in a later task. There is no network control protocol here yet.
+//! The chat server's control connection (mutual TLS, docs/CALLS.md "Admission", task T360b3) lives in the binary,
+//! `apps/crewcraft-media-server`: it feeds a [`Handle`]. Joins have no network intake yet.
 
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
 
@@ -30,7 +30,7 @@ pub trait Intake {
     fn take(&mut self, into: &mut Vec<Request>);
 }
 
-/// An intake with no requests: the binary's, until the chat server's control connection exists.
+/// An intake with no requests: a media server with no control connection configured.
 pub struct NoIntake;
 
 impl Intake for NoIntake {

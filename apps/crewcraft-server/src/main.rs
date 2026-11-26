@@ -559,7 +559,13 @@ fn serve(data: &Path) -> io::Result<()> {
     // identity.toml, if present, adds sign-in through an external identity provider (task T611f). A file that does not
     // check out stops the server with the reason, rather than serving without the sign-in it asks for.
     let external = identity_config::load(data)?;
+    // media.toml, if present, adds media credentials to calls and the media server's control connection (tasks
+    // T360b2, T360b3). Like identity.toml, a file that does not check out stops the server.
+    let media = crewcraft_server::media_link::load(data)?;
     let mut options = config.serve_options();
+    if media.is_some() {
+        options.protocol.features |= crewcraft_proto::request::FEATURE_MEDIA;
+    }
     if external.is_some() {
         // Enrolling through the provider includes the person's sign-in in the browser (task T611i).
         options.timeouts.bootstrap = options.timeouts.bootstrap.max(server_install::EXTERNAL_BOOTSTRAP_TIMEOUT);
@@ -569,6 +575,13 @@ fn serve(data: &Path) -> io::Result<()> {
         Some(external) => {
             println!("External sign-in configured ({})", identity_config::IDENTITY_FILE);
             runtime.with_external(external)
+        }
+        None => runtime,
+    };
+    let runtime = match media {
+        Some((issuer, link)) => {
+            println!("Media server configured ({})", crewcraft_server::media_link::MEDIA_FILE);
+            runtime.with_media(issuer, link)?
         }
         None => runtime,
     };

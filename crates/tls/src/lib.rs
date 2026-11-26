@@ -24,6 +24,7 @@ use rustls::server::{NoServerSessionStorage, VerifierBuilderError, WebPkiClientV
 use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 
 mod deadline;
+pub mod pem;
 pub use deadline::DeadlineSocket;
 
 /// A certificate chain (leaf first) and the private key of its leaf.

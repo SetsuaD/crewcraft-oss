@@ -72,6 +72,8 @@ pub enum CallError {
     NotAllowed,
     /// No such open call in this room, or the person is not in it (for a heartbeat or leave): the client leaves.
     NoSuchCall,
+    /// A media credential could not be issued (a name too long to carry, or the media key failed); task T360b2.
+    MediaUnusable,
     Durable(DurableError),
 }
 
