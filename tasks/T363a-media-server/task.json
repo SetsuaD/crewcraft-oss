@@ -1,0 +1,26 @@
+{
+  "id": "T363a-media-server",
+  "title": "The media server's core: credential admission and forwarding within a call",
+  "crate": "crewcraft-media",
+  "files": [
+    "apps/crewcraft-media/Cargo.toml",
+    "apps/crewcraft-media/src/lib.rs",
+    "crates/media-auth/Cargo.toml",
+    "crates/media-auth/src/lib.rs",
+    "tasks/T360b1-media-credentials/task.json",
+    "tools/rust-only.sh",
+    "docs/NON-RUST-DEPENDENCIES.md",
+    "docs/CALLS.md",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft-media/tests/t363a_media_server.rs",
+  "test_cmd": "cargo test -p crewcraft-media --test t363a_media_server",
+  "depends_on": [
+    "T360b1-media-credentials"
+  ],
+  "spec": "docs/CALLS.md 'The shape', 'Admission' and 'The media server's crypto'. A new app crate crewcraft-media: a Sans-I/O selective forwarding unit on str0m (no crypto backend of its own) and crewcraft_media_crypto::provider(). MediaServer::new(Config { server_name, trusted_key, address }). join(call, credential, offer SDP, now, now_ms) reads the offer first (at most MAX_OFFER_BYTES and MAX_MEDIA sections; a bad one is JoinError::Offer and uses nothing up), then checks the credential with crewcraft-media-auth's Verifier (JoinError::Credential: expired, replayed, wrong server, bad signature), then that it is for the call asked for (WrongCall) and that the call has room (MAX_CALL_SIZE, CallFull); it answers with ICE lite on the one address, Opus only. A participant's sending audio sections are forwarded, frame bytes unchanged, to the receive-only sections of the other participants of the same call (earliest joiner first, no renegotiation) and never to another call. receive(now, source, bytes) routes a datagram to the session that accepts it; poll(now, out) moves time, forwards, returns datagrams to send and the next wake-up, and removes sessions whose connection is gone. remove(id), drop_person(call, person) and end_call(call) drop sessions at once and close them (DTLS close_notify). A device that joins again replaces its old session. crewcraft-media-auth moves from ring to ed25519-dalek so crewcraft-media, crewcraft-media-auth and crewcraft-media-crypto all stay pure Rust (tools/rust-only.sh). Test: three str0m clients in memory, two in call A, one in call B; A1's frames reach A2 byte for byte and in order, never B1 or A1; expired, replayed, wrong-call, wrong-server and forged credentials are refused and a bad offer uses nothing up; a dropped participant receives nothing more and is told its session closed.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}

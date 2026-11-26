@@ -89,6 +89,19 @@ certificate, data both ways), and two str0m peers with no backend of str0m's own
 and carrying an audio stream that never crosses it in the clear. The gate (`tools/rust-only.sh`) fails if the crate's
 dependency tree ever gains C, assembly or a native crypto library.
 
+**Built (T363a).** `apps/crewcraft-media` holds the media server's core, Sans-I/O like str0m: the caller owns the
+UDP socket and the clock. A participant joins with its offer and a media credential, checked against the chat
+server's trusted key (expired, replayed, for another call or another media server, or forged: refused; a bad offer
+uses nothing up). The server answers with ICE lite on its one address, Opus only for now. Each participant's offer has
+one audio section it sends and some it only receives; the server gives each receiving section to another participant
+of the same call, so a new participant is forwarded without renegotiation, and forwards each frame's bytes unchanged,
+never to another call. Dropping a participant (`drop_person`, `end_call`, or its connection going) stops its media at
+once and closes its session. `crewcraft-media-auth` now signs and checks with `ed25519-dalek` instead of `ring`, so the
+media server, its credentials and its crypto are all pure Rust (`tools/rust-only.sh`). The test runs three str0m
+clients against the server in memory. Still to come: the binary (socket loop, configuration, the signalling intake
+that brings offers and credentials), the chat server's control connection that calls `drop_person` and `end_call`,
+`CallJoin` issuing credentials (T360b2), video and keyframe requests, and telling clients who is in which section.
+
 ## Audio (T360e) and video (T360f): decisions first
 
 These need native code or young crates; each is decided when its task starts and recorded in NON-RUST-DEPENDENCIES.md.

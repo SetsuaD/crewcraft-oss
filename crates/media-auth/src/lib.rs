@@ -11,8 +11,9 @@
 
 use std::collections::BTreeMap;
 
-use ring::rand::{SecureRandom, SystemRandom};
-use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
+use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePrivateKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use zeroize::Zeroizing;
 
 /// How long a credential is good for after it is issued (docs/CALLS.md).
 pub const LIFETIME_MS: u64 = 60_000;
@@ -121,36 +122,40 @@ fn parse(bytes: &[u8]) -> Result<(Grant, usize), Error> {
     Ok((Grant { call, room, person, device, media_server, not_after_ms, nonce }, signed))
 }
 
+/// `N` random bytes from the operating system.
+fn random<const N: usize>() -> Result<[u8; N], Error> {
+    let mut out = [0u8; N];
+    getrandom::fill(&mut out).map_err(|_| Error::Unusable)?;
+    Ok(out)
+}
+
 /// The chat server's side: signs credentials with its media key.
 pub struct Issuer {
-    key: Ed25519KeyPair,
-    random: SystemRandom,
+    key: SigningKey,
 }
 
 impl Issuer {
-    /// A new media key, as PKCS#8 bytes for the caller to keep (owner-only, like the server's other keys).
+    /// A new media key, as PKCS#8 bytes (RFC 8410) for the caller to keep (owner-only, like the server's other keys).
     pub fn generate() -> Result<Vec<u8>, Error> {
-        let random = SystemRandom::new();
-        Ed25519KeyPair::generate_pkcs8(&random).map(|doc| doc.as_ref().to_vec()).map_err(|_| Error::Unusable)
+        let seed = Zeroizing::new(random::<32>()?);
+        let key = SigningKey::from_bytes(&seed);
+        key.to_pkcs8_der().map(|doc| doc.as_bytes().to_vec()).map_err(|_| Error::Unusable)
     }
 
     /// The issuer for a media key made by `generate`.
     pub fn from_pkcs8(pkcs8: &[u8]) -> Result<Self, Error> {
-        let key = Ed25519KeyPair::from_pkcs8(pkcs8).map_err(|_| Error::Unusable)?;
-        Ok(Self { key, random: SystemRandom::new() })
+        let key = SigningKey::from_pkcs8_der(pkcs8).map_err(|_| Error::Unusable)?;
+        Ok(Self { key })
     }
 
     /// The public key media servers are configured to trust.
     pub fn public_key(&self) -> [u8; 32] {
-        let mut out = [0u8; 32];
-        out.copy_from_slice(self.key.public_key().as_ref());
-        out
+        self.key.verifying_key().to_bytes()
     }
 
     /// A credential for `person`'s `device` to join `call` of `room` on `media_server`, good for `LIFETIME_MS`.
     pub fn issue(&self, call: u64, room: &str, person: &str, device: u64, media_server: &str, now_ms: u64) -> Result<Vec<u8>, Error> {
-        let mut nonce = [0u8; 16];
-        self.random.fill(&mut nonce).map_err(|_| Error::Unusable)?;
+        let nonce = random::<16>()?;
         let grant = Grant {
             call,
             room: room.to_owned(),
@@ -162,7 +167,7 @@ impl Issuer {
         };
         let mut out = body(&grant)?;
         let signature = self.key.sign(&out);
-        out.extend_from_slice(signature.as_ref());
+        out.extend_from_slice(&signature.to_bytes());
         Ok(out)
     }
 }
@@ -184,7 +189,11 @@ impl Verifier {
     /// expiry, the media server it names, and that it was not used before.
     pub fn verify(&mut self, credential: &[u8], now_ms: u64) -> Result<Grant, Error> {
         let (grant, signed) = parse(credential)?;
-        UnparsedPublicKey::new(&ED25519, self.public_key).verify(&credential[..signed], &credential[signed..]).map_err(|_| Error::BadSignature)?;
+        // Strict verification: refuses non-canonical signatures and weak public keys, so a credential has one valid
+        // signature and a copy cannot be disguised by re-encoding it.
+        let key = VerifyingKey::from_bytes(&self.public_key).map_err(|_| Error::BadSignature)?;
+        let signature = Signature::from_slice(&credential[signed..]).map_err(|_| Error::BadSignature)?;
+        key.verify_strict(&credential[..signed], &signature).map_err(|_| Error::BadSignature)?;
         if now_ms > grant.not_after_ms {
             return Err(Error::Expired);
         }

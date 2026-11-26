@@ -1,0 +1,22 @@
+[package]
+name = "crewcraft-media"
+description = "The CrewCraft media server: a selective forwarding unit for calls, in pure Rust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Pure Rust, like its crypto (docs/CALLS.md "The media server's crypto"): tools/rust-only.sh fails if this crate's
+# dependency tree ever gains C, assembly or a native crypto library.
+[dependencies]
+# WebRTC (ICE, DTLS, SRTP, RTP) with no threads or sockets of its own, so the server owns its socket and timers and
+# tests run in memory. No crypto backend of str0m's own: every one of them links C.
+str0m = { version = "0.26", default-features = false }
+# The DTLS, SRTP and hashes str0m calls (T362a).
+crewcraft-media-crypto = { path = "../../crates/media-crypto" }
+# Checks the chat server's media credentials (T360b1).
+crewcraft-media-auth = { path = "../../crates/media-auth" }
+
+[lints]
+workspace = true
