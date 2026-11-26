@@ -150,6 +150,16 @@ port. To rotate, run it again (it replaces the files), copy the media server's t
 until both have the new files the link refuses to connect and the chat server keeps its events waiting.
 Operator-supplied PEM files still work.
 
+**Built (T360b6).** The join path. A participant sends `CallOffer` (request 31, with `FEATURE_MEDIA`): the room, the call,
+the credential from `CallStart` or `CallJoin` and its WebRTC offer, over its existing device connection. The chat server
+checks under the room lock that the person is a member who is in the open call (a non-member's offer never leaves the
+chat server), then, with no lock held, relays it over the control link (`Join`) and waits for the media server's
+`JoinAnswer` or `JoinRefused`. The client gets `Ok` and an answer frame (tag 140), or an `Error` saying why (the media
+server refused the credential or the offer, the call is full, or the media server cannot be reached). A join is never
+sent twice: its credential admits once. client-core reports the credential (`ClientEvent::Media`) and the answer
+(`ClientEvent::Answer`). The app's call stage and audio devices are not wired yet (they wait on the audio input and
+output decision).
+
 ## Audio (T360e) and video (T360f): decisions first
 
 These need native code or young crates; each is decided when its task starts and recorded in NON-RUST-DEPENDENCIES.md.

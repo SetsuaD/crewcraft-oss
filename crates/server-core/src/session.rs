@@ -67,6 +67,12 @@ impl Session {
         self
     }
 
+    /// The `CallOffer` the connection stopped at, waiting to be relayed and answered (task T360b6;
+    /// `Connection::take_offer`).
+    pub fn take_offer(&mut self) -> Option<crate::connection::PendingOffer> {
+        self.connection.as_mut().and_then(|connection| connection.take_offer())
+    }
+
     pub fn phase(&self) -> Phase {
         self.phase
     }

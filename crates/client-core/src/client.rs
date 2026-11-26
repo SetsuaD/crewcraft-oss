@@ -6,8 +6,8 @@ use crewcraft_proto::frame::{Decoder, FrameError};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{Push, decode_push};
 use crewcraft_proto::request::{
-    BYTES_TAG, FILES_TAG, HITS_TAG, ID_TAG, ListedFile, ROOMS_TAG, Request, SAVED_TAG, SavedPage, SearchHit, decode_bytes, decode_files, decode_hits,
-    decode_id, decode_rooms, decode_saved,
+    ANSWER_TAG, BYTES_TAG, FILES_TAG, HITS_TAG, ID_TAG, ListedFile, MEDIA_TAG, ROOMS_TAG, Request, SAVED_TAG, SavedPage, SearchHit, decode_answer,
+    decode_bytes, decode_files, decode_hits, decode_id, decode_media, decode_rooms, decode_saved,
 };
 
 use crate::inbox::Inbox;
@@ -35,6 +35,11 @@ pub enum ClientEvent {
     Id { id: u32, value: [u8; 16] },
     /// The bytes that follow the `Ok` answering `Download` request `id` (task T330e).
     Bytes { id: u32, data: Vec<u8> },
+    /// The media server's address and this device's media credential, after the `Ok` answering `CallStart` or
+    /// `CallJoin` request `id` with `FEATURE_MEDIA` (task T360b2). The credential goes into a `CallOffer`.
+    Media { id: u32, address: String, credential: Vec<u8> },
+    /// The media server's WebRTC answer (SDP) to the offer of `CallOffer` request `id` (task T360b6).
+    Answer { id: u32, answer: String },
 }
 
 /// A fatal error: the connection must be closed.
@@ -147,6 +152,12 @@ impl Client {
             } else if first == BYTES_TAG {
                 let (id, data) = decode_bytes(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Bytes { id, data });
+            } else if first == MEDIA_TAG {
+                let (id, address, credential) = decode_media(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Media { id, address, credential });
+            } else if first == ANSWER_TAG {
+                let (id, answer) = decode_answer(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Answer { id, answer });
             } else {
                 return Err(ClientError::Malformed(CodecError::BadKind(first)));
             }

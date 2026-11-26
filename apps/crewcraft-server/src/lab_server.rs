@@ -84,6 +84,8 @@ pub struct LabServer {
     config: Arc<ServerConfig>,
     admission: Arc<dyn Admission>,
     rooms: Arc<Mutex<DurableServer>>,
+    /// Where participants' WebRTC offers are relayed, when a media server is configured (task T360b6).
+    relay: Option<Arc<dyn device_session::MediaRelay>>,
 }
 
 impl LabServer {
@@ -124,7 +126,7 @@ impl LabServer {
         }
         let config = server_config(identity, device_roots, admission.clone()).map_err(io::Error::other)?;
         let listener = listen(options.address, options.capacity)?;
-        Ok(Self { listener, timeouts: options.timeouts, protocol: options.protocol, config, admission, rooms: Arc::new(Mutex::new(rooms)) })
+        Ok(Self { listener, timeouts: options.timeouts, protocol: options.protocol, config, admission, rooms: Arc::new(Mutex::new(rooms)), relay: None })
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -134,6 +136,11 @@ impl LabServer {
     /// The room journal the device sessions use, for changes made beside them (the control socket, task T238).
     pub(crate) fn rooms(&self) -> Arc<Mutex<DurableServer>> {
         self.rooms.clone()
+    }
+
+    /// Relay participants' WebRTC offers through `relay` (task T360b6).
+    pub(crate) fn set_relay(&mut self, relay: Arc<dyn device_session::MediaRelay>) {
+        self.relay = Some(relay);
     }
 
     /// The server supplies the trusted Unix clock (milliseconds). Device auth is bound to the verified leaf's DER.
@@ -147,7 +154,7 @@ impl LabServer {
         device_auth: impl Fn(&[u8], u64) -> Result<A, AuthError> + Send + Sync + 'static,
         bootstrap: impl Fn([u8; 32], &mut BootstrapStream) + Send + Sync + 'static,
     ) -> io::Result<()> {
-        let Self { listener, timeouts, protocol, config, admission, rooms } = self;
+        let Self { listener, timeouts, protocol, config, admission, rooms, relay } = self;
         listener.serve(shutdown, move |tcp: TcpStream| {
             // From the socket, before admission: nothing the peer sends can choose the address its limits count against.
             let Ok(peer) = tcp.peer_addr() else { return };
@@ -166,10 +173,11 @@ impl LabServer {
                     }
                     let auth = BeforeSignIn { inner: auth, deadline, signed_in: Cell::new(false) };
                     let mut stream = StreamOwned::new(admitted.stream.conn, DeadlineSocket::new(admitted.stream.sock, deadline));
-                    let _ = device_session::serve(
+                    let _ = device_session::serve_with_media(
                         &mut stream,
                         &auth,
                         &rooms,
+                        relay.as_deref(),
                         protocol.clone(),
                         |stream| {
                             let deadline = if auth.signed_in.get() { cutoff(timeouts.signed_in_frame)? } else { auth.deadline };

@@ -2,7 +2,7 @@
 //! credentials for people in a call, and what the media server must be told when someone leaves a call or it ends.
 //!
 //! Owns: `MediaIssuer` (the chat server's media key, the media server's name and address), `MediaEvent`, and
-//! `DurableServer::set_media`, `media_address`, `media_credential` and `take_media_events`. The events are made where
+//! `DurableServer::set_media`, `media_address`, `media_credential`, `may_offer` (T360b6) and `take_media_events`. The events are made where
 //! people leave calls (`calls::leave_at`: leaving, removal, a stopped heartbeat, a revoked person) and where calls end;
 //! the server binary sends them to the media server over its control connection. Calls `crewcraft-media-auth`.
 
@@ -82,6 +82,23 @@ impl DurableServer {
     /// from `now_ms`. Only for someone who is a member of the room and in the open call now (`NotMember`,
     /// `NoSuchCall`). `Ok(None)` only when no media server is set; `MediaUnusable` when one is set but issuing failed.
     pub fn media_credential(&self, slug: &str, actor: &str, call: u64, device: u64, now_ms: u64) -> Result<Option<Vec<u8>>, CallError> {
+        self.in_call(slug, actor, call)?;
+        let Some(media) = &self.media.issuer else { return Ok(None) };
+        media.issuer.issue(call, slug, actor, device, &media.server_name, now_ms).map(Some).map_err(|_| CallError::MediaUnusable)
+    }
+
+    /// Whether `actor` may send a WebRTC offer for `call` of `slug` to the media server (task T360b6): a media server
+    /// is set (`NotAllowed`), and they are a member of the room (`NotMember`) who is in the open call now (`NoSuchCall`).
+    /// A non-member's offer never leaves the chat server.
+    pub fn may_offer(&self, slug: &str, actor: &str, call: u64) -> Result<(), CallError> {
+        self.in_call(slug, actor, call)?;
+        if self.media.issuer.is_none() {
+            return Err(CallError::NotAllowed);
+        }
+        Ok(())
+    }
+
+    fn in_call(&self, slug: &str, actor: &str, call: u64) -> Result<(), CallError> {
         match self.server.room(slug) {
             Ok(room) if room.role(actor).is_some() => {}
             _ => return Err(CallError::NotMember),
@@ -90,8 +107,7 @@ impl DurableServer {
         if !open.present.contains_key(actor) {
             return Err(CallError::NoSuchCall);
         }
-        let Some(media) = &self.media.issuer else { return Ok(None) };
-        media.issuer.issue(call, slug, actor, device, &media.server_name, now_ms).map(Some).map_err(|_| CallError::MediaUnusable)
+        Ok(())
     }
 
     /// The events for the media server since the last call, oldest first.

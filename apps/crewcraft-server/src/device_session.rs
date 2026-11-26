@@ -8,6 +8,8 @@ use crewcraft_proto::handshake::ServerSide;
 use crewcraft_proto::signin::{
     self, CODE_LEN, MAX_AUTH_CODE_BYTES, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, MAX_REDIRECT_BYTES, MAX_VERIFIER_LEN, Opening, SignIn,
 };
+use crewcraft_proto::request::{Response, encode_answer, encode_response};
+use crewcraft_server_core::connection::PendingOffer;
 use crewcraft_server_core::durable::DurableServer;
 use crewcraft_server_core::session::{DurableSessionError, Phase, Session};
 
@@ -96,11 +98,57 @@ pub enum DeviceSessionError {
     SessionEnded,
     RoomsUnavailable,
     Chat(DurableSessionError),
+    /// A relayed offer's answer could not be encoded (task T360b6).
+    InvalidOfferReply,
 }
 
 impl From<io::Error> for DeviceSessionError {
     fn from(error: io::Error) -> Self {
         Self::Transport(error.kind())
+    }
+}
+
+/// Where a participant's WebRTC offer goes (task T360b6): the media server, over the chat server's control connection.
+pub trait MediaRelay: Send + Sync {
+    /// Relay `offer` with its `credential` for `call` and wait for the media server's SDP answer, or why there is none.
+    fn join(&self, call: u64, credential: &[u8], offer: &str) -> Result<String, RelayRefusal>;
+}
+
+/// Why a relayed offer has no answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayRefusal {
+    /// The media server refused it, with one of `crewcraft_proto::media_control::REFUSED_*`.
+    Refused(u8),
+    /// The media server could not be reached in time.
+    Unavailable,
+}
+
+/// The frames answering `offer`: `Ok` with the call's id and the answer frame, or an `Error` that says why not.
+fn answer_offer(relay: Option<&dyn MediaRelay>, offer: &PendingOffer) -> Result<Vec<u8>, DeviceSessionError> {
+    use crewcraft_proto::media_control::{REFUSED_CALL_FULL, REFUSED_CREDENTIAL, REFUSED_OFFER, REFUSED_WRONG_CALL};
+    use crewcraft_server_core::dispatch::{E_NOT_ALLOWED, E_OTHER};
+    let relayed = relay.map_or(Err(RelayRefusal::Unavailable), |relay| relay.join(offer.call, &offer.credential, &offer.offer));
+    let frame = |payload: Result<Vec<u8>, crewcraft_proto::message::CodecError>| -> Result<Vec<u8>, DeviceSessionError> {
+        frame::encode(&payload.map_err(|_| DeviceSessionError::InvalidOfferReply)?).map_err(|_| DeviceSessionError::InvalidOfferReply)
+    };
+    let refusal = |code: u16, detail: &str| frame(encode_response(offer.id, &Response::Error { code, detail: detail.to_owned() }));
+    match relayed {
+        Ok(answer) => {
+            let mut out = frame(encode_response(offer.id, &Response::Ok { cursor: offer.call }))?;
+            out.extend(frame(encode_answer(offer.id, &answer))?);
+            Ok(out)
+        }
+        Err(RelayRefusal::Refused(reason)) => refusal(
+            E_NOT_ALLOWED,
+            match reason {
+                REFUSED_CREDENTIAL => "the media server refused the credential",
+                REFUSED_OFFER => "the media server refused the offer",
+                REFUSED_WRONG_CALL => "the credential is for another call",
+                REFUSED_CALL_FULL => "the call is full",
+                _ => "the media server is stopping",
+            },
+        ),
+        Err(RelayRefusal::Unavailable) => refusal(E_OTHER, "the media server cannot be reached"),
     }
 }
 
@@ -113,6 +161,20 @@ pub fn serve<S: Read + Write, A: DeviceAuth>(
     stream: &mut S,
     auth: &A,
     rooms: &Mutex<DurableServer>,
+    server_side: ServerSide,
+    reset_deadline: impl FnMut(&mut S) -> io::Result<()>,
+    now_ms: impl FnMut() -> u64,
+) -> Result<(), DeviceSessionError> {
+    serve_with_media(stream, auth, rooms, None, server_side, reset_deadline, now_ms)
+}
+
+/// As `serve`, relaying participants' WebRTC offers through `relay` (task T360b6). An offer is checked under the room
+/// lock (only someone in the call), then relayed with no lock held, and its answer written in request order.
+pub fn serve_with_media<S: Read + Write, A: DeviceAuth>(
+    stream: &mut S,
+    auth: &A,
+    rooms: &Mutex<DurableServer>,
+    relay: Option<&dyn MediaRelay>,
     server_side: ServerSide,
     mut reset_deadline: impl FnMut(&mut S) -> io::Result<()>,
     mut now_ms: impl FnMut() -> u64,
@@ -204,6 +266,12 @@ pub fn serve<S: Read + Write, A: DeviceAuth>(
         if !output.is_empty() {
             reset_deadline(stream)?;
             stream.write_all(&output)?;
+            stream.flush()?;
+        }
+        if let Some(offer) = session.take_offer() {
+            let answer = answer_offer(relay, &offer)?;
+            reset_deadline(stream)?;
+            stream.write_all(&answer)?;
             stream.flush()?;
         }
         if session.phase() == Phase::Closed {

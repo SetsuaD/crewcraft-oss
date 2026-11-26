@@ -57,6 +57,8 @@ impl LabRuntime {
     /// `link` beside the listener to tell that media server whom to drop (task T360b3).
     pub fn with_media(mut self, issuer: crewcraft_server_core::media::MediaIssuer, link: MediaLink) -> io::Result<Self> {
         self.server.rooms().lock().map_err(|_| io::Error::other("the room store is unavailable"))?.set_media(issuer);
+        // Participants' offers go to the media server through the same link (task T360b6).
+        self.server.set_relay(Arc::new(link.relay()));
         self.media = Some(link);
         Ok(self)
     }
