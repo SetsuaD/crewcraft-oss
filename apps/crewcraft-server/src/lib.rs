@@ -5,6 +5,7 @@ pub mod control;
 pub mod device_session;
 pub mod external_signin;
 pub mod identity_config;
+pub mod import_bundle;
 pub mod issuer_custody;
 pub mod lab_admin;
 pub mod lab_bootstrap;
