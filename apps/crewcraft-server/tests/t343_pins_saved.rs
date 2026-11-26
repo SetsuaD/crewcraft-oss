@@ -178,7 +178,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> (Self, Running) {
         let directory = Scratch::new();
-        let setup_time = wall_ms();
+        let setup_time = wall_ms().saturating_sub(300_000);
         let mut state = LabInstallation::initialize(&directory.0.join("server"), setup_time).unwrap();
         let fingerprint = state.issuer.root_fingerprint();
         let root_der = state.issuer.root_certificate().to_vec();
@@ -199,8 +199,17 @@ impl Fixture {
         let running = start(state, setup_time, people.iter().map(|person| person.secret).collect());
         let mut fixture = Self { directory, fingerprint, root_der, room, private_room, people, devices: Vec::new() };
         let endpoint = fixture.endpoint(&running);
-        fixture.devices = fixture.people.iter().map(|person| person.enroll(&endpoint, setup_time)).collect();
-        running.clock.fetch_add(STEP_MS, Ordering::SeqCst);
+        // Redeem and confirmation share the normal per-source limit. Refill it between devices, then use a fresh
+        // TOTP step for sign-in, without sleeping or bypassing any enrollment check.
+        fixture.devices = fixture
+            .people
+            .iter()
+            .map(|person| {
+                let device = person.enroll(&endpoint, running.clock.load(Ordering::SeqCst));
+                running.clock.fetch_add(STEP_MS, Ordering::SeqCst);
+                device
+            })
+            .collect();
         (fixture, running)
     }
 
