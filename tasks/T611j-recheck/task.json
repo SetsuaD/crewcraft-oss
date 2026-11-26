@@ -1,0 +1,22 @@
+{
+  "id": "T611j-recheck",
+  "title": "The external authorizer asked again while signed in; a deny ends the session",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/stored_device_auth.rs",
+    "apps/crewcraft-server/src/external_signin.rs",
+    "docs/SECURITY-DESIGN.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t611j_recheck.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t611j_recheck",
+  "depends_on": [
+    "T611i-app",
+    "T600-authorizer-rules"
+  ],
+  "spec": "On a server with an external authorizer, every request of a person bound to the provider checks their stored authorization record by the T600 rules. Before the record is due, no ask; when due, the authorizer is asked with purpose recheck and no lock held, the new record is stored (built on the record stored at that moment) before it is used, and a refusal ends that session in the store so it cannot be resumed. People not bound to the provider, and servers without an authorizer, are unaffected. End to end: after sign-in, a request five minutes later does not ask; once the authorizer denies and the recheck is due, the next request ends the session, the app is signed out with 'session has ended', signing in again is refused, and the denial is stored.",
+  "status": "done",
+  "context": [
+    "docs/SECURITY-DESIGN.md",
+    "docs/AUTHORIZER.md"
+  ]
+}
