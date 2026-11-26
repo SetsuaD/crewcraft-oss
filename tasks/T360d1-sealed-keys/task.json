@@ -1,0 +1,21 @@
+{
+  "id": "T360d1-sealed-keys",
+  "title": "Sealing a sender's base key to each call participant",
+  "crate": "crewcraft-sframe",
+  "files": [
+    "crates/sframe/src/seal.rs",
+    "crates/sframe/src/lib.rs",
+    "crates/sframe/Cargo.toml",
+    "Cargo.lock"
+  ],
+  "test_path": "crates/sframe/tests/t360d1_sealed_keys.rs",
+  "test_cmd": "cargo test -p crewcraft-sframe --test t360d1_sealed_keys",
+  "depends_on": [
+    "T360c-sframe"
+  ],
+  "spec": "docs/CALLS.md end-to-end encryption, keys. CallKeyPair: an X25519 key pair (generate, from_secret, secret wiped on drop and never in Debug, public_key). seal(recipient public, context, secret): a fresh ephemeral X25519 key; shared = X25519(ephemeral, recipient), refused (BadKey) when all zeros; key = HKDF-SHA256(salt = ephemeral public || recipient public, ikm = shared, info = 'CrewCraft call key seal 1' || context), 32 bytes; AES-256-GCM, zero nonce, context as AAD; box = ephemeral public | ciphertext | tag (OVERHEAD 48 bytes). open(pair, context, box) returns the secret, or Authentication for another recipient, another context or a changed box, Truncated for a short one. The opened key drives SFrame end to end. X25519 from curve25519-dalek (already in the build), HKDF and AES-GCM from ring.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md"
+  ]
+}
