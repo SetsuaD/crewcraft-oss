@@ -54,6 +54,9 @@ pub const MAX_FOLLOWED: usize = 64;
 /// test's or a phone's own.
 pub type Browser = Arc<dyn Fn(&str) -> io::Result<()> + Send + Sync>;
 
+/// A room's open call and its call history lines by cursor (task T360a2).
+type RoomCalls = (Option<crewcraft_client_core::room_view::OpenCall>, Vec<(u64, String)>);
+
 /// How often a call heartbeat is sent (REQUIREMENTS 2.5).
 pub const CALL_HEARTBEAT: Duration = Duration::from_secs(20);
 
@@ -500,7 +503,7 @@ struct Run {
     in_call: Option<(String, u64)>,
     next_heartbeat: Instant,
     /// The last calls state sent, per room (task T360a2).
-    calls_sent: BTreeMap<String, (Option<crewcraft_client_core::room_view::OpenCall>, Vec<(u64, String)>)>,
+    calls_sent: BTreeMap<String, RoomCalls>,
     /// The last archive times sent, per archive room (task T350d2).
     archive_sent: BTreeMap<String, Vec<(u64, u64)>>,
     /// The last reactions sent, per room (task T341b).
