@@ -264,9 +264,7 @@ fn calls(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64)
         Request::CallHeartbeat { room, call } => server.call_heartbeat(room, user, *call, now_ms).map(|()| *call),
         Request::CallLeave { room, call } => server.call_leave(room, user, *call, now_ms).map(|()| *call),
         Request::CallKey { room, call, public } => server.call_key(room, user, *call, *public, now_ms).map(|()| *call),
-        Request::CallSeal { room, call, to, kid, sealed } => {
-            server.call_seal(room, user, *call, to, *kid, sealed.clone(), now_ms).map(|()| *call)
-        }
+        Request::CallSeal { room, call, to, kid, sealed } => server.call_seal(room, user, *call, to, *kid, sealed.clone(), now_ms).map(|()| *call),
         _ => return None,
     };
     Some(match answer {
