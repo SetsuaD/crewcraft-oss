@@ -35,7 +35,6 @@ use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use crewcraft_media_auth::Issuer;
@@ -402,6 +401,7 @@ impl MediaLink {
         let Ok(joins) = self.joins.lock() else { return };
         let mut pending = PendingMedia { waiting: VecDeque::new(), next_seq: 1, overflowed: false };
         let mut next_join: Option<JoinRequest> = None;
+        let mut deferred_guests = VecDeque::new();
         let mut control: Option<Control> = None;
         let mut retry_at = Instant::now();
         while !stopped() {
@@ -410,9 +410,10 @@ impl MediaLink {
                 // A failed sweep is the journal failing; the listener's own requests report that.
                 pending.collect(&mut rooms, now_ms());
             }
-            let staff_offer = next_join.as_ref().is_some_and(|join| matches!(&join.admission, JoinAdmission::Staff { .. }));
-            let work_waiting = !pending.waiting.is_empty() || next_join.is_some();
-            if control.is_none() && work_waiting && (staff_offer || Instant::now() >= retry_at) {
+            let join = next_join.take().or_else(|| deferred_guests.pop_front());
+            let staff_offer = join.as_ref().is_some_and(|join| matches!(&join.admission, JoinAdmission::Staff { .. }));
+            let needs_ordered_link = !pending.waiting.is_empty() || (join.is_some() && !staff_offer);
+            if control.is_none() && needs_ordered_link && Instant::now() >= retry_at {
                 match self.connect() {
                     Ok(connected) => control = Some(connected),
                     Err(_) => retry_at = Instant::now() + RETRY,
@@ -431,20 +432,25 @@ impl MediaLink {
                     pending.waiting.pop_front();
                 }
             }
-            if let Some(join) = next_join.take() {
+            if staff_offer && control.is_none() {
+                // Preserve the existing staff attempt after an event delivery fails.
+                control = self.connect().ok();
+            }
+            if let Some(join) = join {
                 let was_connected = control.is_some();
-                next_join = Self::relay_join(&mut control, &mut pending, join, rooms, now_ms);
+                let deferred = Self::relay_join(&mut control, &mut pending, join, rooms, now_ms);
                 if control.is_none() && was_connected {
                     retry_at = Instant::now() + RETRY;
                 }
-                if next_join.is_some() {
-                    if control.is_none() {
-                        thread::sleep(TICK);
+                if let Some(guest) = deferred {
+                    if deferred_guests.len() == JOIN_QUEUE {
+                        let _ = guest.reply.send(Err(RelayRefusal::Unavailable));
+                    } else {
+                        deferred_guests.push_back(guest);
                     }
-                    continue;
                 }
             }
-            // A waking offer goes through the same sweep and delivery path as an offer received on a tick.
+            // Accept fresh offers even when an earlier guest is waiting for acknowledgements.
             next_join = joins.recv_timeout(TICK).ok();
         }
     }
