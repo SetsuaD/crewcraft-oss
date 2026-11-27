@@ -165,14 +165,14 @@ Use a loopback address and `localhost` or the literal listener address as the ho
 dedicated certificate in `guest-lab.pem` and its private key in the owner-only
 `guest-lab-key.pem`. Startup reports the bound lab address before serving.
 
-The listener serves a fixed page at `GET /guest/` and a static script at `GET /guest/lobby.js`.
-The page accepts an invite code in a field without a form name and clears it after a successful
-knock. Its script handles submission. No code or proof appears in a path, query, cookie, browser
-storage, logs or telemetry. The browser keeps the proof in memory and clears it on confirmed
-leave, a terminal status or page exit. If a leave times out, the page retains the proof for a
-deliberate retry. Closing a tab can discard the local proof without completing a leave. Restoring
-the page from browser history starts a fresh lobby. The script renders meeting and guest strings
-as text.
+The lab API serves a static status page at `GET /guest/`. Guest interaction on that page is a
+separate Rust/WebAssembly client slice, following [SPEC.md section 7](SPEC.md#7-rust-only).
+That client will accept an invite code in a field without a form name and clear it on a successful
+knock. Codes and proofs stay out of URLs, cookies, browser storage, logs and telemetry. The client
+will keep proof in memory and clear it on confirmed leave, a terminal status or page exit. If a
+leave times out, the client will retain proof for a deliberate retry. Closing a tab can discard
+local proof without completing a leave. Restoring from browser history will start a fresh lobby.
+The client will render meeting and guest strings as text.
 
 | JSON request | Body and authentication | Successful response |
 |---|---|---|

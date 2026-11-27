@@ -250,13 +250,13 @@ fn the_browser_lobby_uses_scoped_proofs_and_replays_the_durable_leave() {
     let (meeting, code) = lab.meeting();
     let page = lab.get("/guest/");
     assert_eq!(page.status, 200);
-    assert!(page.body.contains("lobby.js"));
+    assert!(page.body.contains("CrewCraft guest lobby lab"));
     let policy = page.header("content-security-policy").unwrap();
     for restriction in ["form-action 'none'", "frame-ancestors 'none'", "base-uri 'none'"] {
         assert!(policy.contains(restriction));
     }
     assert_eq!(page.header("referrer-policy"), Some("no-referrer"));
-    assert_eq!(lab.get("/guest/lobby.js").status, 200);
+    assert_eq!(lab.get("/guest/lobby.js").status, 404);
 
     let lookup = lab.post("lookup", &json!({ "code": code.0 }), None);
     assert_eq!(lookup.status, 200);

@@ -17,9 +17,8 @@ const MAX_BODY: usize = 4 * 1024;
 const MAX_REPLY: usize = 2 * 1024;
 const JSON: &str = "application/json";
 const PAGE: &str = include_str!("lobby.html");
-const SCRIPT: &str = include_str!("lobby.js");
-const CSP: &str = "default-src 'none'; script-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'";
-const _: () = assert!(PAGE.len() <= 8 * 1024 && SCRIPT.len() <= 8 * 1024);
+const CSP: &str = "default-src 'none'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'";
+const _: () = assert!(PAGE.len() <= 8 * 1024);
 
 enum Problem {
     Malformed,
@@ -43,7 +42,6 @@ impl From<GuestError> for Problem {
 
 enum Route {
     Page,
-    Script,
     Api(ApiRoute),
 }
 
@@ -127,7 +125,6 @@ fn parse_head(bytes: &[u8], authority: &str, origin: &str) -> Result<Option<(Hea
             }
             match request.path {
                 Some("/guest/") => Route::Page,
-                Some("/guest/lobby.js") => Route::Script,
                 _ => return Err(Problem::Refused),
             }
         }
@@ -346,7 +343,6 @@ pub(super) fn serve(
 
     match head.route {
         Route::Page => respond(stream, "200 OK", Some("text/html; charset=utf-8"), PAGE.as_bytes(), false),
-        Route::Script => respond(stream, "200 OK", Some("text/javascript; charset=utf-8"), SCRIPT.as_bytes(), false),
         Route::Api(route) => match route.request(&bytes[head_len..end]).and_then(|request| apply(request, rooms, peer, now)) {
             Ok(reply) => write_reply(stream, reply),
             Err(problem) => write_problem(stream, problem),
