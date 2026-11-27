@@ -955,7 +955,9 @@ impl Window {
                     }
                 });
             }
-            self.chat_ui(ui);
+            // The chat draws in a scope of its own id, so its controls keep their ids whether or not the status line
+            // shows: otherwise a line appearing or going would move keyboard focus off the control that has it.
+            ui.scope_builder(egui::UiBuilder::new().scope_id(egui::Id::new("crewcraft-chat")), |ui| self.chat_ui(ui));
             return;
         }
         egui::CentralPanel::default_margins().show(ui, |ui| {

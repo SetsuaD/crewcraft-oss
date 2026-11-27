@@ -346,8 +346,9 @@ fn each_new_screen_on_the_way_in_is_announced_and_nothing_is_focused() {
     assert_nothing_focused(&h);
 
     // Once focus lands on a control the person is working on the new screen, and the line goes: the status line is
-    // left for changes away from focus.
+    // left for changes away from focus. Focus stays on that control while the line goes.
     press(&mut h, Key::Tab);
     assert!(h.query_by_label("Signed in to CrewCraft.").is_none());
     assert_eq!(h.state().announcement(), None);
+    assert_focused(&h, "Search rooms");
 }
