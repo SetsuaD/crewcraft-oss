@@ -36,7 +36,7 @@ standard egui widgets that should work this way, with no test that proves it. "N
 | Send a message | The message box is named "Message" (tested) | Enter sends, Shift+Enter adds a line (tested: `t305_desktop_window`) | Not verified | As above |
 | Search, open a result | The search box is named (tested) | Enter searches; opening a result moves the window's focus to the message (tested: `t321_search_focus_window`). Whether that also moves egui's keyboard focus there is not verified | Not verified | As above |
 | Threads, reactions, edit and delete, pins | Controls are named (tested in their window tests) | Expected; not tested | Not verified | As above |
-| Attach a file | — | **Not possible**: files are attached only by dropping them onto the window | Not verified | As above |
+| Attach a file | The Attach file button and the path entry are named from their labels (tested) | Attach file opens a path entry that takes focus; Enter attaches, Esc closes, and focus returns to the button (tested by keyboard: `a11y_attach_keyboard`). There is no file browser: the full path is typed or pasted | Not verified | As above |
 
 ## What the apps do today
 
@@ -65,8 +65,10 @@ Each gap names the standard's rule it falls under. The "Known failures" items of
    connection, the connection coming back and every error or hint shown there are announced without moving focus
    (`a11y_announcements` reads the tree and checks focus stays put). Still not announced: a new message in the open
    room, a finished upload, a search result count and "sent".
-2. **Drag-only file attachment** (rule 7, KF "an action that only works by dragging"). The composer says "Drop a file
-   onto the window to attach it", and there is no button or file chooser.
+2. **Closed: drag-only file attachment** (rule 7, KF "an action that only works by dragging"). The composer has an
+   Attach file button that opens a path entry; Enter attaches the file through the same command a dropped file uses.
+   What remains: there is no file browser, so the person types or pastes the file's full path. A browser drawn in
+   egui would need the window to list folders, which it does not do today (it touches no disk).
 3. **Closed: image previews are named** (rule 5). The previews under messages (T333) are image nodes whose name is
    their file name, read back from the tree in `a11y_image_names`. The name is the file name only: CrewCraft has no
    way yet for the sender to write a description of the picture.
@@ -90,7 +92,7 @@ Each gap names the standard's rule it falls under. The "Known failures" items of
 
 ## Next steps, in order
 
-1. A button or file chooser that attaches a file without dragging (gap 2).
+1. Done: a button that attaches a file without dragging (gap 2). A file browser drawn in egui could follow.
 2. Done: names for image previews, from the file name (gap 3).
 3. Announce new messages in the open room, sent messages, upload results and search result counts through the
    status line's live region (the rest of gap 1).
