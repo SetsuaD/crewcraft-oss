@@ -51,8 +51,8 @@ own local work week into a UTC window and shows times in its own zone.
 - **Cancelling** sets `cancelled` and adds one to the version. A cancelled meeting cannot be joined, edited or
   cancelled again. It stays on record, and the calendar shows it marked cancelled.
 - **Joining by id.** `MeetingJoin { meeting }` is enough: the server finds the room. A member joins the room's open
-  call, or starts one if there is none (a Guest-role member can join an open call but not start one, as with
-  `CallStart`), and that call is added to the meeting's `calls`. A meeting can be joined at any time before it is
+  call, or starts one if there is none (a video call; a Guest-role member can join an open call but not start one, as
+  with `CallStart`), and that call is added to the meeting's `calls`. A meeting can be joined at any time before it is
   cancelled; two meetings of one room that overlap share the room's one open call.
 - **Started on the spot** is scheduling a meeting that starts now, then joining it: two requests, no special case.
 - **System lines**, built by the server from the record, never from client text, as `EventKind::MeetingLine`
