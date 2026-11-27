@@ -76,12 +76,12 @@ the window from its local Monday 00:00 to Saturday 00:00 with chrono; client-cor
 Behind the handshake feature bit `FEATURE_MEETINGS` (16384); a client that did not agree to it is never sent the new
 frames and gets `Other` for a meeting line. Strings as elsewhere in `request` (`u16` length).
 
-- Request 35 `MeetingSave`: `str room | u64 meeting (0 makes a new one) | u64 version (0 for new) | u64 start_ms | u16
+- Request 44 `MeetingSave`: `str room | u64 meeting (0 makes a new one) | u64 version (0 for new) | u64 start_ms | u16
   duration minutes | str title | str agenda`. Answered `Ok { cursor }` with the meeting's id, then one meetings frame
   holding the saved meeting.
-- Request 36 `MeetingCancel`: `str room | u64 meeting | u64 version`. Answered `Ok { cursor }` with the new version.
-- Request 37 `MeetingList`: `u64 from_ms | u64 to_ms`. Answered `Ok { cursor: n }`, then one meetings frame.
-- Request 38 `MeetingJoin`: `u64 meeting`. Answered as `CallStart` is: `Ok { cursor }` with the call's id and, with
+- Request 45 `MeetingCancel`: `str room | u64 meeting | u64 version`. Answered `Ok { cursor }` with the new version.
+- Request 46 `MeetingList`: `u64 from_ms | u64 to_ms`. Answered `Ok { cursor: n }`, then one meetings frame.
+- Request 47 `MeetingJoin`: `u64 meeting`. Answered as `CallStart` is: `Ok { cursor }` with the call's id and, with
   `FEATURE_MEDIA`, the media frame.
 - Follow frame 143, meetings: `u8 tag | u32 id | u8 more | u16 n | n × (u64 meeting | str room | u64 version | str
   owner | u8 audience (0 staff) | u64 start_ms | u16 duration | str title | str agenda | u8 state)`, state 0 scheduled,
