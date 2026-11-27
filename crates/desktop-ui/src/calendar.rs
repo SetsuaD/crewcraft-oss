@@ -298,7 +298,7 @@ impl Window {
                     MeetingState::Scheduled | MeetingState::Cancelled => {}
                 }
                 if !meeting.agenda.is_empty() {
-                    ui.label(&meeting.agenda);
+                    ui.label(meeting.agenda.as_str());
                 }
                 if self.calendar.confirm_cancel == Some(meeting.id) {
                     ui.label(format!("Cancel {} for everyone in {}?", meeting.title, meeting.room));
@@ -362,7 +362,7 @@ impl Window {
             }
         }
         if let Some(error) = &form.error {
-            ui.colored_label(ui.visuals().warn_fg_color, error);
+            ui.colored_label(ui.visuals().warn_fg_color, error.as_str());
         }
         let ready = !form.conflict && !form.saving && !form.reloading;
         ui.horizontal_wrapped(|ui| {
@@ -380,6 +380,7 @@ impl Window {
     }
 
     fn calendar_pick(&mut self, pick: Pick) {
+        let start_now = matches!(pick, Pick::StartNow);
         match pick {
             Pick::Join(room, meeting) => self.actions.push(Action::Room(Command::JoinMeeting { room, meeting })),
             Pick::Edit(meeting) => {
@@ -406,7 +407,7 @@ impl Window {
                     Ok(Checked { room, start_ms, duration, title, agenda }) => {
                         form.error = None;
                         form.saving = true;
-                        let command = if matches!(pick, Pick::StartNow) {
+                        let command = if start_now {
                             Command::StartMeetingNow { room, title, duration, agenda }
                         } else {
                             Command::SaveMeeting { room, meeting: form.meeting, version: form.version, start_ms, duration, title, agenda }
