@@ -93,6 +93,14 @@ pub struct GuestMedia {
     pub credential: Vec<u8>,
 }
 
+struct GuestMediaAdmission<'a> {
+    call: u64,
+    room: &'a str,
+    name: &'a str,
+    address: &'a str,
+    expires_ms: u64,
+}
+
 impl fmt::Debug for GuestMedia {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GuestMedia").field("call", &self.call).field("credential", &"[redacted]").finish_non_exhaustive()
@@ -604,6 +612,24 @@ impl DurableServer {
         self.guests.bound.contains_key(&call)
     }
 
+    /// Recheck a guest offer's current call at the trusted relay without using a rate token or issuing a credential.
+    pub fn guest_media_call(&self, proof: &GuestProof, now_ms: u64) -> Result<u64, GuestError> {
+        self.check_alive().map_err(GuestError::Durable)?;
+        Ok(self.guest_media_admission(proof, now_ms)?.call)
+    }
+
+    fn guest_media_admission(&self, proof: &GuestProof, now_ms: u64) -> Result<GuestMediaAdmission<'_>, GuestError> {
+        let visitor = self.guests.authenticate(proof)?;
+        let link = self.guests.live(proof.meeting, now_ms)?;
+        if visitor.state != GuestState::Admitted {
+            return Err(GuestError::NotAllowed);
+        }
+        let meeting = self.meeting(proof.meeting).ok_or(GuestError::NoSuchGuest)?;
+        let call = self.open_call(&meeting.room).filter(|call| self.guests.bound_to(call.id) == Some(proof.meeting)).ok_or(GuestError::LinkClosed)?;
+        let address = self.media_address().ok_or(GuestError::MediaUnavailable)?;
+        Ok(GuestMediaAdmission { call: call.id, room: &meeting.room, name: &visitor.name, address, expires_ms: link.expires_ms })
+    }
+
     pub(crate) fn cancel_guest_schedule(&mut self, actor: &str, meeting: u64, now_ms: u64) -> Result<u64, GuestError> {
         let revision = self.guests.links.get(&meeting).ok_or(GuestError::NoSuchGuest)?.revision;
         let dropping = self.admitted_guests(meeting);
@@ -724,21 +750,17 @@ impl<C: Fn() -> u64> GuestEntrance for GuestAccess<'_, C> {
 
     fn media(&mut self, peer: IpAddr, proof: &GuestProof) -> Result<GuestMedia, GuestError> {
         let now = self.begin(peer)?;
-        let visitor = self.server.guests.authenticate(proof)?;
-        let link = self.server.guests.live(proof.meeting, now)?;
-        if visitor.state != GuestState::Admitted {
-            return Err(GuestError::NotAllowed);
-        }
-        let meeting = self.server.meeting(proof.meeting).ok_or(GuestError::NoSuchGuest)?;
-        let call = self
-            .server
-            .open_call(&meeting.room)
-            .filter(|call| self.server.guests.bound_to(call.id) == Some(proof.meeting))
-            .ok_or(GuestError::LinkClosed)?;
+        let admission = self.server.guest_media_admission(proof, now)?;
         let person = format!("guest:{}", proof.guest);
-        let credential = self.server.guest_media_credential(call.id, &meeting.room, &person, proof.guest, now, link.expires_ms)?;
-        let address = self.server.media_address().ok_or(GuestError::MediaUnavailable)?.to_owned();
-        Ok(GuestMedia { call: call.id, room: meeting.room.clone(), person, label: format!("{} (guest)", visitor.name), address, credential })
+        let credential = self.server.guest_media_credential(admission.call, admission.room, &person, proof.guest, now, admission.expires_ms)?;
+        Ok(GuestMedia {
+            call: admission.call,
+            room: admission.room.to_owned(),
+            person,
+            label: format!("{} (guest)", admission.name),
+            address: admission.address.to_owned(),
+            credential,
+        })
     }
 }
 

@@ -1,0 +1,21 @@
+{
+  "id": "T370e-guest-offer-relay",
+  "title": "Check current guest admission at the media offer relay",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/media_link.rs",
+    "apps/crewcraft-server/tests/t370e_guest_offer_relay.rs",
+    "crates/server-core/src/guests.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t370e_guest_offer_relay.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t370e_guest_offer_relay",
+  "depends_on": [
+    "T370c-guest-meetings"
+  ],
+  "spec": "The trusted guest offer relay keeps the guest proof until it can dispatch an offer over the existing media-control link. Check current admission, expiry and call binding before issuing a media credential. On a successful reply, recheck current admission and the exact call under the room lock before returning the answer. The synchronized local control test exercises an admitted guest and revocation before and during dispatch. Link closure, link expiry and expiry of the host's call heartbeat must also withhold a pending answer. Existing staff media behavior and control messages stay compatible.",
+  "status": "done",
+  "context": [
+    "docs/CALLS.md",
+    "docs/MEETINGS.md"
+  ]
+}

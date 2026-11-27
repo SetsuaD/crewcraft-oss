@@ -30,7 +30,7 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -38,8 +38,9 @@ use std::time::{Duration, Instant};
 
 use crewcraft_media_auth::Issuer;
 use crewcraft_proto::frame::{encode, read_frame};
-use crewcraft_proto::media_control::{ControlMessage, MAX_CONTROL_MESSAGE, decode_control, encode_control};
+use crewcraft_proto::media_control::{ControlMessage, MAX_CONTROL_MESSAGE, REFUSED_CREDENTIAL, decode_control, encode_control};
 use crewcraft_server_core::durable::DurableServer;
+use crewcraft_server_core::guests::{GuestEntrance, GuestError, GuestProof};
 use crewcraft_server_core::media::{MAX_MEDIA_EVENTS, MediaEvent, MediaIssuer};
 use crewcraft_strict_toml as toml;
 use rustls::pki_types::ServerName;
@@ -183,10 +184,36 @@ pub struct MediaLink {
 
 /// One offer to relay, and where its answer goes.
 struct JoinRequest {
-    call: u64,
-    credential: Vec<u8>,
+    admission: JoinAdmission,
     offer: String,
     reply: Sender<Result<String, RelayRefusal>>,
+}
+
+enum JoinAdmission {
+    Staff { call: u64, credential: Vec<u8> },
+    Guest { peer: IpAddr, proof: GuestProof },
+}
+
+struct AuthorizedJoin {
+    call: u64,
+    credential: Vec<u8>,
+    guest: Option<GuestProof>,
+}
+
+impl JoinAdmission {
+    fn authorize(self, rooms: &Mutex<DurableServer>, now_ms: &dyn Fn() -> u64) -> Result<AuthorizedJoin, RelayRefusal> {
+        match self {
+            Self::Staff { call, credential } => Ok(AuthorizedJoin { call, credential, guest: None }),
+            Self::Guest { peer, proof } => {
+                let mut rooms = rooms.lock().map_err(|_| RelayRefusal::Unavailable)?;
+                let media = rooms.guest_entrance(now_ms).media(peer, &proof).map_err(|error| match error {
+                    GuestError::MediaUnavailable | GuestError::Durable(_) => RelayRefusal::Unavailable,
+                    _ => RelayRefusal::Refused(REFUSED_CREDENTIAL),
+                })?;
+                Ok(AuthorizedJoin { call: media.call, credential: media.credential, guest: Some(proof) })
+            }
+        }
+    }
 }
 
 /// How many offers may wait for the link at once; more wait in their own device connection.
@@ -200,8 +227,20 @@ pub struct MediaRelayHandle {
 
 impl MediaRelay for MediaRelayHandle {
     fn join(&self, call: u64, credential: &[u8], offer: &str) -> Result<String, RelayRefusal> {
+        self.submit(JoinAdmission::Staff { call, credential: credential.to_vec() }, offer)
+    }
+}
+
+impl MediaRelayHandle {
+    /// Relay a guest offer from a trusted adapter. The queued request keeps the proof until dispatch,
+    /// when the link can check current admission and issue a credential for the current call.
+    pub fn join_guest(&self, peer: IpAddr, proof: &GuestProof, offer: &str) -> Result<String, RelayRefusal> {
+        self.submit(JoinAdmission::Guest { peer, proof: proof.clone() }, offer)
+    }
+
+    fn submit(&self, admission: JoinAdmission, offer: &str) -> Result<String, RelayRefusal> {
         let (reply, answer) = mpsc::channel();
-        let request = JoinRequest { call, credential: credential.to_vec(), offer: offer.to_owned(), reply };
+        let request = JoinRequest { admission, offer: offer.to_owned(), reply };
         self.joins.send(request).map_err(|_| RelayRefusal::Unavailable)?;
         // Connecting and the exchange each take at most PATIENCE; the link may be busy with one event first.
         answer.recv_timeout(PATIENCE * 3).unwrap_or(Err(RelayRefusal::Unavailable))
@@ -231,26 +270,60 @@ impl MediaLink {
 
     /// Relay `join` as message `seq` and send back the answer. A join is never sent twice (its credential admits once):
     /// a broken connection is `Unavailable`, and the person sends a new offer with a new credential.
-    fn relay_join(&self, control: &mut Option<Control>, seq: u64, join: JoinRequest) {
+    fn relay_join(&self, control: &mut Option<Control>, seq: u64, join: JoinRequest, rooms: &Mutex<DurableServer>, now_ms: &dyn Fn() -> u64) {
         if control.is_none() {
             *control = self.connect().ok();
         }
-        let answer = match control.as_mut() {
-            None => Err(RelayRefusal::Unavailable),
-            Some(connected) => {
-                let message = ControlMessage::Join { seq, call: join.call, credential: join.credential, offer: join.offer };
-                match Self::exchange(connected, &message) {
-                    Ok(ControlMessage::JoinAnswer { seq: answered, answer }) if answered == seq => Ok(answer),
-                    Ok(ControlMessage::JoinRefused { seq: answered, reason }) if answered == seq => Err(RelayRefusal::Refused(reason)),
-                    _ => {
-                        *control = None;
-                        Err(RelayRefusal::Unavailable)
-                    }
-                }
+        let JoinRequest { admission, offer, reply } = join;
+        let Some(connected) = control.as_mut() else {
+            let _ = reply.send(Err(RelayRefusal::Unavailable));
+            return;
+        };
+        if matches!(&admission, JoinAdmission::Guest { .. })
+            && connected.conn.is_handshaking()
+            && connected.conn.complete_io(&mut connected.sock).is_err()
+        {
+            *control = None;
+            let _ = reply.send(Err(RelayRefusal::Unavailable));
+            return;
+        }
+        let AuthorizedJoin { call, credential, guest } = match admission.authorize(rooms, now_ms) {
+            Ok(admitted) => admitted,
+            Err(refusal) => {
+                let _ = reply.send(Err(refusal));
+                return;
             }
         };
-        // The asker may have given up waiting.
-        let _ = join.reply.send(answer);
+        let message = ControlMessage::Join { seq, call, credential, offer };
+        let answer = match Self::exchange(connected, &message) {
+            Ok(ControlMessage::JoinAnswer { seq: answered, answer }) if answered == seq => Ok(answer),
+            Ok(ControlMessage::JoinRefused { seq: answered, reason }) if answered == seq => Err(RelayRefusal::Refused(reason)),
+            _ => {
+                *control = None;
+                Err(RelayRefusal::Unavailable)
+            }
+        };
+        match (answer, guest) {
+            (Ok(answer), Some(proof)) => {
+                // Order delivery of the answer against durable lobby changes without holding the
+                // room lock during the network exchange.
+                let Ok(mut rooms) = rooms.lock() else {
+                    let _ = reply.send(Err(RelayRefusal::Unavailable));
+                    return;
+                };
+                let now = now_ms();
+                let answer = match rooms.sweep_calls(now) {
+                    Err(_) => Err(RelayRefusal::Unavailable),
+                    Ok(()) if rooms.guest_media_call(&proof, now).is_ok_and(|current| current == call) => Ok(answer),
+                    Ok(()) => Err(RelayRefusal::Refused(REFUSED_CREDENTIAL)),
+                };
+                let _ = reply.send(answer);
+            }
+            (answer, _) => {
+                // The asker may have given up waiting.
+                let _ = reply.send(answer);
+            }
+        }
     }
 
     fn connect(&self) -> io::Result<Control> {
@@ -315,7 +388,7 @@ impl MediaLink {
             // Wait for an offer until the next tick: offers go out at once, not on the tick.
             match joins.recv_timeout(TICK) {
                 Ok(join) => {
-                    self.relay_join(&mut control, next_seq, join);
+                    self.relay_join(&mut control, next_seq, join, rooms, now_ms);
                     next_seq += 1;
                 }
                 Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {}
