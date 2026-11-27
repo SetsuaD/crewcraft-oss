@@ -15,6 +15,7 @@ step "tests";    cargo test --workspace --locked
 step "sanitize"; bash tools/sanitize-scan.sh
 step "rust-only"; bash tools/rust-only.sh
 step "agents";   bash tools/agents-check.sh --self-test
+step "task names"; bash tools/task.sh check-names
 step "cargo-deny"
 skipped=""
 case "${CARGO_DENY_REQUIRED:-}" in
@@ -42,9 +43,8 @@ if [ "${1:-}" = "--tasks" ]; then
     [ "$st" = open ] || continue
     tp=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["test_path"])' "$d/task.json")
     cmd=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["test_cmd"])' "$d/task.json")
-    # A task's test_cmd comes from a file a pull request can change, so only the one expected shape is ever run.
-    task_cmd_re='^cargo test -p [a-z0-9-]+ --test t[0-9]+_[a-z0-9_]+$'
-    task_path_re='^((crates|apps)/[a-z0-9-]+|xtask)/tests/t[0-9]+_[a-z0-9_]+\.rs$'
+    # A task's test_cmd comes from a file a pull request can change, so only the expected shapes are ever run.
+    . tools/task-names.sh
     if ! [[ "$tp" =~ $task_path_re ]]; then echo "REFUSED $id: test_path is not under crates/, apps/ or xtask/ with a task test name"; continue; fi
     if ! [[ "$cmd" =~ $task_cmd_re ]]; then echo "REFUSED $id: test_cmd is not 'cargo test -p <crate> --test t<n>_<name>'"; continue; fi
     mkdir -p "$scratch/$(dirname "$tp")"; cp "$d/test.rs" "$scratch/$tp"
