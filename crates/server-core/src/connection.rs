@@ -66,6 +66,15 @@ pub fn to_push(room: &str, cursor: u64, event: &Event) -> Push {
             author: event.actor.clone(),
             text: crate::html_text::html_text(&event.html),
         },
+        EventKind::MeetingLine { meeting, change, version } => Push::MeetingLine {
+            room: room.to_string(),
+            cursor,
+            meeting: *meeting,
+            change: *change,
+            version: *version,
+            author: event.actor.clone(),
+            text: crate::html_text::html_text(&event.html),
+        },
         EventKind::Reacted { target, reaction, on } => {
             Push::Reacted { room: room.to_string(), cursor, target: *target, author: event.actor.clone(), reaction: *reaction, on: *on }
         }
@@ -158,6 +167,7 @@ impl Connection {
                 .or_else(|| upload(s, user, request, now))
                 .or_else(|| calls(s, user, request, now, media_device))
                 .or_else(|| continuation(s, user, request, now))
+                .or_else(|| meetings(s, user, request, now, media_device))
             {
                 Some(answer) => answer,
                 None => handle_backend(&mut Backend::Durable(s), user, request, now).map(|r| (r, None)).map_err(DurableConnError::Storage),
@@ -182,12 +192,14 @@ impl Connection {
             let gap_replay = self.features & crewcraft_proto::request::FEATURE_GAP_REPLAY != 0;
             let continues = self.features & crewcraft_proto::request::FEATURE_CONTINUE != 0;
             let room_settings = self.features & crewcraft_proto::request::FEATURE_ROOM_SETTINGS != 0;
+            let meetings_on = self.features & crewcraft_proto::request::FEATURE_MEETINGS != 0;
             let needs_pins_saved = matches!(request, Request::Pin { .. } | Request::SaveMessage { .. } | Request::ListSaved { .. });
             let (response, follow) = if (needs_pins_saved && !pins_saved)
                 || (matches!(request, Request::MarkUnread { .. }) && !reads)
                 || (matches!(request, Request::Current { .. }) && !gap_replay)
                 || (matches!(request, Request::Continue { .. }) && !continues)
                 || (matches!(request, Request::SetRoomSetting { .. } | Request::ListRoomSettings) && !room_settings)
+                || (is_meeting(&request) && !meetings_on)
             {
                 (refusal_of(crate::dispatch::E_NOT_ALLOWED), None)
             } else {
@@ -226,6 +238,10 @@ impl Connection {
                     let frame = crewcraft_proto::request::encode_continued(id, &room).map_err(ConnError::Request)?;
                     out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
                 }
+                Some(Follow::Meetings(page)) => {
+                    let frame = crewcraft_proto::meeting::encode_meetings(id, &page).map_err(ConnError::Request)?;
+                    out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
+                }
                 Some(Follow::Relay { .. }) | None => {}
             }
 
@@ -260,6 +276,10 @@ impl Connection {
                     }
                     // Nor to continuing archives, past the line that links back to one (task T352).
                     if matches!(push, Push::Continued { .. }) && !continues {
+                        push = Push::Other { room: room.clone(), cursor: ev_cursor };
+                    }
+                    // Nor to meetings, past their system lines (task T370a).
+                    if matches!(push, Push::MeetingLine { .. }) && !meetings_on {
                         push = Push::Other { room: room.clone(), cursor: ev_cursor };
                     }
                     let posted = matches!(push, Push::Posted { .. });
@@ -519,6 +539,57 @@ fn continuation(server: &mut DurableServer, user: &str, request: &Request, now_m
     })
 }
 
+/// Whether `request` is one of the meeting requests, which need `FEATURE_MEETINGS` (task T370a).
+fn is_meeting(request: &Request) -> bool {
+    matches!(request, Request::MeetingSave { .. } | Request::MeetingCancel { .. } | Request::MeetingList { .. } | Request::MeetingJoin { .. })
+}
+
+/// Answer a meeting request over a durable server (task T370a): `None` for any other request. A saved meeting is
+/// answered with its id and followed by a meetings frame holding it; a cancel with the new version; a list with the
+/// count and a meetings frame; a join as `CallStart` is (the call's id, and with `media_device` the media frame). A
+/// refusal is an `Error` (`dispatch::meeting_error_code`); a storage failure is fatal.
+fn meetings(
+    server: &mut DurableServer,
+    user: &str,
+    request: &Request,
+    now_ms: u64,
+    media_device: Option<u64>,
+) -> Option<Result<Answered, DurableConnError>> {
+    use crate::meetings::{Draft, MeetingError};
+    use crewcraft_proto::meeting::MeetingPage;
+    let answer = match request {
+        Request::MeetingSave { room, meeting, version, start_ms, duration, title, agenda } => {
+            let draft = Draft { title, start_ms: *start_ms, duration: *duration, agenda };
+            let saved = if *meeting == 0 {
+                server.schedule_meeting(room, user, &draft, now_ms)
+            } else {
+                server.edit_meeting(room, user, *meeting, *version, &draft, now_ms).map(|_| *meeting)
+            };
+            saved.map(|id| {
+                let page = MeetingPage { meetings: server.meeting_for(user, id).into_iter().collect(), more: false };
+                (Response::Ok { cursor: id }, Some(Follow::Meetings(page)))
+            })
+        }
+        Request::MeetingCancel { room, meeting, version } => {
+            server.cancel_meeting(room, user, *meeting, *version, now_ms).map(|version| (Response::Ok { cursor: version }, None))
+        }
+        Request::MeetingList { from_ms, to_ms } => server
+            .meetings_between(user, *from_ms, *to_ms)
+            .map(|page| (Response::Ok { cursor: page.meetings.len() as u64 }, Some(Follow::Meetings(page)))),
+        Request::MeetingJoin { meeting } => server.join_meeting(user, *meeting, now_ms).map(|(room, call)| {
+            let follow = media_device.and_then(|device| media_follow(server, &room, user, call, device, now_ms));
+            (Response::Ok { cursor: call }, follow)
+        }),
+        _ => return None,
+    };
+    Some(match answer {
+        Ok(answered) => Ok(answered),
+        Err(MeetingError::Durable(DurableError::Server(error))) => Ok((refusal_of(crate::dispatch::error_code(error)), None)),
+        Err(MeetingError::Durable(error)) => Err(DurableConnError::Storage(error)),
+        Err(error) => Ok((refusal_of(crate::dispatch::meeting_error_code(error)), None)),
+    })
+}
+
 /// The media credential frame for `device` of `user`, just admitted to `call` of `room` (task T360b2). None when
 /// issuing failed (`CallError::MediaUnusable`): the person is in the call, without media. A server announces
 /// `FEATURE_MEDIA` only with a media server set, so a client that agreed to it and gets no frame knows issuing failed.
@@ -633,6 +704,8 @@ enum Follow {
     },
     /// The continued frame: the room an archive continues in (task T352).
     Continued(String),
+    /// The meetings frame after a saved meeting or a list (task T370a).
+    Meetings(crewcraft_proto::meeting::MeetingPage),
     /// An offer for the media server: the caller relays it and answers (task T360b6).
     Relay {
         call: u64,

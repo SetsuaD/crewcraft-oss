@@ -50,6 +50,13 @@ pub enum EventKind {
     Continued {
         archive: String,
     },
+    /// A meeting's system line (task T370a): it was scheduled, edited or cancelled, at `version`. The text is in the
+    /// event's `html`.
+    MeetingLine {
+        meeting: u64,
+        change: crewcraft_proto::meeting::MeetingChange,
+        version: u64,
+    },
 }
 
 /// Who reacted to one message: by reaction code, the people, sorted (task T341a).
@@ -378,6 +385,19 @@ impl RoomService {
             cursor: self.log.head() + 1,
             actor: actor.to_string(),
             kind: EventKind::Continued { archive: archive.to_owned() },
+            html: render(text),
+            mentions: Vec::new(),
+        };
+        self.log.append(event)
+    }
+
+    /// Append a meeting's system line by `actor` (task T370a), rendered from `text`, which the caller builds from the
+    /// meeting record. Like a call line it never counts as unread.
+    pub fn meeting_line(&mut self, actor: &str, meeting: u64, change: crewcraft_proto::meeting::MeetingChange, version: u64, text: &str) -> u64 {
+        let event = Event {
+            cursor: self.log.head() + 1,
+            actor: actor.to_string(),
+            kind: EventKind::MeetingLine { meeting, change, version },
             html: render(text),
             mentions: Vec::new(),
         };

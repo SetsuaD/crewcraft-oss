@@ -4,6 +4,7 @@
 //! (through generated bindings). Calls: `crewcraft-proto`. Filled in from milestone M2 (ROADMAP.md).
 
 pub use crewcraft_proto::PROTOCOL_VERSION;
+pub mod calendar;
 pub mod client;
 pub mod inbox;
 pub mod notify;

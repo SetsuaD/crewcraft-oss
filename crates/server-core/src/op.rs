@@ -24,6 +24,10 @@
 //! - tags 25 to 28, calls (task T360a1): 25 `CallStart`: `str slug | u64 call | str actor | u8 video | u64 now_ms`;
 //!   26 `CallJoin` and 27 `CallLeave`: `str slug | u64 call | str actor | u64 now_ms`; 28 `CallEnd`: `str slug | u64
 //!   call | u64 ended_ms`
+//! - tag 40 `Meeting` (task T370a, docs/MEETINGS.md): `u8 kind | str slug | u64 meeting | fields`; kind 1 scheduled:
+//!   `str actor | u64 now_ms | u64 start_ms | u16 duration | str title | str agenda`; kind 2 edited: `str actor | u64
+//!   now_ms | u64 version | u64 start_ms | u16 duration | str title | str agenda`; kind 3 cancelled: `str actor | u64
+//!   now_ms | u64 version`; kind 4 call linked: `u64 call`
 //! - tag 24 `ImportFiles` (task T350e): `str slug | str key | u8 count | count × (str name | u64 size | u8 stored (0 or
 //!   1) | [16 file id when stored])`, the message's whole file list
 //! - tag 34, continuing archives (task T352), then `u8 kind`: kind 1 `ArchiveDirect`: `str slug`, an archive room that
@@ -33,6 +37,19 @@
 use crewcraft_proto::message::CodecError;
 
 use crate::room::Role;
+
+/// One meeting record (task T370a), all under journal tag 40.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MeetingOp {
+    /// A new meeting, version 1.
+    Scheduled { slug: String, meeting: u64, actor: String, now_ms: u64, start_ms: u64, duration: u16, title: String, agenda: String },
+    /// A saved edit, at its new `version`.
+    Edited { slug: String, meeting: u64, actor: String, now_ms: u64, version: u64, start_ms: u64, duration: u16, title: String, agenda: String },
+    /// Cancelled, at its new `version`.
+    Cancelled { slug: String, meeting: u64, actor: String, now_ms: u64, version: u64 },
+    /// The room's call `call` was joined through the meeting.
+    Call { slug: String, meeting: u64, call: u64 },
+}
 
 /// Longest string field, in bytes.
 pub const MAX_STR: usize = 1 << 16;
@@ -194,6 +211,8 @@ pub enum Op {
         now_ms: u64,
         files: Vec<[u8; 16]>,
     },
+    /// A meeting record (task T370a).
+    Meeting(MeetingOp),
     /// A reply in the thread of the message at `parent` (task T340a). Tag 18: `str slug | str author | u64 parent |
     /// str text | u64 now_ms`.
     Reply {
@@ -404,6 +423,7 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             out.extend_from_slice(&target.to_be_bytes());
             out.push(u8::from(*on));
         }
+        Op::Meeting(record) => encode_meeting(&mut out, record)?,
         Op::Reply { slug, author, parent, text, now_ms } => {
             out.push(REPLY);
             encode_str(&mut out, slug)?;
@@ -582,6 +602,13 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
                 return Err(CodecError::TrailingBytes);
             }
             Ok(Op::PostFiles { slug, author, text, now_ms, files })
+        }
+        MEETING => {
+            let op = decode_meeting(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::Meeting(op))
         }
         REPLY => {
             let slug = decode_str(bytes, &mut pos)?;
@@ -785,6 +812,80 @@ const PIN: u8 = 29;
 const SAVE_MESSAGE: u8 = 30;
 const MARK_UNREAD: u8 = 31;
 const ROOM_SETTING: u8 = 32;
+/// The tag of `Op::Meeting` (task T370a).
+const MEETING: u8 = 40;
+
+fn encode_meeting(out: &mut Vec<u8>, record: &MeetingOp) -> Result<(), CodecError> {
+    out.push(MEETING);
+    match record {
+        MeetingOp::Scheduled { slug, meeting, actor, now_ms, start_ms, duration, title, agenda } => {
+            out.push(1);
+            encode_str(out, slug)?;
+            out.extend_from_slice(&meeting.to_be_bytes());
+            encode_str(out, actor)?;
+            out.extend_from_slice(&now_ms.to_be_bytes());
+            out.extend_from_slice(&start_ms.to_be_bytes());
+            out.extend_from_slice(&duration.to_be_bytes());
+            encode_str(out, title)?;
+            encode_str(out, agenda)?;
+        }
+        MeetingOp::Edited { slug, meeting, actor, now_ms, version, start_ms, duration, title, agenda } => {
+            out.push(2);
+            encode_str(out, slug)?;
+            out.extend_from_slice(&meeting.to_be_bytes());
+            encode_str(out, actor)?;
+            out.extend_from_slice(&now_ms.to_be_bytes());
+            out.extend_from_slice(&version.to_be_bytes());
+            out.extend_from_slice(&start_ms.to_be_bytes());
+            out.extend_from_slice(&duration.to_be_bytes());
+            encode_str(out, title)?;
+            encode_str(out, agenda)?;
+        }
+        MeetingOp::Cancelled { slug, meeting, actor, now_ms, version } => {
+            out.push(3);
+            encode_str(out, slug)?;
+            out.extend_from_slice(&meeting.to_be_bytes());
+            encode_str(out, actor)?;
+            out.extend_from_slice(&now_ms.to_be_bytes());
+            out.extend_from_slice(&version.to_be_bytes());
+        }
+        MeetingOp::Call { slug, meeting, call } => {
+            out.push(4);
+            encode_str(out, slug)?;
+            out.extend_from_slice(&meeting.to_be_bytes());
+            out.extend_from_slice(&call.to_be_bytes());
+        }
+    }
+    Ok(())
+}
+
+fn decode_meeting(bytes: &[u8], pos: &mut usize) -> Result<MeetingOp, CodecError> {
+    let [kind] = decode_array::<1>(bytes, pos)?;
+    if !(1..=4).contains(&kind) {
+        return Err(CodecError::BadKind(kind));
+    }
+    let slug = decode_str(bytes, pos)?;
+    let meeting = decode_u64(bytes, pos)?;
+    if kind == 4 {
+        let call = decode_u64(bytes, pos)?;
+        return Ok(MeetingOp::Call { slug, meeting, call });
+    }
+    let actor = decode_str(bytes, pos)?;
+    let now_ms = decode_u64(bytes, pos)?;
+    let version = if kind == 1 { 1 } else { decode_u64(bytes, pos)? };
+    if kind == 3 {
+        return Ok(MeetingOp::Cancelled { slug, meeting, actor, now_ms, version });
+    }
+    let start_ms = decode_u64(bytes, pos)?;
+    let duration = u16::from_be_bytes(decode_array::<2>(bytes, pos)?);
+    let title = decode_str(bytes, pos)?;
+    let agenda = decode_str(bytes, pos)?;
+    Ok(if kind == 1 {
+        MeetingOp::Scheduled { slug, meeting, actor, now_ms, start_ms, duration, title, agenda }
+    } else {
+        MeetingOp::Edited { slug, meeting, actor, now_ms, version, start_ms, duration, title, agenda }
+    })
+}
 
 fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;

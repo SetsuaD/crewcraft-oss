@@ -52,6 +52,15 @@
 //!   own pin, mute and hide settings for a room. See `room_settings` for their fields and the settings frame (141).
 //!   Tags 32 to 40 belong to the enrollment and sign-in openings (`bootstrap`, `signin`) and are never chat requests.
 //!
+//! - tags 44 to 47, meetings (task T370a, docs/MEETINGS.md), announced by `FEATURE_MEETINGS`: 44 `MeetingSave`: `str
+//!   room | u64 meeting (0 makes a new one) | u64 version (0 exactly when meeting is 0) | u64 start_ms | u16 duration
+//!   minutes | str title (1 to meeting::MAX_TITLE_BYTES) | str agenda (0 to MAX_BODY)`, answered `Ok { cursor }` with
+//!   the meeting's id and then a meetings frame (`meeting::encode_meetings`) holding the saved meeting; 45
+//!   `MeetingCancel`: `str room | u64 meeting | u64 version`, answered `Ok { cursor }` with the new version; 46
+//!   `MeetingList`: `u64 from_ms | u64 to_ms`, answered `Ok { cursor: n }` and a meetings frame of the n meetings in
+//!   the person's rooms that overlap the window; 47 `MeetingJoin`: `u64 meeting`, answered as `CallStart` is (the
+//!   call's id, and with `FEATURE_MEDIA` the media frame)
+//!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
 //! - tag 129 `Error`: `u16 code | str detail`
@@ -130,6 +139,8 @@ pub const FEATURE_CONTINUE: u32 = 8192;
 pub const CONTINUED_TAG: u8 = 142;
 /// Personal room settings: `SetRoomSetting`, `ListRoomSettings` and the `RoomSettings` push (task T346).
 pub const FEATURE_ROOM_SETTINGS: u32 = 4096;
+/// Meetings and the calendar: the meeting requests, the meetings frame and the `MeetingLine` push (task T370a).
+pub const FEATURE_MEETINGS: u32 = 16384;
 /// The first byte of a saved-message page.
 pub const SAVED_TAG: u8 = 136;
 /// Sixteen full rendered bodies, including their metadata, fit inside `frame::MAX_FRAME`.
@@ -191,6 +202,10 @@ const CONTINUE: u8 = 43;
 pub const SET_ROOM_SETTING: u8 = 41;
 /// `ListRoomSettings` (task T346).
 pub const LIST_ROOM_SETTINGS: u8 = 42;
+const MEETING_SAVE: u8 = 44;
+const MEETING_CANCEL: u8 = 45;
+const MEETING_LIST: u8 = 46;
+const MEETING_JOIN: u8 = 47;
 /// The largest sealed sender key a `CallSeal` carries.
 pub const MAX_SEALED: usize = 256;
 /// The most files one `PostFiles` attaches (task T330c).
@@ -352,6 +367,32 @@ pub enum Request {
         call: u64,
         credential: Vec<u8>,
         offer: String,
+    },
+    /// Schedule a meeting in `room` (`meeting` and `version` 0), or edit meeting `meeting` last seen at `version`
+    /// (task T370a). `start_ms` is UTC; `duration` is in minutes.
+    MeetingSave {
+        room: String,
+        meeting: u64,
+        version: u64,
+        start_ms: u64,
+        duration: u16,
+        title: String,
+        agenda: String,
+    },
+    /// Cancel meeting `meeting` of `room`, last seen at `version` (task T370a).
+    MeetingCancel {
+        room: String,
+        meeting: u64,
+        version: u64,
+    },
+    /// The meetings in the signed-in person's rooms that overlap `from_ms` to `to_ms`, UTC (task T370a).
+    MeetingList {
+        from_ms: u64,
+        to_ms: u64,
+    },
+    /// Join meeting `meeting`'s call: its room's open call, or a new one (task T370a).
+    MeetingJoin {
+        meeting: u64,
     },
 }
 
@@ -654,6 +695,38 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             write_str(&mut out, room, 1, MAX_NAME)?;
             out.extend_from_slice(&call.to_be_bytes());
         }
+        Request::MeetingSave { room, meeting, version, start_ms, duration, title, agenda } => {
+            if (*meeting == 0) != (*version == 0) {
+                return Err(CodecError::FieldLength);
+            }
+            out.push(MEETING_SAVE);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&meeting.to_be_bytes());
+            out.extend_from_slice(&version.to_be_bytes());
+            out.extend_from_slice(&start_ms.to_be_bytes());
+            out.extend_from_slice(&duration.to_be_bytes());
+            write_str(&mut out, title, 1, crate::meeting::MAX_TITLE_BYTES)?;
+            write_str(&mut out, agenda, 0, MAX_BODY)?;
+        }
+        Request::MeetingCancel { room, meeting, version } => {
+            out.push(MEETING_CANCEL);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&meeting.to_be_bytes());
+            out.extend_from_slice(&version.to_be_bytes());
+        }
+        Request::MeetingList { from_ms, to_ms } => {
+            out.push(MEETING_LIST);
+            out.extend_from_slice(&id.to_be_bytes());
+            out.extend_from_slice(&from_ms.to_be_bytes());
+            out.extend_from_slice(&to_ms.to_be_bytes());
+        }
+        Request::MeetingJoin { meeting } => {
+            out.push(MEETING_JOIN);
+            out.extend_from_slice(&id.to_be_bytes());
+            out.extend_from_slice(&meeting.to_be_bytes());
+        }
         Request::Download { file, offset, length } => {
             if *length == 0 || *length as usize > MAX_CHUNK {
                 return Err(CodecError::FieldLength);
@@ -695,6 +768,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
                 | LIST_ROOM_SETTINGS
         )
         && !(CALL_START..=STORAGE_USE).contains(&tag)
+        && !(MEETING_SAVE..=MEETING_JOIN).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -871,6 +945,31 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
                 _ => Request::CallLeave { room, call },
             }
         }
+        MEETING_SAVE => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let meeting = read_u64(bytes, &mut pos)?;
+            let version = read_u64(bytes, &mut pos)?;
+            let start_ms = read_u64(bytes, &mut pos)?;
+            let duration = u16::from_be_bytes(read_array::<2>(bytes, &mut pos)?);
+            let title = read_string(bytes, &mut pos, 1, crate::meeting::MAX_TITLE_BYTES)?;
+            let agenda = read_string(bytes, &mut pos, 0, MAX_BODY)?;
+            if (meeting == 0) != (version == 0) {
+                return Err(CodecError::FieldLength);
+            }
+            Request::MeetingSave { room, meeting, version, start_ms, duration, title, agenda }
+        }
+        MEETING_CANCEL => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let meeting = read_u64(bytes, &mut pos)?;
+            let version = read_u64(bytes, &mut pos)?;
+            Request::MeetingCancel { room, meeting, version }
+        }
+        MEETING_LIST => {
+            let from_ms = read_u64(bytes, &mut pos)?;
+            let to_ms = read_u64(bytes, &mut pos)?;
+            Request::MeetingList { from_ms, to_ms }
+        }
+        MEETING_JOIN => Request::MeetingJoin { meeting: read_u64(bytes, &mut pos)? },
         DOWNLOAD => {
             let file = read_array::<16>(bytes, &mut pos)?;
             let offset = read_u64(bytes, &mut pos)?;

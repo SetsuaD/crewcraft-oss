@@ -121,6 +121,11 @@ impl Inbox {
             }
             return Some((apply, Notify::None));
         }
+        // So is a meeting's system line (task T370a); the client reports it as its own event.
+        if let Push::MeetingLine { room, cursor, .. } = push {
+            let apply = self.views.get_mut(&room)?.event(cursor, Change::Other);
+            return Some((apply, Notify::None));
+        }
         // So does a reply's thread (task T340a).
         if let Push::Threaded { room, cursor, parent } = push {
             self.views.get_mut(&room)?.thread(cursor, parent);
@@ -157,7 +162,7 @@ impl Inbox {
             | Push::Pinned { .. }
             | Push::ReadState { .. }
             | Push::RoomSettings { .. } => return None,
-            Push::Gap { .. } | Push::Continued { .. } => return None,
+            Push::Gap { .. } | Push::Continued { .. } | Push::MeetingLine { .. } => return None,
         };
 
         let is_direct = self.direct.get(room).copied().unwrap_or(false);

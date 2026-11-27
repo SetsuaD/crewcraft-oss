@@ -113,6 +113,20 @@ impl Server {
         self.room_names.get(slug).map(String::as_str)
     }
 
+    /// `RoomService::meeting_line` in the room (task T370a). `NoSuchRoom` first.
+    pub fn meeting_line(
+        &mut self,
+        slug: &str,
+        actor: &str,
+        meeting: u64,
+        change: crewcraft_proto::meeting::MeetingChange,
+        version: u64,
+        text: &str,
+    ) -> Result<u64, ServerError> {
+        let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;
+        Ok(service.meeting_line(actor, meeting, change, version, text))
+    }
+
     /// `RoomService::import_post` in the room (task T350a). `NoSuchRoom` first; no rate limit.
     pub fn import_post(&mut self, slug: &str, author: &str, text: &str, deleted: bool) -> Result<u64, ServerError> {
         let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;

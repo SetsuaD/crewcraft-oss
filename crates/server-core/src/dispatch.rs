@@ -35,6 +35,10 @@ pub const E_BAD_ATTACHMENT: u16 = 10;
 pub const E_NO_SUCH_CALL: u16 = 11;
 /// The upload would take the person past their storage quota (task T332a).
 pub const E_OVER_QUOTA: u16 = 12;
+/// A meeting edit or cancel carried a version that is no longer current (task T370a): reload, never resend blindly.
+pub const E_CONFLICT: u16 = 13;
+/// No such meeting, or one in a room the person is not in (task T370a).
+pub const E_NO_SUCH_MEETING: u16 = 14;
 /// Anything else (`AlreadyMember`, `LastOwner`, `BadName`).
 pub const E_OTHER: u16 = 99;
 
@@ -50,6 +54,21 @@ pub fn upload_error_code(error: crate::durable::UploadError) -> u16 {
         U::OverQuota => E_OVER_QUOTA,
         U::NoSuchUpload => E_NO_SUCH_UPLOAD,
         U::Storage | U::Durable(_) => E_OTHER,
+    }
+}
+
+/// The code for a refused meeting request (task T370a). A storage failure is fatal and has no code; a refusal by the
+/// server itself has its own.
+pub fn meeting_error_code(error: crate::meetings::MeetingError) -> u16 {
+    use crate::meetings::MeetingError as M;
+    match error {
+        M::NoSuchRoom => E_NO_SUCH_ROOM,
+        M::NoSuchMeeting => E_NO_SUCH_MEETING,
+        M::NotAllowed => E_NOT_ALLOWED,
+        M::Conflict => E_CONFLICT,
+        M::BadField => E_BAD_TEXT,
+        M::Durable(DurableError::Server(error)) => error_code(error),
+        M::Durable(_) => E_OTHER,
     }
 }
 
@@ -182,6 +201,10 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         | Request::CallKey { .. }
         | Request::CallSeal { .. }
         | Request::CallOffer { .. }
+        | Request::MeetingSave { .. }
+        | Request::MeetingCancel { .. }
+        | Request::MeetingList { .. }
+        | Request::MeetingJoin { .. }
         | Request::PostFiles { .. }
         | Request::Continue { .. }
         | Request::Reply { .. } => {

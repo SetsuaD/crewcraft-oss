@@ -11,6 +11,7 @@ pub mod current;
 pub mod frame;
 pub mod handshake;
 pub mod media_control;
+pub mod meeting;
 pub mod message;
 pub mod push;
 pub mod request;

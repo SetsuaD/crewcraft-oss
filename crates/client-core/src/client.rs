@@ -48,6 +48,19 @@ pub enum ClientEvent {
     Answer { id: u32, answer: String },
     /// The room an archive continues in, after the `Ok` answering `Continue` request `id` (task T352).
     Continued { id: u32, room: String },
+    /// The meetings frame answering `MeetingSave` or `MeetingList` request `id` (task T370a).
+    Meetings { id: u32, page: crewcraft_proto::meeting::MeetingPage },
+    /// A meeting's system line, newly applied to its followed room (after that push's `Pushed`; task T370a). A calendar
+    /// showing the meeting asks again.
+    MeetingLine {
+        room: String,
+        cursor: u64,
+        meeting: u64,
+        change: crewcraft_proto::meeting::MeetingChange,
+        version: u64,
+        author: String,
+        text: String,
+    },
 }
 
 /// A fatal error: the connection must be closed.
@@ -127,6 +140,7 @@ impl Client {
                 || first == crewcraft_proto::push::GAP
                 || first == crewcraft_proto::push::CONTINUED
                 || first == crewcraft_proto::push::ROOM_SETTINGS
+                || first == crewcraft_proto::push::MEETING_LINE
             {
                 let push = decode_push(&payload).map_err(ClientError::Malformed)?;
                 if let Push::Gap { room, cursor, after, oldest } = push {
@@ -148,9 +162,27 @@ impl Client {
                     Push::Gap { room, .. } => room.clone(),
                     Push::Continued { room, .. } => room.clone(),
                     Push::RoomSettings { room, .. } => room.clone(),
+                    Push::MeetingLine { room, .. } => room.clone(),
+                };
+                let line = match &push {
+                    Push::MeetingLine { room, cursor, meeting, change, version, author, text } => Some(ClientEvent::MeetingLine {
+                        room: room.clone(),
+                        cursor: *cursor,
+                        meeting: *meeting,
+                        change: *change,
+                        version: *version,
+                        author: author.clone(),
+                        text: text.clone(),
+                    }),
+                    _ => None,
                 };
                 match self.inbox.on_push(push, now_ms, local_minute) {
-                    Some((apply, notify)) => events.push(ClientEvent::Pushed { room, apply, notify }),
+                    Some((apply, notify)) => {
+                        events.push(ClientEvent::Pushed { room, apply, notify });
+                        if apply == Apply::Applied {
+                            events.extend(line);
+                        }
+                    }
                     None => events.push(ClientEvent::Ignored { room }),
                 }
             } else if first == ROOMS_TAG {
@@ -183,6 +215,9 @@ impl Client {
             } else if first == CONTINUED_TAG {
                 let (id, room) = decode_continued(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Continued { id, room });
+            } else if first == crewcraft_proto::meeting::MEETINGS_TAG {
+                let (id, page) = crewcraft_proto::meeting::decode_meetings(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Meetings { id, page });
             } else if first == ANSWER_TAG {
                 let (id, answer) = decode_answer(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Answer { id, answer });

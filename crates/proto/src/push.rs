@@ -47,6 +47,9 @@
 //! - tag 83 `RoomSettings` (task T346): `u64 revision | u8 flags`. With `request::FEATURE_ROOM_SETTINGS`, the asking
 //!   person's own pin, mute and hide settings for the room, after every successful Sync and before any `Gap`. Its
 //!   cursor is the room head and advances no timeline. Flags are `room_settings::RoomSettings::flags`.
+//! - tag 85 `MeetingLine` (task T370a): `u64 meeting | u8 change (1 scheduled, 2 edited, 3 cancelled) | u64 version |
+//!   str author | str text (0 to MAX_HTML)`. A meeting's system line, an event of its own that advances the cursor; a
+//!   client that did not agree to `request::FEATURE_MEETINGS` is sent `Other` in its place.
 //!
 //! `room`, `author` and each mention are 1 to `message::MAX_NAME` bytes; `html` is 0 to `MAX_HTML` bytes; at most
 //! `MAX_MENTIONS` mentions.
@@ -80,6 +83,8 @@ pub const GAP: u8 = 81;
 pub const CONTINUED: u8 = 84;
 /// The asking person's own settings for the room, after a sync (task T346).
 pub const ROOM_SETTINGS: u8 = 83;
+/// The tag of `Push::MeetingLine` (task T370a).
+pub const MEETING_LINE: u8 = 85;
 /// The most participants a `CallState` lists.
 pub const MAX_PARTICIPANTS: usize = 255;
 /// The tag of `Push::Reacted` (task T341a).
@@ -240,6 +245,16 @@ pub enum Push {
         from: String,
         kid: u64,
         sealed: Vec<u8>,
+    },
+    /// A meeting's system line by `author` (task T370a): it was scheduled, edited or cancelled, at `version`.
+    MeetingLine {
+        room: String,
+        cursor: u64,
+        meeting: u64,
+        change: crate::meeting::MeetingChange,
+        version: u64,
+        author: String,
+        text: String,
     },
 }
 
@@ -452,6 +467,16 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
                 write_str(&mut out, person, 1, MAX_NAME)?;
             }
         }
+        Push::MeetingLine { room, cursor, meeting, change, version, author, text } => {
+            out.push(MEETING_LINE);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&meeting.to_be_bytes());
+            out.push(change.code());
+            out.extend_from_slice(&version.to_be_bytes());
+            write_str(&mut out, author, 1, MAX_NAME)?;
+            write_str(&mut out, text, 0, MAX_HTML)?;
+        }
         Push::Sent { room, cursor, sent_ms } => {
             out.push(SENT);
             write_str(&mut out, room, 1, MAX_NAME)?;
@@ -513,6 +538,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         && tag != GAP
         && tag != CONTINUED
         && tag != ROOM_SETTINGS
+        && tag != MEETING_LINE
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -602,6 +628,15 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
             let author = read_string(bytes, &mut pos, 1, MAX_NAME)?;
             let text = read_string(bytes, &mut pos, 0, MAX_HTML)?;
             Push::CallLine { room, cursor, call, ended, author, text }
+        }
+        MEETING_LINE => {
+            let meeting = read_u64(bytes, &mut pos)?;
+            let code = read_u8(bytes, &mut pos)?;
+            let change = crate::meeting::MeetingChange::from_code(code).ok_or(CodecError::BadKind(code))?;
+            let version = read_u64(bytes, &mut pos)?;
+            let author = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let text = read_string(bytes, &mut pos, 0, MAX_HTML)?;
+            Push::MeetingLine { room, cursor, meeting, change, version, author, text }
         }
         CALL_KEYS => {
             let call = read_u64(bytes, &mut pos)?;
