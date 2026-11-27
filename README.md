@@ -107,7 +107,9 @@ bash ci/validate.sh                  # the whole gate: format, lint, every test,
 cargo build --release --workspace
 ```
 
-On Windows, `setup.bat`, `run_dev.bat` and `build.bat` do the same.
+On Windows, `setup.bat`, `run_dev.bat` and `build.bat` do the same. The two programs are then
+`target/release/crewcraft-server` (the server) and `target/release/crewcraft` (the desktop app); the commands below
+assume they are on your `PATH`.
 
 ## Run a server
 
@@ -118,10 +120,15 @@ rooms, the settings `first-run` records (`server.conf`) and the public root cert
 # Once, in a private terminal: the administrator's invitation is shown here and nowhere else.
 crewcraft-server first-run /srv/crewcraft --name chat.example.org --admin admin@example.org --listen 0.0.0.0:7443
 crewcraft-server serve /srv/crewcraft                       # until interrupted
+# In another terminal, while it serves:
 crewcraft-server invite /srv/crewcraft person@example.org   # private terminal again
-crewcraft-server room /srv/crewcraft admin@example.org General
+crewcraft-server room /srv/crewcraft admin@example.org General      # prints "Room <room>"
 crewcraft-server add-member /srv/crewcraft <room> admin@example.org person@example.org
 ```
+
+`invite`, `room` and `add-member` reach a running server over its control socket on Linux and macOS; on Windows, stop
+the server first. Stopping it (Ctrl+C, or SIGTERM from a service manager) keeps everything: start `serve` again and
+signed-in apps reconnect on their own. To try it on one machine, use `--name localhost` and leave out `--listen`.
 
 `--name` is the DNS name or IP address clients connect to; the server certificate is signed for it. `--listen`
 defaults to `127.0.0.1:7443`. Behind port forwarding, `--public-port <port>` is the port people connect to, and
@@ -141,11 +148,13 @@ Run `crewcraft` (no arguments) to open the window.
 1. **Join:** paste the invitation link and choose a password. The app fetches the server's root certificate and
    accepts it only if it matches the fingerprint in the link, so a link copied from a trusted message is all it needs.
 2. **Authenticator:** add the entry the app shows to any authenticator app, then type its current code.
-3. **Sign in** with your email, password and a fresh code. Every sign-in asks for a code.
+3. **Sign in** with your email, password and a fresh code. The code from step 2 is used up, so wait for the next one.
+   Every sign-in asks for a code.
 
 The enrolled device is kept in your user data folder (`%APPDATA%\CrewCraft` on Windows,
 `~/Library/Application Support/CrewCraft` on macOS, `$XDG_DATA_HOME/crewcraft` or `~/.local/share/crewcraft` on
-Linux), so the next start goes straight to sign-in. The file is sealed with a key kept in your system's key store
+Linux), so the next start goes straight to sign-in, or, within 12 hours of your last sign-in, straight back to your
+rooms without a code. The file is sealed with a key kept in your system's key store
 (Credential Manager on Windows, the login Keychain on macOS, the Secret Service on Linux, such as GNOME Keyring or
 KWallet), and on Unix the folder and file are also owner-only. On a Linux desktop without a Secret Service the app says
 so and does not save the enrollment, unless you create an empty file named `plain-device-record` in that folder to
