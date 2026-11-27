@@ -47,7 +47,7 @@ pub const MAX_KIDS_PER_PAIR: usize = 8;
 /// Every call, by id, and each room's open call.
 #[derive(Debug, Clone, Default)]
 pub struct Calls {
-    next: u64,
+    pub(crate) next: u64,
     calls: BTreeMap<u64, Call>,
     open: HashMap<String, u64>,
 }
@@ -89,7 +89,7 @@ impl Calls {
         self.calls.get(&call)
     }
 
-    fn start(&mut self, room: &str, actor: &str, video: bool, now_ms: u64, start_cursor: u64) -> u64 {
+    pub(crate) fn start(&mut self, room: &str, actor: &str, video: bool, now_ms: u64, start_cursor: u64) -> u64 {
         self.next += 1;
         let id = self.next;
         let call = Call {
@@ -110,9 +110,11 @@ impl Calls {
         id
     }
 
-    fn open_in(&self, room: &str, call: u64) -> Option<&Call> {
+    pub(crate) fn open_in(&self, room: &str, call: u64) -> Option<&Call> {
         self.open.get(room).filter(|id| **id == call).and_then(|id| self.calls.get(id))
     }
+
+    pub(crate) fn has_open(&self, room: &str) -> bool { self.open.contains_key(room) }
 
     fn open_in_mut(&mut self, room: &str, call: u64) -> Option<&mut Call> {
         let id = *self.open.get(room).filter(|id| **id == call)?;
@@ -200,6 +202,7 @@ impl DurableServer {
             return Err(CallError::NotMember);
         }
         if let Some(&open) = self.calls.open.get(slug) {
+            if self.is_guest_call(open) { return Err(CallError::NotAllowed); }
             return self.call_join(slug, actor, open, now_ms).map(|()| open);
         }
         if room.is_read_only() || room.role(actor) == Some(crate::room::Role::Guest) {
@@ -214,6 +217,14 @@ impl DurableServer {
 
     /// Join the open call `call` of `slug` (task T360a1). Joining a call one is already in is a heartbeat.
     pub fn call_join(&mut self, slug: &str, actor: &str, call: u64, now_ms: u64) -> Result<(), CallError> {
+        self.check_alive().map_err(CallError::Durable)?;
+        self.member(slug, actor)?;
+        let record = self.calls.open_in(slug, call).ok_or(CallError::NoSuchCall)?;
+        if self.is_guest_call(call) && !record.present.contains_key(actor) { return Err(CallError::NotAllowed); }
+        self.call_join_for_meeting(slug, actor, call, now_ms)
+    }
+
+    pub(crate) fn call_join_for_meeting(&mut self, slug: &str, actor: &str, call: u64, now_ms: u64) -> Result<(), CallError> {
         self.check_alive().map_err(CallError::Durable)?;
         self.member(slug, actor)?;
         let record = self.calls.open_in(slug, call).ok_or(CallError::NoSuchCall)?;
@@ -269,6 +280,7 @@ impl DurableServer {
     /// Take everyone whose last heartbeat is older than `HEARTBEAT_TIMEOUT_MS` out of their call, at that heartbeat;
     /// a call left empty ends at its last heartbeat (REQUIREMENTS 2.5). Also takes out anyone no longer in the room.
     pub fn sweep_calls(&mut self, now_ms: u64) -> Result<(), DurableError> {
+        self.sweep_guest_links(now_ms)?;
         let mut gone: Vec<(String, String, u64, u64)> = Vec::new();
         for call in self.calls.calls.values().filter(|call| call.ended_ms.is_none()) {
             let room = self.server.room(&call.room).ok();
@@ -347,6 +359,7 @@ impl DurableServer {
             .calls
             .calls
             .values()
+            .filter(|call| !self.is_guest_call(call.id))
             .filter(|call| call.started_by != user && !call.joined.contains(user))
             .filter_map(|call| {
                 let ended_ms = call.ended_ms?;

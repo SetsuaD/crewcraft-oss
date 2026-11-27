@@ -294,6 +294,15 @@ pub struct RoomSettingsState {
     pub settings: RoomSettings,
 }
 
+/// The waiting guests visible to the staff member at this room head (T370c). Revision zero is the authoritative
+/// empty state for a person without lobby authority; it never carries a waiting count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GuestLobbyState {
+    pub head: u64,
+    pub revision: u64,
+    pub waiting: u32,
+}
+
 pub struct RoomView {
     timeline: Timeline,
     outbox: Outbox,
@@ -330,6 +339,9 @@ pub struct RoomView {
     awaiting_read_state: bool,
     room_settings: Option<RoomSettingsState>,
     awaiting_room_settings: bool,
+    guest_lobby_state: Option<GuestLobbyState>,
+    guest_lobby_revision: u64,
+    awaiting_guest_lobby_state: bool,
     gap_notice: Option<GapNotice>,
     recovery_epoch: u64,
 }
@@ -366,6 +378,9 @@ impl RoomView {
             awaiting_read_state: false,
             room_settings: None,
             awaiting_room_settings: false,
+            guest_lobby_state: None,
+            guest_lobby_revision: 0,
+            awaiting_guest_lobby_state: false,
             gap_notice: None,
             recovery_epoch: 0,
         }
@@ -616,6 +631,42 @@ impl RoomView {
         self.awaiting_room_settings
     }
 
+    /// Apply a lobby snapshot without advancing the timeline. Counts at lower heads or positive revisions cannot
+    /// replace newer metadata. A matched Sync may clear prior counts with the revision-zero no-authority sentinel;
+    /// the last positive revision is retained so a stale positive snapshot cannot undo that clear.
+    pub fn set_guest_lobby_state(&mut self, state: GuestLobbyState) -> bool {
+        if state.head < self.timeline.cursor() || self.guest_lobby_state.is_some_and(|current| state.head < current.head) {
+            return false;
+        }
+        if state.revision == 0 {
+            if state.waiting != 0 || (self.guest_lobby_state.is_some() && !self.awaiting_guest_lobby_state) {
+                return false;
+            }
+        } else if state.revision < self.guest_lobby_revision {
+            return false;
+        } else if self.guest_lobby_state.is_some_and(|current| current.revision == 0) && !self.awaiting_guest_lobby_state {
+            return false;
+        }
+        self.guest_lobby_revision = self.guest_lobby_revision.max(state.revision);
+        self.guest_lobby_state = Some(state);
+        self.awaiting_guest_lobby_state = false;
+        true
+    }
+
+    pub fn guest_lobby_state(&self) -> Option<&GuestLobbyState> {
+        self.guest_lobby_state.as_ref()
+    }
+
+    /// Call after the matched Sync response. Cached counts, even at its head, do not complete this fresh snapshot.
+    /// The transport adapter must consume it before completing a negotiated guest-meeting Sync.
+    pub fn expect_guest_lobby_state(&mut self) {
+        self.awaiting_guest_lobby_state = true;
+    }
+
+    pub fn awaiting_guest_lobby_state(&self) -> bool {
+        self.awaiting_guest_lobby_state
+    }
+
     /// The files of each message that has any, by cursor (task T330c).
     pub fn attachments(&self) -> &BTreeMap<u64, Vec<crewcraft_proto::push::AttachedFile>> {
         &self.attachments
@@ -727,5 +778,39 @@ impl RoomView {
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod guest_lobby_tests {
+    use super::{GuestLobbyState, RoomView};
+
+    #[test]
+    fn fresh_lobby_receipts_order_counts_and_clear_lost_authority_at_the_same_head() {
+        let mut view = RoomView::new();
+        let visible = GuestLobbyState { head: 20, revision: 7, waiting: 3 };
+        assert!(view.set_guest_lobby_state(visible));
+        assert_eq!(view.cursor(), 0);
+        view.expect_guest_lobby_state();
+        assert!(view.awaiting_guest_lobby_state());
+        assert!(!view.set_guest_lobby_state(GuestLobbyState { revision: 6, ..visible }));
+        assert!(view.awaiting_guest_lobby_state());
+        assert!(view.set_guest_lobby_state(visible));
+        assert!(!view.awaiting_guest_lobby_state());
+
+        let denied = GuestLobbyState { head: 20, revision: 0, waiting: 0 };
+        assert!(!view.set_guest_lobby_state(denied));
+        view.expect_guest_lobby_state();
+        assert!(view.set_guest_lobby_state(denied));
+        assert_eq!(view.guest_lobby_state(), Some(&denied));
+        assert!(!view.set_guest_lobby_state(visible));
+        view.expect_guest_lobby_state();
+        assert!(!view.set_guest_lobby_state(GuestLobbyState { revision: 6, ..visible }));
+        assert!(!view.set_guest_lobby_state(GuestLobbyState { head: 19, revision: 8, ..visible }));
+        assert!(view.awaiting_guest_lobby_state());
+        assert!(view.set_guest_lobby_state(GuestLobbyState { revision: 8, waiting: 1, ..visible }));
+        assert_eq!(view.guest_lobby_state().map(|state| state.waiting), Some(1));
+        assert!(!view.awaiting_guest_lobby_state());
+        assert_eq!(view.cursor(), 0);
     }
 }

@@ -63,6 +63,12 @@
 //!   `MeetingList`: `u64 from_ms | u64 to_ms`, answered `Ok { cursor: n }` and a meetings frame of the n meetings in
 //!   the person's rooms that overlap the window; 47 `MeetingJoin`: `u64 meeting`, answered as `CallStart` is (the
 //!   call's id, and with `FEATURE_MEDIA` the media frame)
+//! - tags 50 to 53, guest meetings (T370c), announced by `FEATURE_GUEST_MEETINGS`: 50 `GuestMeetingSave` carries
+//!   kind 0 and `str room | u64 start_ms | u16 duration | str title | str agenda | str host_name | u64 expires_ms |
+//!   u8 lobby | u8 confirm_direct`, or kind 1 and `u64 meeting | u64 revision | u8 lobby | u8 confirm_direct`.
+//!   51 `GuestLinkClose` carries `u64 meeting | u64 revision`; 52 `GuestLobbyList` carries `u64 meeting`;
+//!   53 `GuestLobbyDecide` carries `u64 meeting | u64 guest | u64 revision | u8 decision`. A successful request
+//!   is followed by a correlated `guest::GuestReply`; only creation returns the code.
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
@@ -102,6 +108,7 @@
 //! would close the connection. `Search` is announced the same way by `FEATURE_SEARCH`.
 
 use crate::activity::ActivityFilter;
+use crate::guest::{GuestDecision, GuestMeetingChange, GuestMeetingDraft, MAX_GUEST_NAME_BYTES};
 use crate::message::{CodecError, MAX_BODY, MAX_NAME};
 
 pub const MAX_DETAIL: usize = 256;
@@ -147,6 +154,8 @@ pub const FEATURE_ROOM_SETTINGS: u32 = 4096;
 pub const FEATURE_MEETINGS: u32 = 16384;
 /// Personal activity snapshots and a seen position shared across devices (T347).
 pub const FEATURE_ACTIVITY: u32 = 32768;
+/// Staff management and lobby notifications for guest meetings (T370c), alongside `FEATURE_MEETINGS`.
+pub const FEATURE_GUEST_MEETINGS: u32 = 65536;
 /// The first byte of a saved-message page.
 pub const SAVED_TAG: u8 = 136;
 /// Sixteen full rendered bodies, including their metadata, fit inside `frame::MAX_FRAME`.
@@ -214,6 +223,10 @@ const MEETING_LIST: u8 = 46;
 const MEETING_JOIN: u8 = 47;
 const LIST_ACTIVITY: u8 = 48;
 const MARK_ACTIVITY_SEEN: u8 = 49;
+const GUEST_MEETING_SAVE: u8 = 50;
+const GUEST_LINK_CLOSE: u8 = 51;
+const GUEST_LOBBY_LIST: u8 = 52;
+const GUEST_LOBBY_DECIDE: u8 = 53;
 /// The largest sealed sender key a `CallSeal` carries.
 pub const MAX_SEALED: usize = 256;
 /// The most files one `PostFiles` attaches (task T330c).
@@ -409,6 +422,26 @@ pub enum Request {
     /// Join meeting `meeting`'s call: its room's open call, or a new one (task T370a).
     MeetingJoin {
         meeting: u64,
+    },
+    /// Explicitly create a guest meeting or update its lobby setting (T370c).
+    GuestMeetingSave {
+        change: GuestMeetingChange,
+    },
+    /// Close a guest link at the observed lobby revision (T370c).
+    GuestLinkClose {
+        meeting: u64,
+        revision: u64,
+    },
+    /// Ask for the guest roster of a meeting the staff member can manage (T370c).
+    GuestLobbyList {
+        meeting: u64,
+    },
+    /// Admit or decline a waiting guest, or remove an admitted guest (T370c).
+    GuestLobbyDecide {
+        meeting: u64,
+        guest: u64,
+        revision: u64,
+        decision: GuestDecision,
     },
 }
 
@@ -753,6 +786,48 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.extend_from_slice(&id.to_be_bytes());
             out.extend_from_slice(&meeting.to_be_bytes());
         }
+        Request::GuestMeetingSave { change } => {
+            out.push(GUEST_MEETING_SAVE);
+            out.extend_from_slice(&id.to_be_bytes());
+            match change {
+                GuestMeetingChange::Create(draft) => {
+                    out.push(0);
+                    write_str(&mut out, &draft.room, 1, MAX_NAME)?;
+                    out.extend_from_slice(&draft.start_ms.to_be_bytes());
+                    out.extend_from_slice(&draft.duration.to_be_bytes());
+                    write_str(&mut out, &draft.title, 1, crate::meeting::MAX_TITLE_BYTES)?;
+                    write_str(&mut out, &draft.agenda, 0, MAX_BODY)?;
+                    write_str(&mut out, &draft.host_name, 1, MAX_GUEST_NAME_BYTES)?;
+                    out.extend_from_slice(&draft.expires_ms.to_be_bytes());
+                    out.extend_from_slice(&[u8::from(draft.lobby), u8::from(draft.confirm_direct)]);
+                }
+                GuestMeetingChange::SetLobby { meeting, revision, lobby, confirm_direct } => {
+                    out.push(1);
+                    out.extend_from_slice(&meeting.to_be_bytes());
+                    out.extend_from_slice(&revision.to_be_bytes());
+                    out.extend_from_slice(&[u8::from(*lobby), u8::from(*confirm_direct)]);
+                }
+            }
+        }
+        Request::GuestLinkClose { meeting, revision } => {
+            out.push(GUEST_LINK_CLOSE);
+            out.extend_from_slice(&id.to_be_bytes());
+            out.extend_from_slice(&meeting.to_be_bytes());
+            out.extend_from_slice(&revision.to_be_bytes());
+        }
+        Request::GuestLobbyList { meeting } => {
+            out.push(GUEST_LOBBY_LIST);
+            out.extend_from_slice(&id.to_be_bytes());
+            out.extend_from_slice(&meeting.to_be_bytes());
+        }
+        Request::GuestLobbyDecide { meeting, guest, revision, decision } => {
+            out.push(GUEST_LOBBY_DECIDE);
+            out.extend_from_slice(&id.to_be_bytes());
+            out.extend_from_slice(&meeting.to_be_bytes());
+            out.extend_from_slice(&guest.to_be_bytes());
+            out.extend_from_slice(&revision.to_be_bytes());
+            out.push(decision.code());
+        }
         Request::Download { file, offset, length } => {
             if *length == 0 || *length as usize > MAX_CHUNK {
                 return Err(CodecError::FieldLength);
@@ -797,6 +872,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         )
         && !(CALL_START..=STORAGE_USE).contains(&tag)
         && !(MEETING_SAVE..=MEETING_JOIN).contains(&tag)
+        && !(GUEST_MEETING_SAVE..=GUEST_LOBBY_DECIDE).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -1003,6 +1079,40 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
             Request::MeetingList { from_ms, to_ms }
         }
         MEETING_JOIN => Request::MeetingJoin { meeting: read_u64(bytes, &mut pos)? },
+        GUEST_MEETING_SAVE => {
+            let [kind] = read_array(bytes, &mut pos)?;
+            let change = match kind {
+                0 => GuestMeetingChange::Create(GuestMeetingDraft {
+                    room: read_string(bytes, &mut pos, 1, MAX_NAME)?,
+                    start_ms: read_u64(bytes, &mut pos)?,
+                    duration: u16::from_be_bytes(read_array(bytes, &mut pos)?),
+                    title: read_string(bytes, &mut pos, 1, crate::meeting::MAX_TITLE_BYTES)?,
+                    agenda: read_string(bytes, &mut pos, 0, MAX_BODY)?,
+                    host_name: read_string(bytes, &mut pos, 1, MAX_GUEST_NAME_BYTES)?,
+                    expires_ms: read_u64(bytes, &mut pos)?,
+                    lobby: read_bool(bytes, &mut pos)?,
+                    confirm_direct: read_bool(bytes, &mut pos)?,
+                }),
+                1 => GuestMeetingChange::SetLobby {
+                    meeting: read_u64(bytes, &mut pos)?,
+                    revision: read_u64(bytes, &mut pos)?,
+                    lobby: read_bool(bytes, &mut pos)?,
+                    confirm_direct: read_bool(bytes, &mut pos)?,
+                },
+                other => return Err(CodecError::BadKind(other)),
+            };
+            Request::GuestMeetingSave { change }
+        }
+        GUEST_LINK_CLOSE => Request::GuestLinkClose { meeting: read_u64(bytes, &mut pos)?, revision: read_u64(bytes, &mut pos)? },
+        GUEST_LOBBY_LIST => Request::GuestLobbyList { meeting: read_u64(bytes, &mut pos)? },
+        GUEST_LOBBY_DECIDE => {
+            let meeting = read_u64(bytes, &mut pos)?;
+            let guest = read_u64(bytes, &mut pos)?;
+            let revision = read_u64(bytes, &mut pos)?;
+            let [decision] = read_array(bytes, &mut pos)?;
+            let decision = GuestDecision::from_code(decision).ok_or(CodecError::BadKind(decision))?;
+            Request::GuestLobbyDecide { meeting, guest, revision, decision }
+        }
         DOWNLOAD => {
             let file = read_array::<16>(bytes, &mut pos)?;
             let offset = read_u64(bytes, &mut pos)?;

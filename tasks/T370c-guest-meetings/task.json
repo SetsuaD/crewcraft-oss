@@ -1,0 +1,46 @@
+{
+  "id": "T370c-guest-meetings",
+  "title": "Durable guest meeting links and lobby control",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/media_link.rs",
+    "apps/crewcraft-server/src/server_install.rs",
+    "apps/crewcraft-server/tests/t370c_guest_meetings.rs",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/guest.rs",
+    "crates/client-core/src/inbox.rs",
+    "crates/client-core/src/lib.rs",
+    "crates/client-core/src/room_view.rs",
+    "crates/media-auth/src/lib.rs",
+    "crates/proto/src/guest.rs",
+    "crates/proto/src/lib.rs",
+    "crates/proto/src/meeting.rs",
+    "crates/proto/src/push.rs",
+    "crates/proto/src/request.rs",
+    "crates/server-core/src/activity.rs",
+    "crates/server-core/src/calls.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/guests.rs",
+    "crates/server-core/src/lib.rs",
+    "crates/server-core/src/media.rs",
+    "crates/server-core/src/meetings.rs",
+    "crates/server-core/src/op.rs",
+    "docs/MEETINGS.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t370c_guest_meetings.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t370c_guest_meetings",
+  "depends_on": [
+    "T370a-meetings-server",
+    "T360b2-call-join-credential"
+  ],
+  "spec": "Implement the T370c server slice in docs/MEETINGS.md. An enrolled staff session can create an expiring guest meeting with immutable audience, read its lobby and decide admission, decline or removal. Lobby-off requires confirmation and new knocks then enter directly. The server reports waiting counts on negotiated Sync, including unchanged timeline cursors. A guest enters through a typed in-process boundary with only the allowed preview and their own state. Only an admitted guest of the meeting with a live link and a bound open call gets a short-lived credential scoped to that call. Closing the link declines all waiting guests and drops admitted guests through the existing media control. Preserve old staff meeting behavior and reconstruct durable decisions after restart. The guest entrance opens no network listener.",
+  "status": "done",
+  "context": [
+    "docs/MEETINGS.md",
+    "docs/CALLS.md",
+    "docs/REQUIREMENTS.md"
+  ]
+}

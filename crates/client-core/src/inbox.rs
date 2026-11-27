@@ -68,6 +68,10 @@ impl Inbox {
             self.views.get_mut(&room)?.set_read_state(crate::room_view::ReadState { head: cursor, position, revision, unread });
             return Some((Apply::Duplicate, Notify::None));
         }
+        if let Push::GuestLobbyState { room, cursor, revision, waiting } = push {
+            self.views.get_mut(&room)?.set_guest_lobby_state(crate::room_view::GuestLobbyState { head: cursor, revision, waiting });
+            return Some((Apply::Duplicate, Notify::None));
+        }
         // A room-head pin snapshot also arrives after an empty sync or a history gap (T343).
         if let Push::Pinned { room, cursor, target, author, html, edited } = push {
             let pinned = (target != 0).then_some(crate::room_view::PinnedMessage { target, author, html, edited });
@@ -161,6 +165,7 @@ impl Inbox {
             | Push::CallSealed { .. }
             | Push::Pinned { .. }
             | Push::ReadState { .. }
+            | Push::GuestLobbyState { .. }
             | Push::RoomSettings { .. } => return None,
             Push::Gap { .. } | Push::Continued { .. } | Push::MeetingLine { .. } => return None,
         };

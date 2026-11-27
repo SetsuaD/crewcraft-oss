@@ -285,7 +285,9 @@ impl MediaLink {
             {
                 let Ok(mut rooms) = rooms.lock() else { return };
                 // A failed sweep is the journal failing; the listener's own requests report that.
-                let _ = rooms.sweep_calls(now_ms());
+                let now = now_ms();
+                let _ = rooms.sweep_guest_links(now);
+                let _ = rooms.sweep_calls(now);
                 for event in rooms.take_media_events() {
                     if waiting.len() >= MAX_MEDIA_EVENTS {
                         waiting.pop_front();

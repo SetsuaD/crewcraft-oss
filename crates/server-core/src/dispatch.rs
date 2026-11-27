@@ -41,6 +41,10 @@ pub const E_CONFLICT: u16 = 13;
 pub const E_NO_SUCH_MEETING: u16 = 14;
 /// A private activity watermark cannot be advanced beyond the signed-in person's issued activity head (T347).
 pub const E_ACTIVITY_POSITION: u16 = 17;
+/// An unknown guest, or a guest record outside the room the staff member can access (T370c).
+pub const E_NO_SUCH_GUEST: u16 = 18;
+/// A guest link has expired or closed (T370c).
+pub const E_GUEST_LINK_CLOSED: u16 = 19;
 /// Anything else (`AlreadyMember`, `LastOwner`, `BadName`).
 pub const E_OTHER: u16 = 99;
 
@@ -209,6 +213,10 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         | Request::MeetingCancel { .. }
         | Request::MeetingList { .. }
         | Request::MeetingJoin { .. }
+        | Request::GuestMeetingSave { .. }
+        | Request::GuestLinkClose { .. }
+        | Request::GuestLobbyList { .. }
+        | Request::GuestLobbyDecide { .. }
         | Request::PostFiles { .. }
         | Request::Continue { .. }
         | Request::Reply { .. } => {

@@ -77,6 +77,7 @@ pub struct DurableServer {
     pub(crate) continuations: crate::continuation::Continuations,
     /// Meetings, scheduled, held and cancelled (docs/MEETINGS.md, task T370a).
     pub(crate) meetings: crate::meetings::Meetings,
+    pub(crate) guests: crate::guests::Guests,
 }
 
 #[derive(Debug, Clone)]
@@ -229,16 +230,21 @@ impl DurableServer {
         let mut calls = crate::calls::Calls::default();
         let mut continuations = crate::continuation::Continuations::default();
         let mut meetings = crate::meetings::Meetings::default();
+        let mut guests = crate::guests::Guests::default();
         let mut activity = Activity::default();
         for (index, record) in records.iter().enumerate() {
             let op = decode_op(record).map_err(|_| DurableError::Corrupt { index })?;
+            if let Op::Guest(record) = &op {
+                crate::guests::apply(&mut server, &mut meetings, &mut calls, &mut guests, record).map_err(|_| DurableError::Corrupt { index })?;
+                continue;
+            }
             let activity_op = crate::activity::observed_op(&op);
             let was_reacting = crate::activity::was_reacting(&server, &op);
             if let Op::MarkActivitySeen { user, through } = &op {
                 if *through > activity.position(user).0 {
                     return Err(DurableError::Corrupt { index });
                 }
-                activity.observe(&op, ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls }, false);
+                activity.observe(&op, ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls, guests: &guests }, false);
                 continue;
             }
             // An import record (task T350a) changes the import's own bookkeeping as well as a room.
@@ -257,7 +263,7 @@ impl DurableServer {
                 Ok(crate::calls::Replayed::Done) => {
                     activity.replayed(
                         activity_op.as_ref(),
-                        ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls },
+                        ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls, guests: &guests },
                         was_reacting,
                     );
                     continue;
@@ -288,7 +294,7 @@ impl DurableServer {
                 let cursor = server.post(&slug, &author, &body, now_ms).map_err(|_| DurableError::Corrupt { index })?;
                 activity.replayed(
                     activity_op.as_ref(),
-                    ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls },
+                    ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls, guests: &guests },
                     was_reacting,
                 );
                 index_event_with_source(&server, &mut search, &mut previews, &slug, &author, cursor, Some(&text));
@@ -307,7 +313,7 @@ impl DurableServer {
                 let cursor = server.post(&slug, &author, &text, now_ms).map_err(|_| DurableError::Corrupt { index })?;
                 activity.replayed(
                     activity_op.as_ref(),
-                    ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls },
+                    ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls, guests: &guests },
                     was_reacting,
                 );
                 index_event_with_source(&server, &mut search, &mut previews, &slug, &author, cursor, Some(&text));
@@ -330,7 +336,7 @@ impl DurableServer {
             let cursor = replay(&mut server, op, &previews).map_err(|_| DurableError::Corrupt { index })?;
             activity.replayed(
                 activity_op.as_ref(),
-                ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls },
+                ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls, guests: &guests },
                 was_reacting,
             );
             if let Some((slug, actor)) = indexed {
@@ -366,6 +372,7 @@ impl DurableServer {
             media: crate::media::Media::default(),
             continuations,
             meetings,
+            guests,
         })
     }
 
@@ -885,6 +892,15 @@ impl DurableServer {
         self.record_observed(op, false)
     }
 
+    pub(crate) fn record_guest(&mut self, record: &crate::guests::GuestOp) -> Result<(), DurableError> {
+        self.record(&Op::Guest(record.clone()))?;
+        if crate::guests::apply(&mut self.server, &mut self.meetings, &mut self.calls, &mut self.guests, record).is_err() {
+            self.poisoned = true;
+            return Err(DurableError::Poisoned);
+        }
+        Ok(())
+    }
+
     fn record_observed(&mut self, op: &Op, was_reacting: bool) -> Result<(), DurableError> {
         let result = match encode_op(op) {
             Ok(bytes) => self.journal.append(&bytes),
@@ -896,7 +912,7 @@ impl DurableServer {
         })?;
         self.activity.observe(
             op,
-            ActivityView { server: &self.server, messages: &self.previews, parents: &self.parents, calls: &self.calls },
+            ActivityView { server: &self.server, messages: &self.previews, parents: &self.parents, calls: &self.calls, guests: &self.guests },
             was_reacting,
         );
         Ok(())
@@ -948,7 +964,7 @@ fn replay(server: &mut Server, op: Op, messages: &HashMap<String, BTreeMap<u64, 
         // Handled by `continuation::replay` (task T352).
         Op::ArchiveDirect { .. } | Op::Continue { .. } => Ok(0),
         // Handled by `meetings::replay` (task T370a).
-        Op::Meeting(_) => Ok(0),
+        Op::Meeting(_) | Op::Guest(_) => Ok(0),
     }
 }
 

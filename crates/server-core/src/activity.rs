@@ -8,6 +8,7 @@ use crewcraft_proto::activity::{ActivityFilter, ActivityItem, ActivityKind, Acti
 use crewcraft_proto::request::{MAX_AUTHOR, MAX_SNIPPET};
 
 use crate::calls::Calls;
+use crate::guests::Guests;
 use crate::durable::{CurrentMessage, DurableError, DurableServer};
 use crate::html_text::html_text;
 use crate::mentions::{mentions, resolve_tokens};
@@ -48,6 +49,7 @@ pub(crate) struct ActivityView<'a> {
     pub messages: &'a HashMap<String, BTreeMap<u64, CurrentMessage>>,
     pub parents: &'a HashMap<(String, u64), u64>,
     pub calls: &'a Calls,
+    pub guests: &'a Guests,
 }
 
 struct MessageEvent<'a> {
@@ -235,6 +237,7 @@ impl Activity {
     }
 
     fn missed_call(&mut self, view: &ActivityView<'_>, slug: &str, call: u64, ended_ms: u64) {
+        if view.guests.bound_to(call).is_some() { return; }
         let Some(call) = view.calls.get(call) else { return };
         let Ok(room) = view.server.room(slug) else { return };
         if room.is_read_only() || call.started_by.is_empty() || call.started_by.len() > MAX_AUTHOR {
@@ -384,7 +387,7 @@ impl DurableServer {
         self.activity.snapshot(
             user,
             filter,
-            ActivityView { server: &self.server, messages: &self.previews, parents: &self.parents, calls: &self.calls },
+            ActivityView { server: &self.server, messages: &self.previews, parents: &self.parents, calls: &self.calls, guests: &self.guests },
             |room, target| self.has_saved(user, room, target),
         )
     }

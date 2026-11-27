@@ -4,6 +4,8 @@
 //! a `ListRooms` the room-list frame follows (`proto::request::encode_rooms`, T233). Task T135.
 
 use crewcraft_proto::frame::{Decoder, FrameError, encode};
+use crewcraft_proto::guest::{GuestReply, encode_guest};
+use crewcraft_proto::meeting::MeetingChange;
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{MAX_MENTIONS, Push, encode_push};
 use crewcraft_proto::request::{Request, Response, SearchHit, decode_request, encode_bytes, encode_hits, encode_id, encode_response, encode_rooms};
@@ -11,6 +13,7 @@ use crewcraft_proto::request::{Request, Response, SearchHit, decode_request, enc
 use crate::cursor_log::Since;
 use crate::dispatch::{Backend, handle, handle_backend, listed_rooms};
 use crate::durable::{DurableError, DurableServer};
+use crate::guests::GuestError;
 use crate::room_service::{Event, EventKind};
 use crate::server::Server;
 
@@ -159,16 +162,19 @@ impl Connection {
     /// mutations in the same call remain committed.
     pub fn receive_durable(&mut self, server: &mut DurableServer, bytes: &[u8], now_ms: u64) -> Result<Vec<u8>, DurableConnError> {
         server.check_alive().map_err(DurableConnError::Storage)?;
+        server.sweep_guest_links(now_ms).map_err(DurableConnError::Storage)?;
         // Calls whose people stopped sending heartbeats close first (task T360a1).
         server.sweep_calls(now_ms).map_err(DurableConnError::Storage)?;
         let media_device = self.device.filter(|_| self.features & crewcraft_proto::request::FEATURE_MEDIA != 0);
+        let guests_on = guest_meetings_enabled(self.features);
         self.receive_with(server, bytes, now_ms, |s, user, id, request, now| {
             match activity_answer(s, user, request)
                 .or_else(|| current_answer(s, user, id, request))
                 .or_else(|| upload(s, user, request, now))
-                .or_else(|| calls(s, user, request, now, media_device))
+                .or_else(|| calls(s, user, request, now, media_device, guests_on))
                 .or_else(|| continuation(s, user, request, now))
-                .or_else(|| meetings(s, user, request, now, media_device))
+                .or_else(|| meetings(s, user, request, now, media_device, guests_on))
+                .or_else(|| guest_meetings(s, user, request, now))
             {
                 Some(answer) => answer,
                 None => handle_backend(&mut Backend::Durable(s), user, request, now).map(|r| (r, None)).map_err(DurableConnError::Storage),
@@ -194,6 +200,7 @@ impl Connection {
             let continues = self.features & crewcraft_proto::request::FEATURE_CONTINUE != 0;
             let room_settings = self.features & crewcraft_proto::request::FEATURE_ROOM_SETTINGS != 0;
             let meetings_on = self.features & crewcraft_proto::request::FEATURE_MEETINGS != 0;
+            let guests_on = guest_meetings_enabled(self.features);
             let activity = self.features & crewcraft_proto::request::FEATURE_ACTIVITY != 0;
             let needs_pins_saved = matches!(request, Request::Pin { .. } | Request::SaveMessage { .. } | Request::ListSaved { .. });
             let (response, follow) = if (needs_pins_saved && !pins_saved)
@@ -202,6 +209,7 @@ impl Connection {
                 || (matches!(request, Request::Continue { .. }) && !continues)
                 || (matches!(request, Request::SetRoomSetting { .. } | Request::ListRoomSettings) && !room_settings)
                 || (is_meeting(&request) && !meetings_on)
+                || (is_guest_meeting(&request) && !guests_on)
                 || (matches!(request, Request::ListActivity { .. } | Request::MarkActivitySeen { .. }) && !activity)
             {
                 (refusal_of(crate::dispatch::E_NOT_ALLOWED), None)
@@ -249,6 +257,10 @@ impl Connection {
                     let frame = crewcraft_proto::meeting::encode_meetings(id, &page).map_err(ConnError::Request)?;
                     out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
                 }
+                Some(Follow::Guest(reply)) => {
+                    let frame = encode_guest(id, &reply).map_err(ConnError::Request)?;
+                    out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
+                }
                 Some(Follow::Relay { .. }) | None => {}
             }
 
@@ -262,7 +274,7 @@ impl Connection {
                 let calls_on = self.features & crewcraft_proto::request::FEATURE_CALLS != 0;
                 // The room's open call, before its events (task T360a1).
                 if calls_on {
-                    for state in server.call_state(room, &self.user) {
+                    for state in server.call_state(room, &self.user, guests_on) {
                         out.extend_from_slice(&encode(&encode_push(&state).map_err(ConnError::Request)?).map_err(ConnError::Frame)?);
                     }
                 }
@@ -278,7 +290,9 @@ impl Connection {
                         push = Push::Other { room: room.clone(), cursor: ev_cursor };
                     }
                     // Nor to calls, past their history lines (task T360a1).
-                    if matches!(push, Push::CallLine { .. }) && !calls_on {
+                    if let Push::CallLine { call, .. } = &push
+                        && (!calls_on || (!guests_on && server.is_guest_call(*call)))
+                    {
                         push = Push::Other { room: room.clone(), cursor: ev_cursor };
                     }
                     // Nor to continuing archives, past the line that links back to one (task T352).
@@ -286,7 +300,10 @@ impl Connection {
                         push = Push::Other { room: room.clone(), cursor: ev_cursor };
                     }
                     // Nor to meetings, past their system lines (task T370a).
-                    if matches!(push, Push::MeetingLine { .. }) && !meetings_on {
+                    if let Push::MeetingLine { meeting, change, .. } = &push
+                        && (!meetings_on
+                            || (!guests_on && (*change == MeetingChange::Lobby || server.guest_meeting_for(&self.user, *meeting))))
+                    {
                         push = Push::Other { room: room.clone(), cursor: ev_cursor };
                     }
                     let posted = matches!(push, Push::Posted { .. });
@@ -355,6 +372,16 @@ impl Connection {
                 let push = Push::RoomSettings { room: room.clone(), cursor: service.head(), revision, settings };
                 out.extend_from_slice(&encode(&encode_push(&push).map_err(ConnError::Request)?).map_err(ConnError::Frame)?);
             }
+            // A guest may knock without changing the event head. Send an explicit count after every successful Sync.
+            if let Request::Sync { room, .. } = &request
+                && guests_on
+                && let Response::Ok { cursor } = &response
+            {
+                let (revision, waiting) = server.guest_lobby_state(room, &self.user);
+                let push = Push::GuestLobbyState { room: room.clone(), cursor: *cursor, revision, waiting };
+                let frame = encode_push(&push).map_err(ConnError::Request)?;
+                out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
+            }
             // After a successful ListRoomSettings, the settings frame its answer counted (task T346).
             if let Request::ListRoomSettings = request
                 && matches!(response, Response::Ok { .. })
@@ -396,9 +423,18 @@ trait Reads {
     fn attachments(&self, room: &str, cursor: u64) -> Vec<crewcraft_proto::push::AttachedFile>;
     fn parent_of(&self, room: &str, cursor: u64) -> Option<u64>;
     fn sent_of(&self, room: &str, cursor: u64) -> Option<u64>;
-    fn call_state(&self, room: &str, user: &str) -> Vec<Push>;
+    fn call_state(&self, room: &str, user: &str, guests_on: bool) -> Vec<Push>;
     fn pin_state(&self, room: &str, user: &str) -> Option<Push>;
     fn read_state(&self, room: &str, user: &str) -> Option<Push>;
+    fn guest_lobby_state(&self, _room: &str, _user: &str) -> (u64, u32) {
+        (0, 0)
+    }
+    fn guest_meeting_for(&self, _user: &str, _meeting: u64) -> bool {
+        false
+    }
+    fn is_guest_call(&self, _call: u64) -> bool {
+        false
+    }
 }
 
 impl Reads for Server {
@@ -417,7 +453,7 @@ impl Reads for Server {
     fn sent_of(&self, _: &str, _: u64) -> Option<u64> {
         None
     }
-    fn call_state(&self, _: &str, _: &str) -> Vec<Push> {
+    fn call_state(&self, _: &str, _: &str, _: bool) -> Vec<Push> {
         Vec::new()
     }
     fn pin_state(&self, room: &str, user: &str) -> Option<Push> {
@@ -444,14 +480,23 @@ impl Reads for DurableServer {
     fn sent_of(&self, room: &str, cursor: u64) -> Option<u64> {
         self.imported_sent_ms(room, cursor)
     }
-    fn call_state(&self, room: &str, user: &str) -> Vec<Push> {
-        call_state(self, room, user)
+    fn call_state(&self, room: &str, user: &str, guests_on: bool) -> Vec<Push> {
+        call_state(self, room, user, guests_on)
     }
     fn pin_state(&self, room: &str, user: &str) -> Option<Push> {
         DurableServer::pin_state(self, room, user)
     }
     fn read_state(&self, room: &str, user: &str) -> Option<Push> {
         DurableServer::read_state(self, room, user)
+    }
+    fn guest_lobby_state(&self, room: &str, user: &str) -> (u64, u32) {
+        DurableServer::guest_lobby_state(self, room, user).unwrap_or_default()
+    }
+    fn guest_meeting_for(&self, user: &str, meeting: u64) -> bool {
+        DurableServer::guest_meeting_for(self, user, meeting)
+    }
+    fn is_guest_call(&self, call: u64) -> bool {
+        DurableServer::is_guest_call(self, call)
     }
 }
 
@@ -509,8 +554,27 @@ fn calls(
     request: &Request,
     now_ms: u64,
     media_device: Option<u64>,
+    guests_on: bool,
 ) -> Option<Result<Answered, DurableConnError>> {
     use crate::calls::{CallError, SealedKey};
+    if !guests_on {
+        let target = match request {
+            Request::CallJoin { room, call }
+            | Request::CallHeartbeat { room, call }
+            | Request::CallKey { room, call, .. }
+            | Request::CallSeal { room, call, .. }
+            | Request::CallOffer { room, call, .. } => Some((room, *call)),
+            _ => None,
+        };
+        // Another device signed in as the same person must still negotiate guest calls before using them.
+        if let Some((room, call)) = target
+            && server.server().room(room).is_ok_and(|service| service.role(user).is_some())
+            && server.open_call(room).is_some_and(|open| open.id == call)
+            && server.is_guest_call(call)
+        {
+            return Some(Ok((refusal_of(crate::dispatch::E_NO_SUCH_CALL), None)));
+        }
+    }
     let answer = match request {
         Request::CallStart { room, video } => server.call_start(room, user, *video, now_ms),
         Request::CallJoin { room, call } => server.call_join(room, user, *call, now_ms).map(|()| *call),
@@ -568,6 +632,22 @@ fn is_meeting(request: &Request) -> bool {
     matches!(request, Request::MeetingSave { .. } | Request::MeetingCancel { .. } | Request::MeetingList { .. } | Request::MeetingJoin { .. })
 }
 
+fn guest_meetings_enabled(features: u32) -> bool {
+    use crewcraft_proto::request::{FEATURE_GUEST_MEETINGS, FEATURE_MEETINGS};
+    let required = FEATURE_MEETINGS | FEATURE_GUEST_MEETINGS;
+    features & required == required
+}
+
+fn is_guest_meeting(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::GuestMeetingSave { .. }
+            | Request::GuestLinkClose { .. }
+            | Request::GuestLobbyList { .. }
+            | Request::GuestLobbyDecide { .. }
+    )
+}
+
 /// Answer a meeting request over a durable server (task T370a): `None` for any other request. A saved meeting is
 /// answered with its id and followed by a meetings frame holding it; a cancel with the new version; a list with the
 /// count and a meetings frame; a join as `CallStart` is (the call's id, and with `media_device` the media frame). A
@@ -578,9 +658,17 @@ fn meetings(
     request: &Request,
     now_ms: u64,
     media_device: Option<u64>,
+    guests_on: bool,
 ) -> Option<Result<Answered, DurableConnError>> {
     use crate::meetings::{Draft, MeetingError};
     use crewcraft_proto::meeting::MeetingPage;
+    let existing = match request {
+        Request::MeetingSave { meeting, .. } | Request::MeetingCancel { meeting, .. } | Request::MeetingJoin { meeting } => *meeting,
+        _ => 0,
+    };
+    if !guests_on && existing != 0 && server.guest_meeting_for(user, existing) {
+        return Some(Ok((refusal_of(crate::dispatch::E_NO_SUCH_MEETING), None)));
+    }
     let answer = match request {
         Request::MeetingSave { room, meeting, version, start_ms, duration, title, agenda } => {
             let draft = Draft { title, start_ms: *start_ms, duration: *duration, agenda };
@@ -598,7 +686,7 @@ fn meetings(
             server.cancel_meeting(room, user, *meeting, *version, now_ms).map(|version| (Response::Ok { cursor: version }, None))
         }
         Request::MeetingList { from_ms, to_ms } => server
-            .meetings_between(user, *from_ms, *to_ms)
+            .meetings_between_with_guests(user, *from_ms, *to_ms, guests_on)
             .map(|page| (Response::Ok { cursor: page.meetings.len() as u64 }, Some(Follow::Meetings(page)))),
         Request::MeetingJoin { meeting } => server.join_meeting(user, *meeting, now_ms).map(|(room, call)| {
             let follow = media_device.and_then(|device| media_follow(server, &room, user, call, device, now_ms));
@@ -614,6 +702,45 @@ fn meetings(
     })
 }
 
+fn guest_meetings(
+    server: &mut DurableServer,
+    user: &str,
+    request: &Request,
+    now_ms: u64,
+) -> Option<Result<Answered, DurableConnError>> {
+    use crate::dispatch::{E_BAD_TEXT, E_CONFLICT, E_GUEST_LINK_CLOSED, E_NO_SUCH_GUEST, E_NOT_ALLOWED, E_RATE_LIMITED};
+    let reply = match request {
+        Request::GuestMeetingSave { change } => server.guest_meeting_save(user, change, now_ms),
+        Request::GuestLinkClose { meeting, revision } => server.guest_link_close(user, *meeting, *revision, now_ms).map(GuestReply::Lobby),
+        Request::GuestLobbyList { meeting } => server.guest_lobby(user, *meeting, now_ms).map(GuestReply::Lobby),
+        Request::GuestLobbyDecide { meeting, guest, revision, decision } => {
+            server.guest_lobby_decide(user, *meeting, *guest, *revision, *decision, now_ms).map(GuestReply::Lobby)
+        }
+        _ => return None,
+    };
+    Some(match reply {
+        Ok(reply) => {
+            let cursor = match &reply {
+                GuestReply::Created { lobby, .. } => lobby.meeting,
+                GuestReply::Lobby(lobby) => lobby.revision,
+            };
+            Ok((Response::Ok { cursor }, Some(Follow::Guest(reply))))
+        }
+        Err(error) => {
+            let code = match error {
+                GuestError::NoSuchGuest => E_NO_SUCH_GUEST,
+                GuestError::LinkClosed => E_GUEST_LINK_CLOSED,
+                GuestError::NotAllowed | GuestError::MediaUnavailable => E_NOT_ALLOWED,
+                GuestError::BadText => E_BAD_TEXT,
+                GuestError::Conflict => E_CONFLICT,
+                GuestError::RateLimited | GuestError::Full => E_RATE_LIMITED,
+                GuestError::Durable(error) => return Some(Err(DurableConnError::Storage(error))),
+            };
+            Ok((refusal_of(code), None))
+        }
+    })
+}
+
 /// The media credential frame for `device` of `user`, just admitted to `call` of `room` (task T360b2). None when
 /// issuing failed (`CallError::MediaUnusable`): the person is in the call, without media. A server announces
 /// `FEATURE_MEDIA` only with a media server set, so a client that agreed to it and gets no frame knows issuing failed.
@@ -625,8 +752,8 @@ fn media_follow(server: &DurableServer, room: &str, user: &str, call: u64, devic
 
 /// The open call of `room` for `user`: its `CallState`, the participants' call keys, and the sender keys sealed to
 /// `user` (tasks T360a1, T360d2).
-fn call_state(server: &DurableServer, room: &str, user: &str) -> Vec<Push> {
-    let Some(call) = server.open_call(room) else { return Vec::new() };
+fn call_state(server: &DurableServer, room: &str, user: &str, guests_on: bool) -> Vec<Push> {
+    let Some(call) = server.open_call(room).filter(|call| guests_on || !server.is_guest_call(call.id)) else { return Vec::new() };
     let mut pushes = vec![Push::CallState {
         room: room.to_owned(),
         cursor: 0,
@@ -731,6 +858,7 @@ enum Follow {
     Continued(String),
     /// The meetings frame after a saved meeting or a list (task T370a).
     Meetings(crewcraft_proto::meeting::MeetingPage),
+    Guest(GuestReply),
     /// An offer for the media server: the caller relays it and answers (task T360b6).
     Relay {
         call: u64,
