@@ -7,10 +7,9 @@ each slice lands as its own test-defined task.
 
 ## What a meeting is
 
-A meeting is a **scheduled call in one room**. It never has a call of its own kind: joining a meeting joins (or starts)
-that room's one open call, exactly as `CallStart` does (T360a1), so ringing, liveness, history lines, missed calls,
-media credentials, removal and end-to-end keys all stay where CALLS.md put them. The meeting only adds a schedule, an
-audience, an edit version and a link to the calls it ran on.
+A meeting is a **scheduled call in one room**. Staff meetings join or start the room's open staff call as
+`CallStart` does (T360a1). The meeting adds a schedule, an audience, an edit version and a link to the calls it ran
+on. T370c adds an exclusive call binding for guest meetings.
 
 The record, kept by the chat server and rebuilt from its journal:
 
@@ -19,7 +18,7 @@ The record, kept by the chat server and rebuilt from its journal:
 | `id` | A number the server gives, unique on the server. It is not a secret: it only works for members of the room. |
 | `room` | The room the meeting belongs to. A meeting never moves to another room. |
 | `owner` | Who scheduled it. |
-| `audience` | `staff` or `guests`, fixed when the meeting is made. This slice makes only `staff`. |
+| `audience` | `staff` or `guests`, fixed when the meeting is made. T370a creates staff meetings. T370c adds explicit guest creation. |
 | `title` | 1 to 200 characters after trimming, no control characters. |
 | `start_ms`, `duration` | The start in UTC milliseconds and a length of 1 to 1,440 minutes. |
 | `agenda` | Plain text, 0 to 4,000 characters (a message's length). |
@@ -38,7 +37,7 @@ own local work week into a UTC window and shows times in its own zone.
   Anything about a meeting in a room I am not in answers exactly like a meeting that does not exist.
 - **Staff audience is the default and is permanent.** A meeting made without saying otherwise is `staff`: only room
   members join and it has no guest link. No request changes a meeting's audience, so a staff meeting never gains guest
-  access, whatever settings change later. A guest meeting is a different meeting, made as one (later slice).
+  access, whatever settings change later. Guest meetings have their own creation request.
 - **Version checks.** An edit or a cancel carries the version the client last saw. A stale version is a conflict
   (409 in REQUIREMENTS section 4's terms): nothing changes, and the client keeps its unsaved edits and asks the person
   to reload explicitly; it never resends on its own.
@@ -53,7 +52,8 @@ own local work week into a UTC window and shows times in its own zone.
 - **Joining by id.** `MeetingJoin { meeting }` is enough: the server finds the room. A member joins the room's open
   call, or starts one if there is none (a video call; a Guest-role member can join an open call but not start one, as
   with `CallStart`), and that call is added to the meeting's `calls`. A meeting can be joined at any time before it is
-  cancelled; two meetings of one room that overlap share the room's one open call.
+  cancelled. Overlapping staff meetings can share the room's open staff call. A guest meeting follows the binding
+  rules below.
 - **Started on the spot** is scheduling a meeting that starts now, then joining it: two requests, no special case.
 - **System lines**, built by the server from the record, never from client text, as `EventKind::MeetingLine`
   events: "scheduled a meeting: <title>, <start in UTC>, <duration>"; "edited the meeting: <title>, <start in UTC>,
@@ -84,7 +84,7 @@ frames and gets `Other` for a meeting line. Strings as elsewhere in `request` (`
 - Request 47 `MeetingJoin`: `u64 meeting`. Answered as `CallStart` is: `Ok { cursor }` with the call's id and, with
   `FEATURE_MEDIA`, the media frame.
 - Follow frame 143, meetings: `u8 tag | u32 id | u8 more | u16 n | n × (u64 meeting | str room | u64 version | str
-  owner | u8 audience (0 staff) | u64 start_ms | u16 duration | str title | str agenda | u8 state)`, state 0 scheduled,
+  owner | u8 audience (0 staff, 1 guests) | u64 start_ms | u16 duration | str title | str agenda | u8 state)`, state 0 scheduled,
   1 in progress (its call is open), 2 held (it had calls, none open), 3 cancelled.
 - Push 85 `MeetingLine`: `u64 meeting | u8 change (1 scheduled, 2 edited, 3 cancelled) | u64 version | str author | str
   text`, an event that advances the cursor, like `CallLine`. A client refreshes its agenda when it sees one.
@@ -93,19 +93,64 @@ frames and gets `Other` for a meeting line. Strings as elsewhere in `request` (`
 - Journal: one record tag, 40, with a kind byte inside (scheduled, edited, cancelled, call linked), so meetings take one
   tag of the server's journal format.
 
-## What the media server sees
+## Staff-call media
 
-Nothing new. A meeting's call is an ordinary call: the media server gets the same credentials, `DropPerson` and
-`EndCall` events. It never learns titles, agendas or schedules.
+A staff meeting uses the existing media credentials, `DropPerson` and `EndCall` events. The media server receives
+no titles, agendas or schedules.
 
-## Guest meetings and the lobby (later)
+## Guest meetings and the lobby (T370c)
 
-A guest meeting is made with audience `guests` and gets what a staff meeting never has: an unguessable code of about
-119 bits instead of the staff meeting's number, an expiry (a few hours to 30 days), lobby on or off, and guest records
-(REQUIREMENTS sections 3 and 4). Its call has the guest entrance; admitted guests get a media credential scoped to that
-meeting with a guest prefix; lobby decisions are system lines; cancelling turns away everyone waiting and drops
-admitted guests through `DropPerson`. All of it attaches to the same record by audience, so nothing in this slice
-changes when it lands, and because audience never changes a staff meeting stays out of all of it.
+A staff member explicitly creates a `guests` meeting in a room where they can start a call. The server chooses a
+link code from 15 random bytes (120 bits), encodes it as 24 unpadded Base32 characters, and returns it to the
+creator once. It stores only a domain-separated digest. Creation also records the first name the creator
+chooses to show guests. The name uses the same normalization and limits as a guest name. The creator chooses
+an expiry 3 hours to 30 days after creation. The link is closed at that instant. The lobby defaults on.
+The meeting owner or a room
+admin or owner can change the lobby setting or close the link. Turning the lobby off requires confirmation of the
+warning that new guests will enter directly. Existing waiting guests still need a decision.
+
+- **Entrance.** A server-side trait takes typed lookup, knock, status and media requests. T370c calls it in
+  process. A future transport supplies the verified peer address, while the server supplies the time and
+  generates secrets. Lookup reveals only the meeting title and the first name chosen for guests. Knock
+  normalizes the name, removes control and bidirectional-override characters, and accepts 1–60 characters after trimming. The
+  server allocates an opaque guest ID and returns a fresh 32-byte bearer once. Status and media require the
+  matching meeting and bearer. The guest can read their own state. Guests have no room membership, staff session
+  or access to the room API.
+- **State.** Each guest record contains its meeting, ID, display name, bearer digest with a separate domain from
+  link codes, state and revision. A knock starts in `waiting`, or in `admitted` when the lobby is off. Staff
+  with current call-start permission can admit or decline a waiting guest, or remove an admitted guest.
+  Declined and removed are terminal. Bound waiting guests to 25 by default and retained guests to 64 per
+  meeting. Lookup, knock and status have per-address limits and bounded limiter storage. Only an abuse
+  investigation needs source addresses. Secrets stay out of journal data, audit entries and debug output.
+- **Call binding.** A staff member explicitly joins the guest meeting by ID to start or join its open call.
+  That call belongs to this guest meeting alone, within the existing one-open-call room limit. An ordinary
+  call or a different meeting cannot reuse it. A join fails while an incompatible call is open. Guests never
+  start calls. The binding survives replay and excludes the call from both missed-call projections.
+- **Media.** A waiting guest may be admitted before a call opens. A media request succeeds only for a currently
+  admitted guest, a live link and the open call bound to the same meeting. The trusted entrance gets a
+  short-lived, single-use credential for that room, call and media server, with an opaque `guest:<id>`
+  identity and a separate display label ending in `(guest)`. Its validity ends before the link expires. The
+  credential stays in the trusted relay. A future live adapter must check authority at relay time and prevent
+  a queued offer from succeeding after removal, expiry or cancellation. It must also enforce expiry on
+  connected guests and reconcile drops after a restart or control-link outage before accepting offers.
+- **Decisions and closure.** The journal records the actor, time and decision. A server-built, non-unread
+  system line shows admission, decline, removal, automatic admission or link closure in the staff room. A
+  closed link declines all waiting guests and removes all admitted guests in one operation. Closing the
+  link works after a call starts and leaves the staff call running. Cancelling an unstarted guest meeting
+  closes its schedule and link in the same journal operation. The expiry sweep uses the same closure
+  transition, while entry refuses an expired link immediately. After the durable write, removal and closure
+  enqueue the existing `DropPerson` for each affected guest on the bound open call. Replay uses the recorded
+  decisions and times.
+
+The staff API negotiates feature 65536 alongside `FEATURE_MEETINGS`. Clients without the guest feature see
+only staff entries in their calendar and cannot join guest meetings. Request 50 creates a guest meeting or
+updates its lobby setting. Request 51 closes a link, 52 lists the lobby, and 53 applies a decision. Updates
+carry the last observed revision. Follow 145 gives the correlated result or bounded lobby snapshot. Only a
+successful creation returns the code. Push 87 gives staff the current room waiting count and lobby revision
+on Sync, including unchanged room cursors and zero waiting. The room history records committed decisions
+separately from that count. Guests use typed in-process messages. Errors 18 and 19 cover unknown guest
+records and unavailable links. Journal family 42 records guest operations and replays the same transitions
+and call binding. Staff operations keep journal family 40 and the existing wire contract.
 
 ## Slices
 
@@ -119,7 +164,10 @@ changes when it lands, and because audience never changes a staff meeting stays 
    `audit.log` and the app are not part of it.
 2. **T370b, the calendar in the app.** The work-week agenda, the schedule and edit form (unsaved edits kept on a failed
    save, the conflict notice with an explicit reload), join buttons, start now.
-3. **T370c, guest meetings and the lobby**, with the guest entrance; then audit entries in `audit.log`.
+3. **T370c, guest meetings and the lobby.** Staff requests, lobby counts, journal replay, in-process guest
+   entrance and staff client-core API. Test expiry, waiting and direct admission, decline, media isolation and
+   removal, link closure, staff-only privacy and restart. Browser ingress, live guest media transport, desktop
+   lobby controls and ringing, and export to `audit.log` are later slices.
 
 ## Open questions for the owner
 
