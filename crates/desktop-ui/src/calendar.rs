@@ -11,7 +11,7 @@
 
 use crewcraft_proto::meeting::{MAX_AGENDA, MAX_DURATION, MAX_TITLE, Meeting, MeetingState};
 use crewcraft_ui_model::Command;
-use egui::{RichText, ScrollArea, TextEdit, Ui};
+use egui::{Key, RichText, ScrollArea, TextEdit, Ui};
 
 use crate::{Action, Update, Window, utc_time};
 
@@ -334,9 +334,11 @@ impl Window {
         let form = self.calendar.form.as_mut()?;
         let mut pick = None;
         ui.heading(if form.meeting == 0 { "Schedule a meeting" } else { "Edit the meeting" });
+        // Enter in any one-line field saves, as Save does (T370b2); the agenda takes several lines.
+        let mut fields = Vec::new();
         if form.meeting == 0 {
             let label = ui.label("Room");
-            ui.add(TextEdit::singleline(&mut form.room).desired_width(320.0)).labelled_by(label.id);
+            fields.push(ui.add(TextEdit::singleline(&mut form.room).desired_width(320.0)).labelled_by(label.id));
         } else {
             ui.label(format!("Room: {}", form.room));
         }
@@ -346,10 +348,12 @@ impl Window {
             title.request_focus();
             form.focus = false;
         }
+        fields.push(title);
         let label = ui.label("Start (UTC, YYYY-MM-DD HH:MM)");
-        ui.add(TextEdit::singleline(&mut form.start).desired_width(320.0)).labelled_by(label.id);
+        fields.push(ui.add(TextEdit::singleline(&mut form.start).desired_width(320.0)).labelled_by(label.id));
         let label = ui.label("Length in minutes");
-        ui.add(TextEdit::singleline(&mut form.minutes).desired_width(80.0)).labelled_by(label.id);
+        fields.push(ui.add(TextEdit::singleline(&mut form.minutes).desired_width(80.0)).labelled_by(label.id));
+        let enter = fields.iter().any(|field| field.lost_focus()) && ui.input(|input| input.key_pressed(Key::Enter));
         let label = ui.label("Agenda");
         ui.add(TextEdit::multiline(&mut form.agenda).desired_rows(4).desired_width(f32::INFINITY)).labelled_by(label.id);
         if form.conflict {
@@ -365,6 +369,9 @@ impl Window {
             ui.colored_label(ui.visuals().warn_fg_color, error.as_str());
         }
         let ready = !form.conflict && !form.saving && !form.reloading;
+        if enter && ready {
+            pick = Some(Pick::Save);
+        }
         ui.horizontal_wrapped(|ui| {
             if ui.add_enabled(ready, egui::Button::new("Save")).clicked() {
                 pick = Some(Pick::Save);

@@ -617,6 +617,7 @@ impl Worker {
             archive_sent: BTreeMap::new(),
             continued_sent: BTreeMap::new(),
             calendar_weeks: None,
+            meeting_changes_seen: 0,
             in_call: None,
             next_heartbeat: Instant::now(),
             crypto: None,
@@ -723,6 +724,8 @@ struct Run {
     continued_sent: BTreeMap<String, Vec<(u64, String, String)>>,
     /// The calendar week the window shows, in weeks from this one, once it has asked for one (task T370b).
     calendar_weeks: Option<i64>,
+    /// The session's meeting line count when the calendar was last read (task T370b2).
+    meeting_changes_seen: u64,
     /// The last reactions sent, per room (task T341b).
     reactions_sent: BTreeMap<String, crewcraft_ui_model::RoomReactions>,
     /// Pin metadata is sent even when the room's message snapshot stays unchanged (T343).
@@ -1795,6 +1798,12 @@ impl Run {
                 self.continued_sent.insert(room.to_owned(), lines.clone());
                 self.emit(Event::Continuations { room: room.to_owned(), lines });
             }
+        }
+        // A meeting line means a meeting changed, perhaps on another device: the calendar reads its week again (T370b2).
+        let changes = self.session.as_ref().map_or(self.meeting_changes_seen, SignedInSession::meeting_changes);
+        if changes != self.meeting_changes_seen {
+            self.meeting_changes_seen = changes;
+            self.refresh_meetings();
         }
         // The call's keys, for the call this app is in (task T360d3).
         if failure.is_none() && self.in_call.as_ref().is_some_and(|(in_room, _)| in_room == room) {

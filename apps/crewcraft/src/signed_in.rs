@@ -539,9 +539,19 @@ impl SignedInSession {
     }
 
     /// The room's open call and its call history lines by cursor, as the server pushed them (task T360a2).
+    /// Meeting lines (task T370b2) are among the history lines, in cursor order.
     pub fn calls(&mut self, room: &str) -> (Option<crewcraft_client_core::room_view::OpenCall>, Vec<(u64, String)>) {
+        let meetings = self.chat.meeting_lines(room);
         let Some(view) = self.chat.view(room) else { return (None, Vec::new()) };
-        (view.call().cloned(), view.call_lines().iter().map(|(cursor, line)| (*cursor, line.text.clone())).collect())
+        let mut lines: Vec<(u64, String)> = view.call_lines().iter().map(|(cursor, line)| (*cursor, line.text.clone())).collect();
+        lines.extend(meetings);
+        lines.sort_by_key(|(cursor, _)| *cursor);
+        (view.call().cloned(), lines)
+    }
+
+    /// How many meeting lines this session has seen: when it changes, a meeting changed (task T370b2).
+    pub fn meeting_changes(&self) -> u64 {
+        self.chat.meeting_changes()
     }
 
     /// Whether the server agreed to meetings and the calendar (task T370b).
