@@ -106,7 +106,9 @@ impl RelayFixture {
             lobby: true,
             confirm_direct: false,
         };
-        let GuestReply::Created { lobby, code } = rooms.guest_meeting_save(HOST, &GuestMeetingChange::Create(draft), expires_at - MIN_LINK_MS).unwrap() else {
+        let GuestReply::Created { lobby, code } =
+            rooms.guest_meeting_save(HOST, &GuestMeetingChange::Create(draft), expires_at - MIN_LINK_MS).unwrap()
+        else {
             panic!("expected a new guest meeting");
         };
         let proof = rooms.guest_entrance(|| now).knock(PEER, &code.0, "Fixture visitor").unwrap().proof;
@@ -122,7 +124,23 @@ impl RelayFixture {
             let clock = clock.clone();
             thread::spawn(move || link.run(&|| stopped.load(Ordering::Acquire), &rooms, &|| clock.load(Ordering::Acquire)))
         };
-        Self { relay, rooms, stopped, task: Some(task), tls, address, listener: Some(listener), public_key, now, clock, expires_at, proof, call, room, _scratch: scratch }
+        Self {
+            relay,
+            rooms,
+            stopped,
+            task: Some(task),
+            tls,
+            address,
+            listener: Some(listener),
+            public_key,
+            now,
+            clock,
+            expires_at,
+            proof,
+            call,
+            room,
+            _scratch: scratch,
+        }
     }
 
     fn offer(&self) -> Receiver<Result<String, RelayRefusal>> {
