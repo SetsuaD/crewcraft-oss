@@ -10,6 +10,7 @@ use crewcraft_proto::guest::{GuestCode, GuestDecision, GuestEntry, GuestLobby, G
 use crewcraft_proto::meeting::{Audience, MeetingChange};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
 use crate::calls::{CallError, Calls};
@@ -174,6 +175,7 @@ pub enum GuestOp {
     Decide { meeting: u64, guest: u64, actor: String, revision: u64, decision: GuestDecision, now_ms: u64 },
     Close { meeting: u64, actor: String, revision: u64, now_ms: u64, cancel: bool },
     Bind { meeting: u64, call: u64, actor: String, now_ms: u64 },
+    Leave { meeting: u64, guest: u64, now_ms: u64 },
 }
 
 fn digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
@@ -261,7 +263,7 @@ impl Guests {
 
     fn authenticate(&self, proof: &GuestProof) -> Result<&Visitor, GuestError> {
         let visitor = self.links.get(&proof.meeting).and_then(|link| link.visitors.get(&proof.guest)).ok_or(GuestError::NoSuchGuest)?;
-        if visitor.digest != digest(b"crewcraft.guest.bearer.v1\0", &proof.bearer.0) {
+        if !bool::from(visitor.digest.ct_eq(&digest(b"crewcraft.guest.bearer.v1\0", &proof.bearer.0))) {
             return Err(GuestError::NoSuchGuest);
         }
         Ok(visitor)
@@ -280,7 +282,8 @@ pub(crate) fn apply(server: &mut Server, meetings: &mut Meetings, calls: &mut Ca
         | GuestOp::Knock { meeting, .. }
         | GuestOp::Decide { meeting, .. }
         | GuestOp::Close { meeting, .. }
-        | GuestOp::Bind { meeting, .. } => *meeting,
+        | GuestOp::Bind { meeting, .. }
+        | GuestOp::Leave { meeting, .. } => *meeting,
     };
     let before_waiting =
         guests.links.get(&id).map_or(0, |link| link.visitors.values().filter(|visitor| visitor.state == GuestState::Waiting).count() as u32);
@@ -445,6 +448,19 @@ pub(crate) fn apply(server: &mut Server, meetings: &mut Meetings, calls: &mut Ca
             record.calls.insert(*call);
             guests.bound.insert(*call, *meeting);
             return Ok(());
+        }
+        GuestOp::Leave { meeting, guest, now_ms } => {
+            guests.live(*meeting, *now_ms)?;
+            let link = guests.links.get_mut(meeting).ok_or(GuestError::NoSuchGuest)?;
+            let visitor = link.visitors.get_mut(guest).ok_or(GuestError::NoSuchGuest)?;
+            visitor.state = match visitor.state {
+                GuestState::Waiting => GuestState::Declined,
+                GuestState::Admitted => GuestState::Removed,
+                GuestState::Declined | GuestState::Removed => return Err(GuestError::NotAllowed),
+            };
+            visitor.revision = visitor.revision.checked_add(1).ok_or(GuestError::NotAllowed)?;
+            link.revision = link.revision.checked_add(1).ok_or(GuestError::NotAllowed)?;
+            (*meeting, "guest", format!("{} (guest) left the meeting", visitor.name))
         }
     };
     let record = meetings.meetings.get(&id).ok_or(GuestError::NoSuchGuest)?;
@@ -695,6 +711,21 @@ impl DurableServer {
 }
 
 impl<C: Fn() -> u64> GuestAccess<'_, C> {
+    /// Leave only the meeting and guest identified by this proof. A live link accepts repeated leaves.
+    pub fn leave(&mut self, peer: IpAddr, proof: &GuestProof) -> Result<(), GuestError> {
+        let now_ms = self.begin(peer)?;
+        let state = self.server.guests.authenticate(proof)?.state;
+        self.server.guests.live(proof.meeting, now_ms)?;
+        if matches!(state, GuestState::Declined | GuestState::Removed) {
+            return Ok(());
+        }
+        self.server.record_guest(&GuestOp::Leave { meeting: proof.meeting, guest: proof.guest, now_ms }).map_err(GuestError::Durable)?;
+        if state == GuestState::Admitted {
+            self.server.drop_guest_ids(proof.meeting, &[proof.guest]);
+        }
+        Ok(())
+    }
+
     fn begin(&mut self, peer: IpAddr) -> Result<u64, GuestError> {
         self.server.check_alive().map_err(GuestError::Durable)?;
         let now = (self.clock)();
@@ -769,6 +800,9 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
+
+    use crate::media::MediaIssuer;
+    use crewcraft_media_auth::Issuer;
 
     const NOW: u64 = 1_800_000_000_000;
     const OWNER: &str = "host@example.org";
@@ -855,6 +889,54 @@ mod tests {
         drop(server);
         let mut server = DurableServer::open(&scratch.0.join("rooms.log")).map_err(GuestError::Durable)?;
         assert_eq!(server.guest_lobby(OWNER, lobby.meeting, lobby.expires_ms)?, closed);
+        Ok(())
+    }
+
+    #[test]
+    fn a_scoped_leave_is_terminal_and_updates_the_lobby_and_media_once_across_replay() -> Result<(), GuestError> {
+        let (scratch, mut server, room) = fixture()?;
+        let journal = scratch.0.join("rooms.log");
+        let journal_bytes = || fs::read(&journal).map_err(|_| GuestError::MediaUnavailable);
+        let (lobby, code) = create(&mut server, &room, true)?;
+        let waiting = server.guest_entrance(|| NOW + 1).knock(peer(), &code.0, "Waiting visitor")?.proof;
+        let joining = server.guest_entrance(|| NOW + 1).knock(peer(), &code.0, "Admitted visitor")?.proof;
+        let wrong = GuestProof { guest: joining.guest, ..waiting.clone() };
+        assert_eq!(server.guest_entrance(|| NOW + 2).leave(peer(), &wrong), Err(GuestError::NoSuchGuest));
+        assert_eq!(server.guest_lobby_state(&room, OWNER).map(|(_, waiting)| waiting), Some(2));
+
+        server.guest_entrance(|| NOW + 2).leave(peer(), &waiting)?;
+        let once = journal_bytes()?;
+        server.guest_entrance(|| NOW + 2).leave(peer(), &waiting)?;
+        assert_eq!(journal_bytes()?, once);
+        let lobby = server.guest_lobby(OWNER, lobby.meeting, NOW + 3)?;
+        assert_eq!(server.guest_lobby_state(&room, OWNER), Some((lobby.revision, 1)));
+        assert_eq!(server.guest_entrance(|| NOW + 3).status(peer(), &waiting)?.state, GuestState::Declined);
+
+        let key = Issuer::generate().map_err(|_| GuestError::MediaUnavailable)?;
+        let issuer = Issuer::from_pkcs8(&key).map_err(|_| GuestError::MediaUnavailable)?;
+        server.set_media(MediaIssuer::new(issuer, "media.example.org", "192.0.2.30:3478"));
+        server.guest_lobby_decide(OWNER, lobby.meeting, joining.guest, lobby.revision, GuestDecision::Admit, NOW + 4)?;
+        let (_, call) = server.join_meeting(OWNER, lobby.meeting, NOW + 5).map_err(|_| GuestError::NotAllowed)?;
+        assert_eq!(server.guest_media_call(&joining, NOW + 5)?, call);
+        server.guest_entrance(|| NOW + 6).leave(peer(), &joining)?;
+        let removal = MediaEvent::DropPerson { call, person: format!("guest:{}", joining.guest) };
+        assert_eq!(server.take_media_events(), vec![removal]);
+        assert_eq!(server.guest_media_call(&joining, NOW + 6), Err(GuestError::NotAllowed));
+        let once = journal_bytes()?;
+        server.guest_entrance(|| NOW + 7).leave(peer(), &joining)?;
+        assert_eq!(journal_bytes()?, once);
+        assert!(server.take_media_events().is_empty());
+        let lobby = server.guest_lobby(OWNER, lobby.meeting, NOW + 7)?;
+        assert_eq!(server.guest_lobby_state(&room, OWNER), Some((lobby.revision, 0)));
+
+        drop(server);
+        let mut server = DurableServer::open(&journal).map_err(GuestError::Durable)?;
+        assert_eq!(server.guest_lobby(OWNER, lobby.meeting, NOW + 8)?, lobby);
+        assert_eq!(server.guest_entrance(|| NOW + 8).status(peer(), &joining)?.state, GuestState::Removed);
+        server.guest_entrance(|| NOW + 8).leave(peer(), &joining)?;
+        assert_eq!(journal_bytes()?, once);
+        server.guest_link_close(OWNER, lobby.meeting, lobby.revision, NOW + 9)?;
+        assert_eq!(server.guest_entrance(|| NOW + 9).leave(peer(), &joining), Err(GuestError::LinkClosed));
         Ok(())
     }
 

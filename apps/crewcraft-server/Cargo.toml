@@ -31,8 +31,12 @@ crewcraft-server-core.workspace = true
 crewcraft-strict-toml.workspace = true
 crewcraft-tls.workspace = true
 crewcraft-totp.workspace = true
+# The lab guest listener parses bounded HTTP request headers.
+httparse = "=1.10.1"
 rand_core.workspace = true
 rustls.workspace = true
+# Strict JSON requests for the lab guest listener.
+serde = { version = "1", features = ["derive"] }
 # The authorizer's and the token endpoint's JSON answers (T611e).
 serde_json = "1"
 sha2.workspace = true

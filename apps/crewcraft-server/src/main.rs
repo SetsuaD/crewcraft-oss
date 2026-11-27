@@ -27,6 +27,7 @@ use crewcraft_proto::request::{
 };
 #[cfg(unix)]
 use crewcraft_server::control::{ControlClient, ControlSocket};
+use crewcraft_server::guest_lab;
 use crewcraft_server::identity_config;
 use crewcraft_server::lab_admin::{self, DisplayFailed, IssuedCode, ProtectedDisplay};
 use crewcraft_server::lab_installation::LabInstallation;
@@ -574,6 +575,7 @@ fn serve(data: &Path) -> io::Result<()> {
     // media.toml, if present, adds media credentials to calls and the media server's control connection (tasks
     // T360b2, T360b3). Like identity.toml, a file that does not check out stops the server.
     let media = crewcraft_server::media_link::load(data)?;
+    let guest_lab = guest_lab::load(data)?;
     let mut options = config.serve_options();
     if media.is_some() {
         options.protocol.features |= crewcraft_proto::request::FEATURE_MEDIA;
@@ -594,6 +596,13 @@ fn serve(data: &Path) -> io::Result<()> {
         Some((issuer, link)) => {
             println!("Media server configured ({})", crewcraft_server::media_link::MEDIA_FILE);
             runtime.with_media(issuer, link)?
+        }
+        None => runtime,
+    };
+    let runtime = match guest_lab {
+        Some(guest_lab) => {
+            println!("Lab guest lobby listening on {} ({})", guest_lab.local_addr()?, crewcraft_server::guest_lab::CONFIG_FILE);
+            runtime.with_guest_lab(guest_lab)
         }
         None => runtime,
     };

@@ -47,6 +47,9 @@ the normal or build dependencies of one of them, on any target, include `cc`, `c
 | `crewcraft-media-auth` | The media credentials the media server checks (T360b1). Ed25519 and the media key's PKCS#8 form come from `ed25519-dalek` (until T363a they came from `ring`), so the media server can link it |
 | `crewcraft-media` | The media path of the media server (T363a, [CALLS.md](CALLS.md)): str0m with no backend of its own, on `crewcraft-media-crypto` and `crewcraft-media-auth`. The binary, `crewcraft-media-server`, is not on this list: its control connection uses `crewcraft-tls` (ring), decided 2026-11-26 |
 
+The lab browser lobby uses the pure-Rust request-head parser `httparse` 1.10.1, licensed MIT OR Apache-2.0.
+It adds no native runtime or build tool. Its published checksum is in `Cargo.lock`.
+
 ## Shipped third-party binaries
 
 Prebuilt programs that are not built from source here but go into a release asset. Each is pinned by SHA-256, never

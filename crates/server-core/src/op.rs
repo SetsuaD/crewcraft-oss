@@ -910,6 +910,12 @@ fn encode_guest(out: &mut Vec<u8>, record: &crate::guests::GuestOp) -> Result<()
             encode_str(out, actor)?;
             out.extend_from_slice(&now_ms.to_be_bytes());
         }
+        GuestOp::Leave { meeting, guest, now_ms } => {
+            out.push(7);
+            out.extend_from_slice(&meeting.to_be_bytes());
+            out.extend_from_slice(&guest.to_be_bytes());
+            out.extend_from_slice(&now_ms.to_be_bytes());
+        }
     }
     Ok(())
 }
@@ -926,7 +932,7 @@ fn decode_guest(bytes: &[u8], pos: &mut usize) -> Result<crate::guests::GuestOp,
     use crate::guests::GuestOp;
     use crewcraft_proto::guest::{GuestDecision, GuestMeetingDraft};
     let [kind] = decode_array::<1>(bytes, pos)?;
-    if !(1..=6).contains(&kind) {
+    if !(1..=7).contains(&kind) {
         return Err(CodecError::BadKind(kind));
     }
     let meeting = decode_u64(bytes, pos)?;
@@ -986,12 +992,13 @@ fn decode_guest(bytes: &[u8], pos: &mut usize) -> Result<crate::guests::GuestOp,
             let cancel = guest_bool(bytes, pos)?;
             GuestOp::Close { meeting, actor, revision, now_ms, cancel }
         }
-        _ => {
+        6 => {
             let call = decode_u64(bytes, pos)?;
             let actor = decode_str(bytes, pos)?;
             let now_ms = decode_u64(bytes, pos)?;
             GuestOp::Bind { meeting, call, actor, now_ms }
         }
+        _ => GuestOp::Leave { meeting, guest: decode_u64(bytes, pos)?, now_ms: decode_u64(bytes, pos)? },
     })
 }
 
@@ -1120,6 +1127,38 @@ fn decode_u64(bytes: &[u8], pos: &mut usize) -> Result<u64, CodecError> {
     ]);
     *pos += 8;
     Ok(val)
+}
+
+#[cfg(test)]
+mod guest_tests {
+    use super::*;
+    use crate::guests::GuestOp;
+
+    #[test]
+    fn old_guest_binding_bytes_still_decode_and_leave_has_its_own_kind() -> Result<(), CodecError> {
+        let actor = b"host@example.org";
+        let mut old = vec![42, 6];
+        old.extend_from_slice(&1_u64.to_be_bytes());
+        old.extend_from_slice(&2_u64.to_be_bytes());
+        old.extend_from_slice(&16_u32.to_be_bytes());
+        old.extend_from_slice(actor);
+        old.extend_from_slice(&3_u64.to_be_bytes());
+        let bind = Op::Guest(GuestOp::Bind { meeting: 1, call: 2, actor: "host@example.org".into(), now_ms: 3 });
+        assert_eq!(decode_op(&old)?, bind);
+        assert_eq!(encode_op(&bind)?, old);
+
+        let leave = Op::Guest(GuestOp::Leave { meeting: 1, guest: 2, now_ms: 3 });
+        let mut bytes = encode_op(&leave)?;
+        assert!(bytes.starts_with(&[42, 7]));
+        assert_eq!(decode_op(&bytes)?, leave);
+        for end in 0..bytes.len() {
+            assert!(decode_op(&bytes[..end]).is_err());
+        }
+        bytes.push(0);
+        assert_eq!(decode_op(&bytes), Err(CodecError::TrailingBytes));
+        assert_eq!(decode_op(&[42, 8]), Err(CodecError::BadKind(8)));
+        Ok(())
+    }
 }
 
 #[cfg(test)]

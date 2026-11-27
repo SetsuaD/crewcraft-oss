@@ -1,0 +1,32 @@
+{
+  "id": "T370f-guest-browser-lab",
+  "title": "Add an opt-in loopback HTTPS guest lobby",
+  "crate": "crewcraft-server",
+  "files": [
+    "Cargo.lock",
+    "apps/crewcraft-server/Cargo.toml",
+    "apps/crewcraft-server/src/guest_lab.rs",
+    "apps/crewcraft-server/src/guest_lab/http.rs",
+    "apps/crewcraft-server/src/guest_lab/lobby.html",
+    "apps/crewcraft-server/src/lab_runtime.rs",
+    "apps/crewcraft-server/src/lib.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/tests/t370f_guest_web_lab.rs",
+    "crates/server-core/Cargo.toml",
+    "crates/server-core/src/guests.rs",
+    "crates/server-core/src/op.rs",
+    "docs/MEETINGS.md",
+    "docs/NON-RUST-DEPENDENCIES.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t370f_guest_web_lab.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t370f_guest_web_lab",
+  "depends_on": [
+    "T370c-guest-meetings"
+  ],
+  "spec": "Implement the guest lobby lab API in docs/MEETINGS.md with a separate opt-in loopback HTTPS listener. Reuse typed invite lookup and narrow guest authority for knock, own status and durable leave. Refuse malformed and oversize requests with documented bounds and return uniform unauthorized lookup and proof failures. Exercise the separate staff listener with no client certificate and verify it sends no application data. Validate replay and idempotent leave with synthetic state. The interactive Rust/WASM client, guest media and public exposure remain separate work.",
+  "status": "done",
+  "context": [
+    "docs/MEETINGS.md",
+    "docs/SECURITY-DESIGN.md"
+  ]
+}
