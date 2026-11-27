@@ -130,12 +130,12 @@ impl Staff {
         let sign_in = SignIn { email: person.email, password: PASSWORD, code: &code };
         stream.write_all(&encode(&signin::encode_request(&sign_in).unwrap()).unwrap()).unwrap();
         let reply = read_frame(&mut stream, 4096).unwrap().unwrap();
-        assert!(matches!(signin::decode_reply(reply.as_bytes()).unwrap(), signin::Reply::Accepted { .. }));
+        assert!(matches!(signin::decode_reply(reply.payload()).unwrap(), signin::Reply::Accepted { .. }));
         let hello = Hello { min_version: 1, max_version: 1, features, client: "Fixture client".into() };
         stream.write_all(&encode(&handshake::encode_hello(&hello).unwrap()).unwrap()).unwrap();
         let reply = read_frame(&mut stream, 4096).unwrap().unwrap();
         assert!(
-            matches!(handshake::decode_reply(reply.as_bytes()).unwrap(), handshake::Reply::Welcome { features: negotiated, .. } if negotiated == features)
+            matches!(handshake::decode_reply(reply.payload()).unwrap(), handshake::Reply::Welcome { features: negotiated, .. } if negotiated == features)
         );
         Self { stream, client: Client::new(person.email, Settings::default()), server: Some(server) }
     }
@@ -147,8 +147,8 @@ impl Staff {
         let (mut answer, mut events, mut lobby_pushes) = (None, Vec::new(), Vec::new());
         loop {
             let frame = read_frame(&mut self.stream, 1 << 21).unwrap().unwrap();
-            if frame.as_bytes().first() == Some(&GUEST_LOBBY_STATE) {
-                lobby_pushes.push(decode_push(frame.as_bytes()).unwrap());
+            if frame.payload().first() == Some(&GUEST_LOBBY_STATE) {
+                lobby_pushes.push(decode_push(frame.payload()).unwrap());
             }
             for event in self.client.receive(frame.as_bytes(), NOW, 0).unwrap() {
                 match event {
