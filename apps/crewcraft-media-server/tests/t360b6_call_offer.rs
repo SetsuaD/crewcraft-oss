@@ -4,12 +4,14 @@
 //! the media server's answers back: the chat server relays each over its mutual-TLS control link. Their str0m clients
 //! then connect to the media server over real UDP and A's frames reach B. An offer with a used or forged credential is
 //! refused by the media server; a non-member's offer is refused by the chat server and never reaches the media server.
+//! A credential that has expired when it arrives is refused by the media server too: Bo's second device runs its chat
+//! server connection on a clock set back past the credential's lifetime, so no test waits out the 60 seconds.
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -17,7 +19,7 @@ use crewcraft_client_core::client::{Client, ClientEvent};
 use crewcraft_client_core::notify::Settings;
 use crewcraft_client_core::requests::Reply;
 use crewcraft_media::{config, intake, serve};
-use crewcraft_media_auth::Issuer;
+use crewcraft_media_auth::{Issuer, LIFETIME_MS};
 use crewcraft_media_server::control::{ControlListener, tls_config};
 use crewcraft_proto::frame::{encode, read_frame};
 use crewcraft_proto::handshake::{self, Hello, ServerSide};
@@ -265,16 +267,20 @@ fn offers_go_through_the_chat_server_and_answers_come_back() {
     };
     let devices = TcpListener::bind("127.0.0.1:0").unwrap();
     let devices_address = devices.local_addr().unwrap();
+    // How far behind the real clock the chat server's clock runs for Bo's second device (device 4).
+    let behind = Arc::new(AtomicU64::new(0));
     let accepting = {
-        let (rooms, relay) = (rooms.clone(), relay.clone());
+        let (rooms, relay, behind) = (rooms.clone(), relay.clone(), behind.clone());
         std::thread::spawn(move || {
-            for (user, device) in [(ANA, 1), (BO, 2), (CY, 3)] {
+            for (user, device) in [(ANA, 1), (BO, 2), (CY, 3), (BO, 4)] {
                 let (mut stream, _) = devices.accept().unwrap();
                 let (rooms, relay) = (rooms.clone(), relay.clone());
+                let behind = if device == 4 { behind.clone() } else { Arc::new(AtomicU64::new(0)) };
                 std::thread::spawn(move || {
                     let side = ServerSide { min_version: 1, max_version: 1, features: FEATURE_CALLS | FEATURE_MEDIA, name: "chat".into() };
                     let relay: &dyn MediaRelay = &*relay;
-                    let _ = serve_with_media(&mut stream, &Device { user, device }, &rooms, Some(relay), side, |_| Ok(()), now_ms);
+                    let clock = || now_ms().saturating_sub(behind.load(Ordering::SeqCst));
+                    let _ = serve_with_media(&mut stream, &Device { user, device }, &rooms, Some(relay), side, |_| Ok(()), clock);
                 });
             }
         })
@@ -282,6 +288,7 @@ fn offers_go_through_the_chat_server_and_answers_come_back() {
     let mut ana = Person::connect(devices_address, ANA);
     let mut bo = Person::connect(devices_address, BO);
     let mut cy = Person::connect(devices_address, CY);
+    let mut bo_second = Person::connect(devices_address, BO);
     accepting.join().unwrap();
 
     // Ana starts a call and Bo joins: each gets a credential.
@@ -342,7 +349,29 @@ fn offers_go_through_the_chat_server_and_answers_come_back() {
     assert!(matches!(refused, Response::Error { code, .. } if code == E_NO_SUCH_ROOM), "{refused:?}");
     assert_eq!(relay.count.load(Ordering::SeqCst), 4, "a non-member's offer reached the relay");
 
-    drop((ana, bo, cy));
+    // Bo's second device joins while the chat server's clock for it runs a second more than a credential's lifetime
+    // behind: the credential it gets has already expired. The chat server relays the offer (Bo is in the call) and the
+    // media server, on the real clock, refuses it.
+    behind.store(LIFETIME_MS + 1_000, Ordering::SeqCst);
+    let (joined, follow) = bo_second.ask(Request::CallJoin { room: room.clone(), call });
+    assert_eq!(joined, Response::Ok { cursor: call });
+    let expired = credential_of(follow);
+    let (_, offer, _) = Peer::new();
+    let (refused, _) = bo_second.ask(Request::CallOffer { room: room.clone(), call, credential: expired, offer });
+    assert!(matches!(refused, Response::Error { code, .. } if code == E_NOT_ALLOWED), "{refused:?}");
+    assert_eq!(relay.count.load(Ordering::SeqCst), 5, "the expired credential's offer reached the media server");
+    // The control: the same device, the same join and offer, with the clock put right, is answered.
+    behind.store(0, Ordering::SeqCst);
+    let (joined, follow) = bo_second.ask(Request::CallJoin { room: room.clone(), call });
+    assert_eq!(joined, Response::Ok { cursor: call });
+    let fresh = credential_of(follow);
+    let (_, offer, _) = Peer::new();
+    let (answered, follow) = bo_second.ask(Request::CallOffer { room: room.clone(), call, credential: fresh, offer });
+    assert_eq!(answered, Response::Ok { cursor: call });
+    assert!(matches!(follow, Some(ClientEvent::Answer { .. })), "no answer frame: {follow:?}");
+    assert_eq!(relay.count.load(Ordering::SeqCst), 6);
+
+    drop((ana, bo, cy, bo_second));
     chat_stop.store(true, Ordering::Release);
     linking.join().unwrap();
     stop.store(true, Ordering::Release);
