@@ -212,6 +212,12 @@ pub enum Event {
         room: String,
         reactions: crewcraft_ui_model::RoomReactions,
     },
+    /// The person's own settings for a room (pinned, muted, hidden), at sign-in and whenever they change, including a
+    /// change made on another of the person's devices (T346).
+    RoomSettings {
+        room: String,
+        settings: crewcraft_proto::room_settings::RoomSettings,
+    },
     /// The authoritative room pin, including a body outside the current history page (T343).
     Pin {
         room: String,
@@ -322,6 +328,8 @@ pub enum Problem {
     ReadStateNotOffered,
     /// The server does not offer continuing archived conversations (task T352).
     ContinueNotOffered,
+    /// The server does not keep personal room settings (T346).
+    RoomSettingsNotOffered,
     /// A file on this computer could not be read or written (task T330e).
     LocalFile(io::ErrorKind),
 }
@@ -355,6 +363,7 @@ impl std::fmt::Display for Problem {
             Self::HistoryGap => "Some earlier messages are outside the server's retained history.",
             Self::ReadStateNotOffered => "This server does not offer shared unread positions.",
             Self::ContinueNotOffered => "This server does not offer continuing archived conversations.",
+            Self::RoomSettingsNotOffered => "This server does not keep pinned, muted or hidden rooms.",
             Self::LocalFile(_) => "CrewCraft could not read or write that file on this computer.",
         })
     }
@@ -382,6 +391,7 @@ impl Problem {
                 | Self::HistoryGap
                 | Self::ReadStateNotOffered
                 | Self::ContinueNotOffered
+                | Self::RoomSettingsNotOffered
                 | Self::LocalFile(_)
         )
     }
@@ -540,6 +550,7 @@ impl Worker {
             threads_sent: BTreeMap::new(),
             reactions_sent: BTreeMap::new(),
             pins_sent: BTreeMap::new(),
+            room_settings_sent: BTreeMap::new(),
             saved_sent: None,
             saved_requested: false,
             archive_sent: BTreeMap::new(),
@@ -652,6 +663,8 @@ struct Run {
     reactions_sent: BTreeMap<String, crewcraft_ui_model::RoomReactions>,
     /// Pin metadata is sent even when the room's message snapshot stays unchanged (T343).
     pins_sent: BTreeMap<String, Option<PinnedMessage>>,
+    /// The person's own room settings last sent, per room (T346).
+    room_settings_sent: BTreeMap<String, crewcraft_proto::room_settings::RoomSettings>,
     saved_sent: Option<Vec<crewcraft_proto::request::SavedMessage>>,
     /// Refresh personal bookmarks after the window first opens or changes the saved list (T343).
     saved_requested: bool,
@@ -718,6 +731,7 @@ impl Run {
                 Some(Input::Command(Command::Sync { room })) => self.open_room(room),
                 Some(Input::Command(Command::Read { room })) => self.read_room(room),
                 Some(Input::Command(Command::MarkUnread { room, target })) => self.mark_unread(room, target),
+                Some(Input::Command(Command::SetRoomSetting { room, setting, on })) => self.set_room_setting(room, setting, on),
                 Some(Input::Command(Command::Post { room, text })) => self.post(room, text),
                 Some(Input::Command(Command::Edit { room, target, text })) => {
                     self.change(room, |session, room| session.edit(room, target, &text));
@@ -840,6 +854,7 @@ impl Run {
     /// `SignedIn` and poll.
     fn start_session(&mut self, mut session: SignedInSession, email: &str) {
         self.pins_sent.clear();
+        self.room_settings_sent.clear();
         self.read_states_sent.clear();
         self.gaps_sent.clear();
         self.recovery_epochs.clear();
@@ -861,10 +876,28 @@ impl Run {
                 None
             }
         };
+        // The person's own room settings arrive before SignedIn, so the first room list is already in their order.
+        let settings = match session.list_room_settings() {
+            Ok(settings) => settings.unwrap_or_default(),
+            Err(error) => {
+                let problem = problem(error);
+                if problem.ends_session() {
+                    return self.fail_connection(problem, false);
+                }
+                self.emit(Event::Failed(problem));
+                Vec::new()
+            }
+        };
         self.session = Some(session);
         self.me = email.to_owned();
         if let Some(rooms) = listed {
             self.adopt(rooms);
+        }
+        for row in settings {
+            if self.followed.contains(&row.room) {
+                self.room_settings_sent.insert(row.room.clone(), row.settings);
+                self.emit(Event::RoomSettings { room: row.room, settings: row.settings });
+            }
         }
         let rooms = self.followed.iter().cloned().collect();
         self.emit(Event::SignedIn { email: self.me.clone(), rooms });
@@ -951,6 +984,7 @@ impl Run {
         self.seen.retain(|room, _| followed.contains(room));
         self.unread.retain(|room, _| followed.contains(room));
         self.read_states_sent.retain(|room, _| followed.contains(room));
+        self.room_settings_sent.retain(|room, _| followed.contains(room));
         self.gaps_sent.retain(|room, _| followed.contains(room));
         self.recovery_epochs.retain(|room, _| followed.contains(room));
     }
@@ -1043,6 +1077,36 @@ impl Run {
             Err(error) => {
                 self.request_failed(error);
             }
+        }
+    }
+
+    /// Turn one of the person's own settings for a room on or off (T346). The room's next sync reads the result back
+    /// from the server, so the window shows what the server stored, not what was asked.
+    fn set_room_setting(&mut self, room: String, setting: crewcraft_proto::room_settings::RoomSetting, on: bool) {
+        if let Err(problem) = self.follow(&room) {
+            return self.emit(Event::Failed(problem));
+        }
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        if !session.room_settings_offered() {
+            return self.emit(Event::Failed(Problem::RoomSettingsNotOffered));
+        }
+        match session.set_room_setting(&room, setting, on) {
+            Ok(_) => self.sync_room(&room, false),
+            Err(error) => {
+                self.request_failed(error);
+            }
+        }
+    }
+
+    /// Send the room's settings when they differ from the last ones sent (or always with `force`).
+    fn publish_room_settings(&mut self, room: &str, force: bool) {
+        let state = self.session.as_mut().and_then(|session| session.room_settings(room));
+        let Some(state) = state else { return };
+        if force || self.room_settings_sent.get(room) != Some(&state.settings) {
+            self.room_settings_sent.insert(room.to_owned(), state.settings);
+            self.emit(Event::RoomSettings { room: room.to_owned(), settings: state.settings });
         }
     }
 
@@ -1425,6 +1489,8 @@ impl Run {
             self.recovery_epochs.insert(room.to_owned(), epoch);
             self.emit(Event::Recovered { room: room.to_owned() });
         }
+        // Personal settings are complete even when the room's history has a gap (T346).
+        self.publish_room_settings(room, force);
         let mut failure = None;
         let lines = match result {
             Ok((_, lines)) => lines,

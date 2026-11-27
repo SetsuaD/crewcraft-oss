@@ -10,6 +10,7 @@ use crate::room::Role;
 use crate::room::RoomError;
 use crate::room_name::{self, NameError};
 use crate::room_service::{RoomService, ServiceError};
+use crewcraft_proto::room_settings::RoomSetting;
 
 /// Events each room's log keeps.
 pub const ROOM_LOG_CAPACITY: usize = 10_000;
@@ -284,6 +285,15 @@ impl Server {
     /// The durable caller has resolved and checked this target using its complete current-message projection.
     pub(crate) fn mark_unread_validated(&mut self, slug: &str, user: &str, target: u64) -> Result<bool, ServerError> {
         self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?.mark_unread_validated(user, target).map_err(ServerError::Service)
+    }
+
+    /// Turn one of `user`'s own settings for the room on or off (task T346) and return their settings revision for it
+    /// afterwards, and whether this changed anything (only a change is journalled).
+    pub fn set_room_setting(&mut self, slug: &str, user: &str, setting: RoomSetting, on: bool) -> Result<(u64, bool), ServerError> {
+        let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;
+        let changed = service.set_room_setting(user, setting, on).map_err(ServerError::Service)?;
+        let (_, revision) = service.room_settings(user).map_err(ServerError::Service)?;
+        Ok((revision, changed))
     }
 
     /// Record a heartbeat from `user` (as `Presence::heartbeat`). Presence is per server, not per room.

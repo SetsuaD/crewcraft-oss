@@ -48,6 +48,9 @@
 //!   person can read. Answered `Ok { cursor: 0 }`, then by one continued frame (`encode_continued`): `u8 tag (142) |
 //!   u32 id | str room`, the room the conversation continues in (docs/REQUIREMENTS.md "Continuing a conversation").
 //!   Asking again answers the same room.
+//! - tags 41 `SetRoomSetting` and 42 `ListRoomSettings` (task T346), announced by `FEATURE_ROOM_SETTINGS`: a person's
+//!   own pin, mute and hide settings for a room. See `room_settings` for their fields and the settings frame (141).
+//!   Tags 32 to 40 belong to the enrollment and sign-in openings (`bootstrap`, `signin`) and are never chat requests.
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
@@ -125,6 +128,8 @@ pub const FEATURE_GAP_REPLAY: u32 = 2048;
 pub const FEATURE_CONTINUE: u32 = 8192;
 /// The first byte of a continued frame (task T352).
 pub const CONTINUED_TAG: u8 = 142;
+/// Personal room settings: `SetRoomSetting`, `ListRoomSettings` and the `RoomSettings` push (task T346).
+pub const FEATURE_ROOM_SETTINGS: u32 = 4096;
 /// The first byte of a saved-message page.
 pub const SAVED_TAG: u8 = 136;
 /// Sixteen full rendered bodies, including their metadata, fit inside `frame::MAX_FRAME`.
@@ -182,6 +187,10 @@ const MARK_UNREAD: u8 = 29;
 const CURRENT: u8 = 30;
 const CALL_OFFER: u8 = 31;
 const CONTINUE: u8 = 43;
+/// `SetRoomSetting` (task T346).
+pub const SET_ROOM_SETTING: u8 = 41;
+/// `ListRoomSettings` (task T346).
+pub const LIST_ROOM_SETTINGS: u8 = 42;
 /// The largest sealed sender key a `CallSeal` carries.
 pub const MAX_SEALED: usize = 256;
 /// The most files one `PostFiles` attaches (task T330c).
@@ -220,6 +229,14 @@ pub enum Request {
     Current {
         room: String,
     },
+    /// Turn one of the asking person's own settings for a room on or off (task T346).
+    SetRoomSetting {
+        room: String,
+        setting: crate::room_settings::RoomSetting,
+        on: bool,
+    },
+    /// The asking person's settings for every room `ListRooms` lists (task T346).
+    ListRoomSettings,
     Ping,
     ListRooms,
     /// Messages the signed-in person can read, by the words they begin with (task T320b).
@@ -485,6 +502,17 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.extend_from_slice(&id.to_be_bytes());
             write_str(&mut out, archive, 1, MAX_NAME)?;
         }
+        Request::SetRoomSetting { room, setting, on } => {
+            out.push(SET_ROOM_SETTING);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.push(setting.code());
+            out.push(u8::from(*on));
+        }
+        Request::ListRoomSettings => {
+            out.push(LIST_ROOM_SETTINGS);
+            out.extend_from_slice(&id.to_be_bytes());
+        }
         Request::Ping => {
             out.push(6);
             out.extend_from_slice(&id.to_be_bytes());
@@ -650,7 +678,22 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
     let tag = bytes[0];
     if !(1..=6).contains(&tag)
         && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag)
-        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT | PIN | SAVE_MESSAGE | LIST_SAVED | MARK_UNREAD | CURRENT | CALL_OFFER | CONTINUE)
+        && !matches!(
+            tag,
+            DOWNLOAD
+                | POST_FILES
+                | REPLY
+                | REACT
+                | PIN
+                | SAVE_MESSAGE
+                | LIST_SAVED
+                | MARK_UNREAD
+                | CURRENT
+                | CALL_OFFER
+                | CONTINUE
+                | SET_ROOM_SETTING
+                | LIST_ROOM_SETTINGS
+        )
         && !(CALL_START..=STORAGE_USE).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));
@@ -691,6 +734,18 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
         }
         CURRENT => Request::Current { room: read_string(bytes, &mut pos, 1, MAX_NAME)? },
         CONTINUE => Request::Continue { archive: read_string(bytes, &mut pos, 1, MAX_NAME)? },
+        SET_ROOM_SETTING => {
+            let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let [code, on] = read_array::<2>(bytes, &mut pos)?;
+            let setting = crate::room_settings::RoomSetting::from_code(code).ok_or(CodecError::BadKind(code))?;
+            let on = match on {
+                0 => false,
+                1 => true,
+                other => return Err(CodecError::BadKind(other)),
+            };
+            Request::SetRoomSetting { room, setting, on }
+        }
+        LIST_ROOM_SETTINGS => Request::ListRoomSettings,
         6 => Request::Ping,
         LIST_ROOMS => Request::ListRooms,
         SEARCH => Request::Search { query: read_string(bytes, &mut pos, 1, MAX_QUERY)? },
@@ -1349,6 +1404,47 @@ mod continue_tests {
 }
 
 #[cfg(test)]
+mod room_settings_tests {
+    use super::*;
+    use crate::room_settings::RoomSetting;
+
+    #[test]
+    fn room_setting_requests_round_trip_and_refuse_unknown_settings_booleans_cuts_and_extra_bytes() -> Result<(), CodecError> {
+        for setting in [RoomSetting::Pinned, RoomSetting::Muted, RoomSetting::Hidden] {
+            for on in [false, true] {
+                let request = Request::SetRoomSetting { room: "room".into(), setting, on };
+                let bytes = encode_request(5, &request)?;
+                assert_eq!(decode_request(&bytes)?, (5, request));
+                for end in 0..bytes.len() {
+                    assert!(decode_request(&bytes[..end]).is_err());
+                }
+                let mut trailing = bytes.clone();
+                trailing.push(0);
+                assert_eq!(decode_request(&trailing), Err(CodecError::TrailingBytes));
+                let mut bad = bytes.clone();
+                let last = bad.len() - 1;
+                bad[last] = 2;
+                assert_eq!(decode_request(&bad), Err(CodecError::BadKind(2)));
+                bad[last] = u8::from(on);
+                bad[last - 1] = 4;
+                assert_eq!(decode_request(&bad), Err(CodecError::BadKind(4)));
+            }
+        }
+        assert!(encode_request(5, &Request::SetRoomSetting { room: String::new(), setting: RoomSetting::Muted, on: true }).is_err());
+        // The enrollment and sign-in openings keep their own tags: the chat decoder never takes one for a request.
+        for tag in 32u8..=40 {
+            assert_eq!(decode_request(&[tag, 0, 0, 0, 1]), Err(CodecError::BadKind(tag)));
+        }
+        let list = encode_request(6, &Request::ListRoomSettings)?;
+        assert_eq!(decode_request(&list)?, (6, Request::ListRoomSettings));
+        let mut trailing = list;
+        trailing.push(0);
+        assert_eq!(decode_request(&trailing), Err(CodecError::TrailingBytes));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod read_state_tests {
     use super::*;
 
@@ -1415,7 +1511,7 @@ mod pins_saved_tests {
             let request = Request::ListSaved { after_room, after_cursor };
             assert_eq!(decode_request(&encode_request(8, &request).unwrap()).unwrap(), (8, request));
         }
-        for tag in [0, 7, 13, 32, 63, 128, SAVED_TAG, 255] {
+        for tag in [0, 7, 13, 50, 63, 128, SAVED_TAG, 255] {
             assert_eq!(decode_request(&[tag]), Err(CodecError::BadKind(tag)));
         }
         assert!(encode_request(8, &Request::ListSaved { after_room: String::new(), after_cursor: 4 }).is_err());

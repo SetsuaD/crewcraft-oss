@@ -700,7 +700,8 @@ fn serve_lab(state: &Path, trusted_root: &Path, port: u16) -> io::Result<()> {
                 | FEATURE_PINS_SAVED
                 | FEATURE_READ_STATE
                 | FEATURE_GAP_REPLAY
-                | FEATURE_CONTINUE,
+                | FEATURE_CONTINUE
+                | crewcraft_proto::request::FEATURE_ROOM_SETTINGS,
             name: "CrewCraft Lab".into(),
         },
     };

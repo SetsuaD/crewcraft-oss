@@ -14,6 +14,8 @@
 //! - tag 29 `Pin` (task T343): `str slug | str actor | u64 target | u8 on (0 or 1) | u64 now_ms`
 //! - tag 30 `SaveMessage` (task T343): `str slug | str actor | u64 target | u8 on (0 or 1)`; a personal reference only
 //! - tag 31 `MarkUnread` (task T344): `str slug | str user | u64 target`; the concrete live target selected at acceptance
+//! - tag 32 `RoomSetting` (task T346): `str slug | str user | u8 setting (1 pinned, 2 muted, 3 hidden) | u8 on (0 or
+//!   1)`; a person's own room setting, recorded only when it changed
 //! - tag 20 `ImportRoom` (task T350a): `str key | str name`
 //! - tag 21 `ImportMessage`: `str slug | str key | str author | u64 sent_ms | str text | u8 deleted (0 or 1) | u64 parent
 //!   (0 for none)`
@@ -89,6 +91,13 @@ pub enum Op {
         slug: String,
         user: String,
         cursor: u64,
+    },
+    /// One of a person's own settings for a room, turned on or off (task T346).
+    RoomSetting {
+        slug: String,
+        user: String,
+        setting: crewcraft_proto::room_settings::RoomSetting,
+        on: bool,
     },
     /// Mark unread before this resolved nonzero message, including when the request used a default target.
     MarkUnread {
@@ -264,6 +273,13 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             encode_str(&mut out, slug)?;
             encode_str(&mut out, user)?;
             out.extend_from_slice(&cursor.to_be_bytes());
+        }
+        Op::RoomSetting { slug, user, setting, on } => {
+            out.push(ROOM_SETTING);
+            encode_str(&mut out, slug)?;
+            encode_str(&mut out, user)?;
+            out.push(setting.code());
+            out.push(u8::from(*on));
         }
         Op::MarkUnread { slug, user, target } => {
             out.push(MARK_UNREAD);
@@ -505,6 +521,21 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
                 return Err(CodecError::TrailingBytes);
             }
             Ok(Op::MarkRead { slug, user, cursor })
+        }
+        ROOM_SETTING => {
+            let slug = decode_str(bytes, &mut pos)?;
+            let user = decode_str(bytes, &mut pos)?;
+            let [code, on] = decode_array::<2>(bytes, &mut pos)?;
+            let setting = crewcraft_proto::room_settings::RoomSetting::from_code(code).ok_or(CodecError::BadKind(code))?;
+            let on = match on {
+                0 => false,
+                1 => true,
+                other => return Err(CodecError::BadKind(other)),
+            };
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::RoomSetting { slug, user, setting, on })
         }
         MARK_UNREAD => {
             let slug = decode_str(bytes, &mut pos)?;
@@ -753,6 +784,7 @@ const CALL_END: u8 = 28;
 const PIN: u8 = 29;
 const SAVE_MESSAGE: u8 = 30;
 const MARK_UNREAD: u8 = 31;
+const ROOM_SETTING: u8 = 32;
 
 fn decode_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).ok_or(CodecError::Truncated)?;
@@ -858,6 +890,35 @@ mod read_state_tests {
         let mut trailing = bytes;
         trailing.push(0);
         assert_eq!(decode_op(&trailing), Err(CodecError::TrailingBytes));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod room_settings_tests {
+    use super::*;
+    use crewcraft_proto::room_settings::RoomSetting;
+
+    #[test]
+    fn room_setting_records_refuse_unknown_settings_booleans_and_cut_or_extra_bytes() -> Result<(), CodecError> {
+        for setting in [RoomSetting::Pinned, RoomSetting::Muted, RoomSetting::Hidden] {
+            let op = Op::RoomSetting { slug: "room".into(), user: "reader".into(), setting, on: true };
+            let bytes = encode_op(&op)?;
+            assert_eq!(decode_op(&bytes)?, op);
+            for end in 0..bytes.len() {
+                assert!(decode_op(&bytes[..end]).is_err());
+            }
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            assert_eq!(decode_op(&trailing), Err(CodecError::TrailingBytes));
+            let mut bad = bytes;
+            let last = bad.len() - 1;
+            bad[last] = 2;
+            assert_eq!(decode_op(&bad), Err(CodecError::BadKind(2)));
+            bad[last] = 1;
+            bad[last - 1] = 0;
+            assert_eq!(decode_op(&bad), Err(CodecError::BadKind(0)));
+        }
         Ok(())
     }
 }

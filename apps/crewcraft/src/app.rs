@@ -538,6 +538,7 @@ pub fn worker_update(event: Event) -> Vec<Update> {
         Event::Threads { room, parents } => vec![Update::Threads { room, parents }],
         Event::Reactions { room, reactions } => vec![Update::Reactions { room, reactions }],
         Event::Pin { room, pinned } => vec![Update::Pin { room, pinned }],
+        Event::RoomSettings { room, settings } => vec![Update::RoomSettings { room, settings }],
         Event::SavedMessages { messages } => vec![Update::SavedMessages { messages }],
         Event::Archive { room, times } => vec![Update::Archive { room, times }],
         Event::Continued { archive, room } => vec![Update::Continued { archive, room }],

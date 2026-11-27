@@ -389,6 +389,59 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         self.request(Request::MarkRead { room: room.to_owned(), cursor }, now_ms, 0, deadline)
     }
 
+    /// Whether personal room settings were negotiated (T346).
+    pub fn room_settings(&self) -> bool {
+        self.features() & crewcraft_proto::request::FEATURE_ROOM_SETTINGS != 0
+    }
+
+    /// Turn one of the person's own settings for `room` on or off; returns their settings revision for it (T346).
+    pub fn set_room_setting(
+        &mut self,
+        room: &str,
+        setting: crewcraft_proto::room_settings::RoomSetting,
+        on: bool,
+        now_ms: u64,
+        deadline: Instant,
+    ) -> Result<u64, ChatError> {
+        if !self.room_settings() {
+            return Err(ChatError::Unsupported);
+        }
+        self.request(Request::SetRoomSetting { room: room.to_owned(), setting, on }, now_ms, 0, deadline)
+    }
+
+    /// The person's own settings for every room they are in, as the server lists them (T346). A settings frame of
+    /// another length than the answer said closes the session.
+    pub fn list_room_settings(
+        &mut self,
+        now_ms: u64,
+        deadline: Instant,
+    ) -> Result<Vec<crewcraft_proto::room_settings::ListedRoomSettings>, ChatError> {
+        if !self.room_settings() {
+            return Err(ChatError::Unsupported);
+        }
+        let (id, count) = match self.exchange(Request::ListRoomSettings, now_ms, 0, deadline)? {
+            (id, Response::Ok { cursor }) => (id, cursor),
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        loop {
+            for event in self.receive(now_ms, 0, deadline)? {
+                if let ClientEvent::RoomSettings { id: answered, rows } = event
+                    && answered == id
+                {
+                    if u64::try_from(rows.len()).ok() != Some(count) {
+                        self.closed = true;
+                        return Err(ChatError::UnexpectedResponse);
+                    }
+                    let inbox = self.session.client_mut().inbox_mut();
+                    for row in &rows {
+                        inbox.set_muted(&row.room, row.settings.muted);
+                    }
+                    return Ok(rows);
+                }
+            }
+        }
+    }
+
     /// Pin a message, or unpin it only if it is still the room's pin (T343).
     pub fn pin(&mut self, room: &str, target: u64, on: bool, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
         if !self.pins_saved() {
@@ -513,7 +566,7 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         } else {
             // Without a terminal pin/read snapshot, Sync can stop at a post before its file, thread or time
             // sidebands, or at an equal head before call metadata. Ping drains all of them before success.
-            if !self.pins_saved() && !self.read_states() {
+            if !self.pins_saved() && !self.read_states() && !self.room_settings() {
                 self.ping(now_ms, deadline)?;
             }
             Ok(head)
@@ -532,6 +585,10 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         let pins_saved = self.pins_saved();
         let read_states = self.read_states();
         let gap_replay = self.features() & FEATURE_GAP_REPLAY != 0;
+        let room_settings = self.room_settings();
+        if room_settings {
+            self.session.client_mut().inbox_mut().view_mut(room).ok_or(ChatError::Closed)?.expect_room_settings();
+        }
         if pins_saved {
             // receive() reads exactly one framed payload. Older sideband frames were drained before the matched
             // response, and this response cannot also consume its following pin snapshot.
@@ -546,13 +603,15 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
             let reached = view.cursor();
             let pin_received = !view.awaiting_pin() && view.pin_revision().is_some_and(|revision| revision >= head);
             let read_received = !view.awaiting_read_state() && view.read_state().is_some_and(|state| state.head >= head);
-            let metadata_received = (!pins_saved || pin_received) && (!read_states || read_received);
+            let settings_received =
+                !room_settings || (!view.awaiting_room_settings() && view.room_settings().is_some_and(|state| state.head >= head));
+            let metadata_received = (!pins_saved || pin_received) && (!read_states || read_received) && settings_received;
             if head < start {
                 self.closed = true;
                 return Err(ChatError::HistoryGap { reached, head });
             }
             if !gap_replay && view.needs_resync() && metadata_received {
-                self.closed = !pins_saved && !read_states;
+                self.closed = !pins_saved && !read_states && !room_settings;
                 return Err(ChatError::HistoryGap { reached, head });
             }
             if reached >= head && metadata_received {
@@ -560,7 +619,7 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
             }
             // The pin snapshot ends this sync even when retained history cannot replay its prefix. Keep the
             // authoritative pin and a usable transport for saved messages while reporting the history gap.
-            if !gap_replay && (pins_saved || read_states) && metadata_received && reached < head {
+            if !gap_replay && (pins_saved || read_states || room_settings) && metadata_received && reached < head {
                 return Err(ChatError::HistoryGap { reached, head });
             }
             match self.receive(now_ms, local_minute, deadline) {
@@ -576,7 +635,9 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
                             let view = self.view(room).ok_or(ChatError::Closed)?;
                             let pins = !pins_saved || (!view.awaiting_pin() && view.pin_revision().is_some_and(|revision| revision >= head));
                             let reads = !read_states || (!view.awaiting_read_state() && view.read_state().is_some_and(|state| state.head >= head));
-                            if !pins || !reads {
+                            let settings =
+                                !room_settings || (!view.awaiting_room_settings() && view.room_settings().is_some_and(|state| state.head >= head));
+                            if !pins || !reads || !settings {
                                 self.closed = true;
                                 return Err(ChatError::UnexpectedResponse);
                             }

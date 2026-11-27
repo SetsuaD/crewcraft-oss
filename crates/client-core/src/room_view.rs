@@ -9,6 +9,9 @@ use crewcraft_proto::message::CodecError;
 use crate::outbox::{Outbox, State};
 use crate::timeline::{Apply, Change, Line, Timeline};
 
+/// A person's own room settings (T346), for the crates that draw them.
+pub use crewcraft_proto::room_settings::{RoomSetting, RoomSettings};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Shown {
     /// A message from the server's timeline.
@@ -283,6 +286,14 @@ impl CurrentWindow {
     }
 }
 
+/// The signed-in person's own settings for the room, at room head `head` (T346).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomSettingsState {
+    pub head: u64,
+    pub revision: u64,
+    pub settings: RoomSettings,
+}
+
 pub struct RoomView {
     timeline: Timeline,
     outbox: Outbox,
@@ -317,6 +328,8 @@ pub struct RoomView {
     awaiting_pin: bool,
     read_state: Option<ReadState>,
     awaiting_read_state: bool,
+    room_settings: Option<RoomSettingsState>,
+    awaiting_room_settings: bool,
     gap_notice: Option<GapNotice>,
     recovery_epoch: u64,
 }
@@ -351,6 +364,8 @@ impl RoomView {
             awaiting_pin: false,
             read_state: None,
             awaiting_read_state: false,
+            room_settings: None,
+            awaiting_room_settings: false,
             gap_notice: None,
             recovery_epoch: 0,
         }
@@ -574,6 +589,31 @@ impl RoomView {
 
     pub fn awaiting_read_state(&self) -> bool {
         self.awaiting_read_state
+    }
+
+    /// Apply the person's own settings for this room without advancing the timeline (T346). An older revision is
+    /// refused, so a stale snapshot cannot undo a newer change made on another device. Returns whether it applied.
+    pub fn set_room_settings(&mut self, state: RoomSettingsState) -> bool {
+        let current = self.room_settings.as_ref();
+        if current.is_some_and(|current| (state.revision, state.head) < (current.revision, current.head)) {
+            return false;
+        }
+        self.room_settings = Some(state);
+        self.awaiting_room_settings = false;
+        true
+    }
+
+    pub fn room_settings(&self) -> Option<&RoomSettingsState> {
+        self.room_settings.as_ref()
+    }
+
+    /// This Sync's own settings snapshot is still to come (T346).
+    pub fn expect_room_settings(&mut self) {
+        self.awaiting_room_settings = true;
+    }
+
+    pub fn awaiting_room_settings(&self) -> bool {
+        self.awaiting_room_settings
     }
 
     /// The files of each message that has any, by cursor (task T330c).

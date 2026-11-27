@@ -115,7 +115,8 @@ impl ServerConfig {
                     | FEATURE_PINS_SAVED
                     | FEATURE_READ_STATE
                     | FEATURE_GAP_REPLAY
-                    | FEATURE_CONTINUE,
+                    | FEATURE_CONTINUE
+                    | crewcraft_proto::request::FEATURE_ROOM_SETTINGS,
                 name: "CrewCraft".into(),
             },
         }

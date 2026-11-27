@@ -1,5 +1,10 @@
 //! The room list in the list pane (REQUIREMENTS 2.20): which rooms the user follows, which one is open, and the unread
-//! badges. Task T300.
+//! badges. Task T300. The person's own settings (T346, REQUIREMENTS 2.2) order and filter it: pinned rooms come first,
+//! hidden rooms leave the list (a room search still finds them), and muted or hidden rooms add nothing to the total.
+
+use std::collections::BTreeMap;
+
+use crewcraft_client_core::room_view::RoomSettings;
 
 use crate::{Command, RoomRow};
 
@@ -9,6 +14,8 @@ pub struct RoomList {
     /// (name, unread), in the order added. `rows` sorts; the list is small enough that sorting per call is cheap.
     rooms: Vec<(String, u32)>,
     selected: Option<String>,
+    /// The person's own settings, by room; a room missing here has none set (T346).
+    settings: BTreeMap<String, RoomSettings>,
 }
 
 impl RoomList {
@@ -27,10 +34,42 @@ impl RoomList {
         true
     }
 
-    /// Every room, sorted by name ignoring ASCII case, then by the exact name to break ties.
+    /// Every room the person has not hidden: pinned rooms first, then the rest, each part sorted by name ignoring
+    /// ASCII case, then by the exact name to break ties.
     pub fn rows(&self) -> Vec<RoomRow> {
-        let mut rows: Vec<RoomRow> =
-            self.rooms.iter().map(|(name, unread)| RoomRow { name: name.clone(), unread: *unread, selected: self.is_selected(name) }).collect();
+        let mut rows = self.rows_where(|settings| !settings.hidden);
+        rows.sort_by_key(|row| !self.settings(&row.name).pinned);
+        rows
+    }
+
+    /// The rooms the person hid, sorted by name as `rows` sorts (T346). They are still memberships: a room search shows
+    /// them, and a new message in one does not bring it back into `rows`.
+    pub fn hidden_rows(&self) -> Vec<RoomRow> {
+        self.rows_where(|settings| settings.hidden)
+    }
+
+    /// Record the person's own settings for a listed room (T346). Returns whether the room is listed (an unknown name
+    /// changes nothing).
+    pub fn set_settings(&mut self, name: &str, settings: RoomSettings) -> bool {
+        if self.position(name).is_none() {
+            return false;
+        }
+        self.settings.insert(name.to_owned(), settings);
+        true
+    }
+
+    /// The person's own settings for a room; none set for a room never given any.
+    pub fn settings(&self, name: &str) -> RoomSettings {
+        self.settings.get(name).copied().unwrap_or_default()
+    }
+
+    fn rows_where(&self, keep: impl Fn(RoomSettings) -> bool) -> Vec<RoomRow> {
+        let mut rows: Vec<RoomRow> = self
+            .rooms
+            .iter()
+            .filter(|(name, _)| keep(self.settings(name)))
+            .map(|(name, unread)| RoomRow { name: name.clone(), unread: *unread, selected: self.is_selected(name) })
+            .collect();
         rows.sort_by(|a, b| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()).then_with(|| a.name.cmp(&b.name)));
         rows
     }
@@ -78,9 +117,16 @@ impl RoomList {
         }
     }
 
-    /// The sum of every room's unread count, for the app-bar badge. Saturates at `u32::MAX`.
+    /// The sum of the unread counts of the rooms the person neither muted nor hid, for the app-bar badge (T346). Each
+    /// row keeps its own count. Saturates at `u32::MAX`.
     pub fn total_unread(&self) -> u32 {
-        self.rooms.iter().fold(0u32, |sum, (_, unread)| sum.saturating_add(*unread))
+        self.rooms
+            .iter()
+            .filter(|(name, _)| {
+                let settings = self.settings(name);
+                !settings.muted && !settings.hidden
+            })
+            .fold(0u32, |sum, (_, unread)| sum.saturating_add(*unread))
     }
 
     fn position(&self, name: &str) -> Option<usize> {
@@ -89,5 +135,46 @@ impl RoomList {
 
     fn is_selected(&self, name: &str) -> bool {
         self.selected.as_deref() == Some(name)
+    }
+}
+
+#[cfg(test)]
+mod room_settings_tests {
+    use super::*;
+
+    fn names(rows: &[RoomRow]) -> Vec<&str> {
+        rows.iter().map(|row| row.name.as_str()).collect()
+    }
+
+    #[test]
+    fn pinned_rooms_lead_hidden_rooms_leave_and_muted_or_hidden_unread_stays_out_of_the_total() {
+        let mut list = RoomList::new();
+        for name in ["alpha", "beta", "gamma", "delta"] {
+            assert!(list.add(name));
+            assert!(list.set_unread(name, 2));
+        }
+        let before = list.total_unread();
+        assert!(list.set_settings("gamma", RoomSettings { pinned: true, ..RoomSettings::default() }));
+        assert!(list.set_settings("beta", RoomSettings { hidden: true, ..RoomSettings::default() }));
+        assert!(list.set_settings("delta", RoomSettings { muted: true, ..RoomSettings::default() }));
+        assert!(!list.set_settings("unknown", RoomSettings { pinned: true, ..RoomSettings::default() }));
+        let rows = list.rows();
+        assert_eq!(names(&rows).first(), Some(&"gamma"));
+        assert!(!names(&rows).contains(&"beta"));
+        assert!(names(&rows).contains(&"delta"));
+        assert_eq!(names(&list.hidden_rows()), vec!["beta"]);
+        assert!(list.total_unread() < before);
+        assert_eq!(rows.iter().find(|row| row.name == "delta").map(|row| row.unread), Some(2), "a muted row keeps its own count");
+        // A new message in a hidden room changes its count but never brings it back into the list.
+        assert!(list.set_unread("beta", 5));
+        assert!(!names(&list.rows()).contains(&"beta"));
+        let total = list.total_unread();
+        assert!(list.set_unread("beta", 9));
+        assert_eq!(list.total_unread(), total);
+        // Unpinning and unhiding restore the plain order.
+        list.set_settings("gamma", RoomSettings::default());
+        list.set_settings("beta", RoomSettings::default());
+        assert_eq!(names(&list.rows()), vec!["alpha", "beta", "delta", "gamma"]);
+        assert!(list.select("beta").is_some(), "a once-hidden room can be opened again");
     }
 }

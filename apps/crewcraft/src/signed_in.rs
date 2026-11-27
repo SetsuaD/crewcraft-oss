@@ -145,7 +145,8 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
             | FEATURE_PINS_SAVED
             | FEATURE_READ_STATE
             | FEATURE_GAP_REPLAY
-            | FEATURE_CONTINUE,
+            | FEATURE_CONTINUE
+            | crewcraft_proto::request::FEATURE_ROOM_SETTINGS,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -172,7 +173,8 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
             | FEATURE_PINS_SAVED
             | FEATURE_READ_STATE
             | FEATURE_GAP_REPLAY
-            | FEATURE_CONTINUE,
+            | FEATURE_CONTINUE
+            | crewcraft_proto::request::FEATURE_ROOM_SETTINGS,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -214,7 +216,8 @@ pub(crate) fn finish_external(
             | FEATURE_PINS_SAVED
             | FEATURE_READ_STATE
             | FEATURE_GAP_REPLAY
-            | FEATURE_CONTINUE,
+            | FEATURE_CONTINUE
+            | crewcraft_proto::request::FEATURE_ROOM_SETTINGS,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -409,6 +412,33 @@ impl SignedInSession {
     pub fn read_state(&mut self, room: &str) -> Option<crewcraft_client_core::room_view::ReadState> {
         let view = self.chat.view(room)?;
         if view.awaiting_read_state() { None } else { view.read_state().cloned() }
+    }
+
+    /// Whether the server keeps personal room settings (T346).
+    pub fn room_settings_offered(&self) -> bool {
+        self.chat.room_settings()
+    }
+
+    /// Turn one of the person's own settings for `room` on or off; returns their settings revision for it (T346).
+    pub fn set_room_setting(&mut self, room: &str, setting: crewcraft_proto::room_settings::RoomSetting, on: bool) -> Result<u64, LabError> {
+        if !valid_room(room) {
+            return Err(LabError::Usage);
+        }
+        self.chat.set_room_setting(room, setting, on, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// The person's own settings for every room they are in (T346); `None` when the server does not keep them.
+    pub fn list_room_settings(&mut self) -> Result<Option<Vec<crewcraft_proto::room_settings::ListedRoomSettings>>, LabError> {
+        if !self.chat.room_settings() {
+            return Ok(None);
+        }
+        self.chat.list_room_settings(0, Instant::now() + OPERATION_TIMEOUT).map(Some).map_err(LabError::Chat)
+    }
+
+    /// The person's own settings for a followed room, as the last completed Sync delivered them (T346).
+    pub fn room_settings(&mut self, room: &str) -> Option<crewcraft_client_core::room_view::RoomSettingsState> {
+        let view = self.chat.view(room)?;
+        if view.awaiting_room_settings() { None } else { view.room_settings().copied() }
     }
 
     pub fn gap_notice(&mut self, room: &str) -> Option<crewcraft_client_core::room_view::GapNotice> {

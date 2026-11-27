@@ -14,4 +14,5 @@ pub mod media_control;
 pub mod message;
 pub mod push;
 pub mod request;
+pub mod room_settings;
 pub mod signin;

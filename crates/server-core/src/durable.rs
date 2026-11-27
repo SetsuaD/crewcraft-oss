@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::request::{MAX_AUTHOR, MAX_HITS, MAX_SAVED_PAGE, MAX_SNIPPET, SavedMessage, SavedPage, SearchHit};
+use crewcraft_proto::room_settings::RoomSetting;
 
 use rand_core::{OsRng, RngCore};
 
@@ -792,6 +793,17 @@ impl DurableServer {
         room.read_position(user).map(|(position, _)| position).map_err(|error| DurableError::Server(ServerError::Service(error)))
     }
 
+    /// Turn one of `user`'s own settings for a room on or off (task T346), recording `Op::RoomSetting` only when it
+    /// changed; returns the settings revision afterwards.
+    pub fn set_room_setting(&mut self, slug: &str, user: &str, setting: RoomSetting, on: bool) -> Result<u64, DurableError> {
+        self.check_alive()?;
+        let (revision, changed) = self.server.set_room_setting(slug, user, setting, on).map_err(DurableError::Server)?;
+        if changed {
+            self.record(&Op::RoomSetting { slug: slug.to_owned(), user: user.to_owned(), setting, on })?;
+        }
+        Ok(revision)
+    }
+
     /// As above, except that a `MarkRead` is recorded only when the marker moved (`Ok(true)`).
     pub fn mark_read(&mut self, slug: &str, user: &str, cursor: u64) -> Result<bool, DurableError> {
         self.check_alive()?;
@@ -844,6 +856,7 @@ fn replay(server: &mut Server, op: Op, messages: &HashMap<String, BTreeMap<u64, 
         // Personal bookmark records are handled before the room operation replay.
         Op::SaveMessage { .. } => Ok(0),
         Op::MarkRead { slug, user, cursor } => server.mark_read(&slug, &user, cursor).map(|_| 0),
+        Op::RoomSetting { slug, user, setting, on } => server.set_room_setting(&slug, &user, setting, on).map(|_| 0),
         Op::MarkUnread { slug, user, target } => {
             if target == 0 {
                 return Err(ServerError::Service(ServiceError::NoSuchMessage));
