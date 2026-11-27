@@ -19,6 +19,7 @@ use std::fmt;
 
 use chrono::{DateTime, Datelike};
 use crewcraft_client_core::room_view::Shown;
+use crewcraft_proto::activity::{ActivityFilter, ActivityItem, ActivityKind, ActivitySnapshot};
 use crewcraft_ui_model::composer::Composer;
 use crewcraft_ui_model::feed::feed_rows;
 use crewcraft_ui_model::room_list::RoomList;
@@ -226,6 +227,16 @@ pub enum Update {
     SavedMessages {
         messages: Vec<crewcraft_proto::request::SavedMessage>,
     },
+    /// Activity counters or a filtered snapshot, tagged with the selection that requested it (T347).
+    Activity {
+        filter: ActivityFilter,
+        snapshot: ActivitySnapshot,
+    },
+    ActivityFailed {
+        text: String,
+        refresh: bool,
+    },
+    ActivityReset,
     /// The app was opened from an invitation link (task T405): fill in the enrollment form's link field. Ignored
     /// unless the enrollment screen is showing. `Debug` does not show the link, which holds a one-time secret.
     InvitationLink(Zeroizing<String>),
@@ -272,6 +283,11 @@ impl fmt::Debug for Update {
             Self::RoomSettings { room, settings } => f.debug_struct("RoomSettings").field("room", room).field("settings", settings).finish(),
             Self::Pin { room, pinned } => f.debug_struct("Pin").field("room", room).field("target", &pinned.as_ref().map(|pin| pin.target)).finish(),
             Self::SavedMessages { messages } => f.debug_struct("SavedMessages").field("messages", &messages.len()).finish(),
+            Self::Activity { filter, snapshot } => {
+                f.debug_struct("Activity").field("filter", filter).field("head", &snapshot.head).field("items", &snapshot.items.len()).finish()
+            }
+            Self::ActivityFailed { text, refresh } => f.debug_struct("ActivityFailed").field("text", text).field("refresh", refresh).finish(),
+            Self::ActivityReset => f.write_str("ActivityReset"),
             Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
             Self::WaitingForBrowser => f.write_str("WaitingForBrowser"),
             Self::Failed(text) => f.debug_tuple("Failed").field(text).finish(),
@@ -401,6 +417,12 @@ pub struct Window {
     /// Current saved-message references, with no stale copies of edited or deleted bodies (T343).
     saved_messages: Option<Vec<crewcraft_proto::request::SavedMessage>>,
     saved_view: bool,
+    activity_filter: Option<ActivityFilter>,
+    activity_snapshot: Option<ActivitySnapshot>,
+    activity_counters: Option<(u64, u64)>,
+    activity_unread: u16,
+    activity_marking: Option<u64>,
+    activity_failed: bool,
     gaps: HashMap<String, crewcraft_client_core::room_view::GapNotice>,
     /// The bytes the person's files take, and their quota (T332b).
     storage: Option<(u64, u64)>,
@@ -567,6 +589,12 @@ impl Window {
                 self.pins.clear();
                 self.saved_messages = None;
                 self.saved_view = false;
+                self.activity_filter = None;
+                self.activity_snapshot = None;
+                self.activity_counters = None;
+                self.activity_unread = 0;
+                self.activity_marking = None;
+                self.activity_failed = false;
                 self.rooms = RoomList::new();
                 for room in &rooms {
                     self.rooms.add(room);
@@ -711,6 +739,39 @@ impl Window {
                 }
             },
             Update::SavedMessages { messages } => self.saved_messages = Some(messages),
+            Update::Activity { filter, snapshot } => {
+                if self.screen() != Screen::Chat {
+                    return;
+                }
+                let fresh = self.activity_counters.is_none_or(|(head, seen)| snapshot.head >= head && snapshot.seen >= seen);
+                if fresh {
+                    self.activity_counters = Some((snapshot.head, snapshot.seen));
+                    self.activity_unread = snapshot.unread;
+                    if self.activity_marking.is_some_and(|through| snapshot.seen >= through) {
+                        self.activity_marking = None;
+                    }
+                    if self.activity_filter == Some(filter) {
+                        self.activity_snapshot = Some(snapshot);
+                        self.activity_failed = false;
+                    }
+                }
+            }
+            Update::ActivityFailed { text, refresh } => {
+                self.notice = Some(text);
+                self.activity_marking = None;
+                if refresh {
+                    self.activity_snapshot = None;
+                    self.activity_failed = self.activity_filter.is_some();
+                }
+            }
+            Update::ActivityReset => {
+                self.activity_filter = None;
+                self.activity_snapshot = None;
+                self.activity_counters = None;
+                self.activity_unread = 0;
+                self.activity_marking = None;
+                self.activity_failed = false;
+            }
             Update::LastEmail(email) => {
                 if self.email.is_empty() {
                     self.email = email;
@@ -720,6 +781,12 @@ impl Window {
             Update::Failed(text) => self.notice = Some(text),
             Update::SignedOut => {
                 self.announcement = None;
+                self.activity_filter = None;
+                self.activity_snapshot = None;
+                self.activity_counters = None;
+                self.activity_unread = 0;
+                self.activity_marking = None;
+                self.activity_failed = false;
                 self.phone_pane = PhonePane::Chats;
                 self.selected_message = None;
                 self.focus_room = None;
@@ -954,9 +1021,22 @@ impl Window {
         // bar never offers a button that does nothing.
         egui::Panel::left("crewcraft-app-bar").resizable(false).exact_size(72.0).show(ui, |ui| {
             ui.add_space(8.0);
+            let activity = self.activity_label();
+            if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(self.activity_filter.is_some(), activity)).clicked()
+                && self.activity_filter.is_none()
+            {
+                self.open_activity(ActivityFilter::All);
+            }
             let total = self.rooms.total_unread();
             let chat = if total > 0 { format!("Chat ({total})") } else { "Chat".to_owned() };
-            if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.files_view.is_none() && !self.saved_view, chat)).clicked() {
+            if ui
+                .add_sized(
+                    [ui.available_width(), 40.0],
+                    egui::Button::selectable(self.files_view.is_none() && !self.saved_view && self.activity_filter.is_none(), chat),
+                )
+                .clicked()
+            {
+                self.close_activity();
                 self.files_view = None;
                 self.saved_view = false;
             }
@@ -964,6 +1044,7 @@ impl Window {
             if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.files_view.is_some(), "Files")).clicked()
                 && self.files_view.is_none()
             {
+                self.close_activity();
                 self.files_view = Some(None);
                 self.saved_view = false;
                 self.actions.push(Action::Room(Command::ListFiles));
@@ -972,6 +1053,10 @@ impl Window {
                 self.open_saved();
             }
         });
+        if self.activity_filter.is_some() {
+            self.activity_ui(ui);
+            return;
+        }
         if self.saved_view {
             self.saved_ui(ui);
             return;
@@ -1142,23 +1227,41 @@ impl Window {
     /// The phone layout: one pane at a time, a bottom tab bar, and larger touch targets (T402).
     fn phone_chat_ui(&mut self, ui: &mut Ui) {
         ui.spacing_mut().interact_size.y = TOUCH_TARGET;
-        let in_conversation = self.phone_pane == PhonePane::Conversation && self.rooms.selected().is_some();
+        let in_conversation = self.activity_filter.is_none() && self.phone_pane == PhonePane::Conversation && self.rooms.selected().is_some();
         if !in_conversation {
             egui::Panel::bottom("crewcraft-tabs").show(ui, |ui| {
-                ui.columns(2, |columns| {
+                ui.columns(3, |columns| {
                     let total = self.rooms.total_unread();
                     let chats = if total > 0 { format!("Chats ({total})") } else { "Chats".to_owned() };
                     let size = [columns[0].available_width(), TOUCH_TARGET];
-                    if columns[0].add_sized(size, egui::Button::selectable(self.phone_pane == PhonePane::Chats, chats)).clicked() {
+                    let activity = self.activity_label();
+                    if columns[0].add_sized(size, egui::Button::selectable(self.activity_filter.is_some(), activity)).clicked()
+                        && self.activity_filter.is_none()
+                    {
+                        self.open_activity(ActivityFilter::All);
+                    }
+                    if columns[1]
+                        .add_sized(size, egui::Button::selectable(self.phone_pane == PhonePane::Chats && self.activity_filter.is_none(), chats))
+                        .clicked()
+                    {
+                        self.close_activity();
                         self.phone_pane = PhonePane::Chats;
                         self.saved_view = false;
                     }
-                    if columns[1].add_sized(size, egui::Button::selectable(self.phone_pane == PhonePane::Account, "Account")).clicked() {
+                    if columns[2]
+                        .add_sized(size, egui::Button::selectable(self.phone_pane == PhonePane::Account && self.activity_filter.is_none(), "Account"))
+                        .clicked()
+                    {
+                        self.close_activity();
                         self.phone_pane = PhonePane::Account;
                         self.saved_view = false;
                     }
                 });
             });
+        }
+        if self.activity_filter.is_some() {
+            self.activity_ui(ui);
+            return;
         }
         if self.saved_view {
             self.saved_ui(ui);
@@ -1343,6 +1446,7 @@ impl Window {
     }
 
     fn open_message(&mut self, room: &str, cursor: u64) {
+        self.close_activity();
         self.results = None;
         self.saved_view = false;
         self.open_room(room, true);
@@ -1385,9 +1489,148 @@ impl Window {
     }
 
     fn open_saved(&mut self) {
+        self.close_activity();
         self.files_view = None;
         self.saved_view = true;
         self.actions.push(Action::Room(Command::ListSaved));
+    }
+
+    fn activity_label(&self) -> String {
+        if self.activity_unread == 0 { "Activity".to_owned() } else { format!("Activity ({})", self.activity_unread) }
+    }
+
+    fn open_activity(&mut self, filter: ActivityFilter) {
+        self.activity_filter = Some(filter);
+        self.activity_snapshot = None;
+        self.activity_failed = false;
+        self.files_view = None;
+        self.saved_view = false;
+        self.phone_pane = PhonePane::Chats;
+        self.actions.push(Action::Room(Command::ListActivity { filter }));
+    }
+
+    fn close_activity(&mut self) {
+        if self.activity_filter.take().is_some() {
+            self.activity_snapshot = None;
+            self.activity_failed = false;
+            self.actions.push(Action::Room(Command::ListActivity { filter: ActivityFilter::Badge }));
+        }
+    }
+
+    /// Whether the Activity pane is open, and which authoritative selection it is displaying (T347).
+    pub fn activity_filter(&self) -> Option<ActivityFilter> {
+        self.activity_filter
+    }
+
+    fn activity_ui(&mut self, ui: &mut Ui) {
+        let Some(filter) = self.activity_filter else { return };
+        let mut selection = None;
+        let mut mark = None;
+        egui::Panel::top("crewcraft-activity-header").show(ui, |ui| {
+            ui.heading("Activity");
+            ui.horizontal_wrapped(|ui| {
+                for (choice, label) in [
+                    (ActivityFilter::All, "All activity"),
+                    (ActivityFilter::Unread, "Unread"),
+                    (ActivityFilter::Mentions, "Mentions"),
+                    (ActivityFilter::Saved, "Saved activity"),
+                ] {
+                    if ui.add(egui::Button::selectable(filter == choice, label).min_size(egui::vec2(0.0, TOUCH_TARGET))).clicked() && filter != choice
+                    {
+                        selection = Some(choice);
+                    }
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Refresh activity").clicked() {
+                    selection = Some(filter);
+                }
+                let captured = self.activity_snapshot.as_ref().map(|snapshot| snapshot.head);
+                let seen = self.activity_counters.map_or(0, |(_, seen)| seen);
+                let enabled = captured.is_some_and(|head| head > seen) && self.activity_marking.is_none();
+                if ui.add_enabled(enabled, egui::Button::new("Mark seen")).clicked() {
+                    mark = captured;
+                }
+                if self.activity_marking.is_some() {
+                    ui.label("Waiting for confirmation...");
+                }
+            });
+        });
+        if let Some(filter) = selection {
+            self.open_activity(filter);
+        }
+        if let Some(through) = mark {
+            self.activity_marking = Some(through);
+            self.actions.push(Action::Room(Command::MarkActivitySeen { through }));
+        }
+        let mut destination = None;
+        egui::CentralPanel::default_margins().show(ui, |ui| match &self.activity_snapshot {
+            None => {
+                ui.label(if self.activity_failed {
+                    "Activity could not be loaded. Use Refresh activity to try again."
+                } else {
+                    "Loading activity..."
+                });
+            }
+            Some(snapshot) => {
+                if snapshot.items.is_empty() {
+                    ui.label("No matching activity.");
+                }
+                if snapshot.more {
+                    ui.weak("Showing the newest matching activity.");
+                }
+                let seen = self.activity_counters.map_or(snapshot.seen, |(_, seen)| seen);
+                ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                    for item in &snapshot.items {
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            let kind = match &item.kind {
+                                ActivityKind::Message { mentioned: true, replied: true } => "Mention and reply".to_owned(),
+                                ActivityKind::Message { mentioned: true, .. } => "Mention".to_owned(),
+                                ActivityKind::Message { .. } => "Reply to your message".to_owned(),
+                                ActivityKind::Reaction { reaction } => {
+                                    format!("Reaction: {}", crewcraft_proto::push::reaction_name(*reaction).unwrap_or("Reaction"))
+                                }
+                                ActivityKind::MissedCall => "Missed call".to_owned(),
+                            };
+                            ui.strong(kind);
+                            ui.label(format!("{} in {}", item.actor, item.room));
+                            ui.weak(utc_time(item.at_ms));
+                            if item.id > seen {
+                                ui.label("New activity");
+                            }
+                            ui.label(if matches!(item.kind, ActivityKind::MissedCall) {
+                                "You missed this call."
+                            } else if item.snippet.is_empty() {
+                                "Message with attachments"
+                            } else {
+                                &item.snippet
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.add(egui::Button::new("Open room").min_size(egui::vec2(0.0, TOUCH_TARGET))).clicked() {
+                                    destination = Some((item.clone(), false));
+                                }
+                                if item.parent.is_some() && ui.add(egui::Button::new("View thread").min_size(egui::vec2(0.0, TOUCH_TARGET))).clicked()
+                                {
+                                    destination = Some((item.clone(), true));
+                                }
+                            });
+                        });
+                    }
+                });
+            }
+        });
+        if let Some((item, thread)) = destination {
+            self.open_activity_item(&item, thread);
+        }
+    }
+
+    fn open_activity_item(&mut self, item: &ActivityItem, thread: bool) {
+        self.close_activity();
+        self.results = None;
+        self.open_room(&item.room, true);
+        self.open_thread = if thread { item.parent.map(|parent| (item.room.clone(), parent)) } else { None };
+        self.focus = None;
+        self.phone_pane = PhonePane::Conversation;
     }
 
     /// Whether the person's Saved area is open (T343).

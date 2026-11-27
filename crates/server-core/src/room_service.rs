@@ -98,6 +98,8 @@ const ROOM_ID: &str = "room";
 
 pub struct RoomService {
     room: Room,
+    /// Current membership's join cursor; never inferred from the bounded event tail (T347).
+    joined: HashMap<String, u64>,
     log: EventLog<Event>,
     markers: ReadMarkers,
     deleted: HashSet<u64>,
@@ -117,6 +119,7 @@ impl RoomService {
     pub fn new(owner: &str, capacity: usize) -> Self {
         Self {
             room: Room::new(owner),
+            joined: HashMap::from([(owner.to_owned(), 0)]),
             log: EventLog::new(capacity),
             markers: ReadMarkers::new(),
             deleted: HashSet::new(),
@@ -138,12 +141,15 @@ impl RoomService {
             html: String::new(),
             mentions: Vec::new(),
         };
-        Ok(self.log.append(event))
+        let cursor = self.log.append(event);
+        self.joined.insert(user.to_owned(), cursor);
+        Ok(cursor)
     }
 
     /// `Room::remove`, then a `Left { user }` event by `actor`. Returns its cursor.
     pub fn remove_member(&mut self, actor: &str, user: &str) -> Result<u64, ServiceError> {
         self.room.remove(actor, user).map_err(ServiceError::Room)?;
+        self.joined.remove(user);
         let event = Event {
             cursor: self.log.head() + 1,
             actor: actor.to_string(),
@@ -600,6 +606,11 @@ impl RoomService {
         self.room.members()
     }
 
+    /// The current membership instance, retained across event eviction and reconstructed by journal replay.
+    pub(crate) fn joined_at(&self, user: &str) -> Option<u64> {
+        self.joined.get(user).copied()
+    }
+
     fn check_text(text: &str) -> Result<String, ServiceError> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -634,6 +645,25 @@ impl RoomService {
 #[allow(clippy::unwrap_used)]
 mod pins_saved_tests {
     use super::*;
+
+    #[test]
+    fn current_join_instance_survives_tail_eviction_and_does_not_revive_a_missed_call() {
+        let mut room = RoomService::new("owner", 2);
+        let call_start = room.call_line("owner", 1, false, "started a call");
+        let late = room.add_member("owner", "late", Role::Member).unwrap();
+        room.post("owner", "later").unwrap();
+        room.post("owner", "latest").unwrap();
+        assert!(matches!(room.sync("late", 0), Ok(Since::Gap { .. })));
+        assert_eq!(room.joined_at("owner"), Some(0));
+        assert_eq!(room.joined_at("late"), Some(late));
+        assert!(room.joined_at("late").is_some_and(|joined| joined > call_start));
+        room.remove_member("owner", "late").unwrap();
+        assert_eq!(room.joined_at("late"), None);
+        let rejoined = room.add_member("owner", "late", Role::Member).unwrap();
+        room.post("owner", "after rejoin").unwrap();
+        room.post("owner", "after eviction").unwrap();
+        assert!(room.joined_at("late").is_some_and(|joined| joined == rejoined && joined > late && joined > call_start));
+    }
 
     #[test]
     fn validated_old_reactions_keep_guest_read_only_and_bad_code_refusals() {

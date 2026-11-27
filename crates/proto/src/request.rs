@@ -51,6 +51,9 @@
 //! - tags 41 `SetRoomSetting` and 42 `ListRoomSettings` (task T346), announced by `FEATURE_ROOM_SETTINGS`: a person's
 //!   own pin, mute and hide settings for a room. See `room_settings` for their fields and the settings frame (141).
 //!   Tags 32 to 40 belong to the enrollment and sign-in openings (`bootstrap`, `signin`) and are never chat requests.
+//! - tags 48 and 49 (T347), announced by `FEATURE_ACTIVITY`: `ListActivity` carries `u8 filter`; `Ok.cursor` is the
+//!   person's activity head, followed by one `activity::ActivitySnapshot`. `MarkActivitySeen` carries `u64 through`;
+//!   `Ok.cursor` is the resulting seen position.
 //!
 //! - tags 44 to 47, meetings (task T370a, docs/MEETINGS.md), announced by `FEATURE_MEETINGS`: 44 `MeetingSave`: `str
 //!   room | u64 meeting (0 makes a new one) | u64 version (0 exactly when meeting is 0) | u64 start_ms | u16 duration
@@ -98,6 +101,7 @@
 //! client sends it only when the server's `Welcome` carries that bit: an older server does not know the tag and
 //! would close the connection. `Search` is announced the same way by `FEATURE_SEARCH`.
 
+use crate::activity::ActivityFilter;
 use crate::message::{CodecError, MAX_BODY, MAX_NAME};
 
 pub const MAX_DETAIL: usize = 256;
@@ -141,6 +145,8 @@ pub const CONTINUED_TAG: u8 = 142;
 pub const FEATURE_ROOM_SETTINGS: u32 = 4096;
 /// Meetings and the calendar: the meeting requests, the meetings frame and the `MeetingLine` push (task T370a).
 pub const FEATURE_MEETINGS: u32 = 16384;
+/// Personal activity snapshots and a seen position shared across devices (T347).
+pub const FEATURE_ACTIVITY: u32 = 32768;
 /// The first byte of a saved-message page.
 pub const SAVED_TAG: u8 = 136;
 /// Sixteen full rendered bodies, including their metadata, fit inside `frame::MAX_FRAME`.
@@ -206,6 +212,8 @@ const MEETING_SAVE: u8 = 44;
 const MEETING_CANCEL: u8 = 45;
 const MEETING_LIST: u8 = 46;
 const MEETING_JOIN: u8 = 47;
+const LIST_ACTIVITY: u8 = 48;
+const MARK_ACTIVITY_SEEN: u8 = 49;
 /// The largest sealed sender key a `CallSeal` carries.
 pub const MAX_SEALED: usize = 256;
 /// The most files one `PostFiles` attaches (task T330c).
@@ -350,6 +358,14 @@ pub enum Request {
         after_room: String,
         after_cursor: u64,
     },
+    /// Recent activity and counters for the signed-in person (T347).
+    ListActivity {
+        filter: ActivityFilter,
+    },
+    /// Acknowledge activity through the head of a retrieved snapshot, including if more has arrived (T347).
+    MarkActivitySeen {
+        through: u64,
+    },
     /// Up to `length` bytes of file `file` from `offset` (task T330d).
     Download {
         file: [u8; 16],
@@ -430,7 +446,7 @@ pub enum Response {
     Error { code: u16, detail: String },
 }
 
-fn write_str(out: &mut Vec<u8>, s: &str, min: usize, max: usize) -> Result<(), CodecError> {
+pub(crate) fn write_str(out: &mut Vec<u8>, s: &str, min: usize, max: usize) -> Result<(), CodecError> {
     let b = s.as_bytes();
     if b.len() < min || b.len() > max {
         return Err(CodecError::FieldLength);
@@ -440,7 +456,7 @@ fn write_str(out: &mut Vec<u8>, s: &str, min: usize, max: usize) -> Result<(), C
     Ok(())
 }
 
-fn read_string(bytes: &[u8], pos: &mut usize, min: usize, max: usize) -> Result<String, CodecError> {
+pub(crate) fn read_string(bytes: &[u8], pos: &mut usize, min: usize, max: usize) -> Result<String, CodecError> {
     if *pos + 2 > bytes.len() {
         return Err(CodecError::Truncated);
     }
@@ -457,7 +473,7 @@ fn read_string(bytes: &[u8], pos: &mut usize, min: usize, max: usize) -> Result<
     Ok(s.to_owned())
 }
 
-fn read_u64(bytes: &[u8], pos: &mut usize) -> Result<u64, CodecError> {
+pub(crate) fn read_u64(bytes: &[u8], pos: &mut usize) -> Result<u64, CodecError> {
     if *pos + 8 > bytes.len() {
         return Err(CodecError::Truncated);
     }
@@ -475,7 +491,7 @@ fn read_u64(bytes: &[u8], pos: &mut usize) -> Result<u64, CodecError> {
     Ok(value)
 }
 
-fn read_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
+pub(crate) fn read_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], CodecError> {
     let end = pos.checked_add(N).filter(|end| *end <= bytes.len()).ok_or(CodecError::Truncated)?;
     let mut array = [0u8; N];
     array.copy_from_slice(&bytes[*pos..end]);
@@ -483,7 +499,7 @@ fn read_array<const N: usize>(bytes: &[u8], pos: &mut usize) -> Result<[u8; N], 
     Ok(array)
 }
 
-fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, CodecError> {
+pub(crate) fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, CodecError> {
     if *pos + 4 > bytes.len() {
         return Err(CodecError::Truncated);
     }
@@ -638,6 +654,16 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             write_str(&mut out, after_room, 0, MAX_NAME)?;
             out.extend_from_slice(&after_cursor.to_be_bytes());
         }
+        Request::ListActivity { filter } => {
+            out.push(LIST_ACTIVITY);
+            out.extend_from_slice(&id.to_be_bytes());
+            out.push(*filter as u8);
+        }
+        Request::MarkActivitySeen { through } => {
+            out.push(MARK_ACTIVITY_SEEN);
+            out.extend_from_slice(&id.to_be_bytes());
+            out.extend_from_slice(&through.to_be_bytes());
+        }
         Request::CallKey { room, call, public } => {
             out.push(CALL_KEY);
             out.extend_from_slice(&id.to_be_bytes());
@@ -766,6 +792,8 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
                 | CONTINUE
                 | SET_ROOM_SETTING
                 | LIST_ROOM_SETTINGS
+                | LIST_ACTIVITY
+                | MARK_ACTIVITY_SEEN
         )
         && !(CALL_START..=STORAGE_USE).contains(&tag)
         && !(MEETING_SAVE..=MEETING_JOIN).contains(&tag)
@@ -895,6 +923,11 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
             }
             Request::ListSaved { after_room, after_cursor }
         }
+        LIST_ACTIVITY => {
+            let [filter] = read_array(bytes, &mut pos)?;
+            Request::ListActivity { filter: ActivityFilter::try_from(filter)? }
+        }
+        MARK_ACTIVITY_SEEN => Request::MarkActivitySeen { through: read_u64(bytes, &mut pos)? },
         CALL_START => {
             let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
             let video = match read_array::<1>(bytes, &mut pos)? {
@@ -1458,7 +1491,7 @@ pub fn decode_saved(bytes: &[u8]) -> Result<(u32, SavedPage), CodecError> {
     Ok((id, page))
 }
 
-fn read_bool(bytes: &[u8], pos: &mut usize) -> Result<bool, CodecError> {
+pub(crate) fn read_bool(bytes: &[u8], pos: &mut usize) -> Result<bool, CodecError> {
     match read_array::<1>(bytes, pos)? {
         [0] => Ok(false),
         [1] => Ok(true),

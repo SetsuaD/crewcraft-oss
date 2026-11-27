@@ -39,6 +39,8 @@ pub const E_OVER_QUOTA: u16 = 12;
 pub const E_CONFLICT: u16 = 13;
 /// No such meeting, or one in a room the person is not in (task T370a).
 pub const E_NO_SUCH_MEETING: u16 = 14;
+/// A private activity watermark cannot be advanced beyond the signed-in person's issued activity head (T347).
+pub const E_ACTIVITY_POSITION: u16 = 17;
 /// Anything else (`AlreadyMember`, `LastOwner`, `BadName`).
 pub const E_OTHER: u16 = 99;
 
@@ -198,6 +200,8 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         | Request::StorageUse
         | Request::SaveMessage { .. }
         | Request::ListSaved { .. }
+        | Request::ListActivity { .. }
+        | Request::MarkActivitySeen { .. }
         | Request::CallKey { .. }
         | Request::CallSeal { .. }
         | Request::CallOffer { .. }

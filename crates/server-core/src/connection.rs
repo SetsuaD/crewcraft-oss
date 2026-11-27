@@ -163,7 +163,8 @@ impl Connection {
         server.sweep_calls(now_ms).map_err(DurableConnError::Storage)?;
         let media_device = self.device.filter(|_| self.features & crewcraft_proto::request::FEATURE_MEDIA != 0);
         self.receive_with(server, bytes, now_ms, |s, user, id, request, now| {
-            match current_answer(s, user, id, request)
+            match activity_answer(s, user, request)
+                .or_else(|| current_answer(s, user, id, request))
                 .or_else(|| upload(s, user, request, now))
                 .or_else(|| calls(s, user, request, now, media_device))
                 .or_else(|| continuation(s, user, request, now))
@@ -193,6 +194,7 @@ impl Connection {
             let continues = self.features & crewcraft_proto::request::FEATURE_CONTINUE != 0;
             let room_settings = self.features & crewcraft_proto::request::FEATURE_ROOM_SETTINGS != 0;
             let meetings_on = self.features & crewcraft_proto::request::FEATURE_MEETINGS != 0;
+            let activity = self.features & crewcraft_proto::request::FEATURE_ACTIVITY != 0;
             let needs_pins_saved = matches!(request, Request::Pin { .. } | Request::SaveMessage { .. } | Request::ListSaved { .. });
             let (response, follow) = if (needs_pins_saved && !pins_saved)
                 || (matches!(request, Request::MarkUnread { .. }) && !reads)
@@ -200,6 +202,7 @@ impl Connection {
                 || (matches!(request, Request::Continue { .. }) && !continues)
                 || (matches!(request, Request::SetRoomSetting { .. } | Request::ListRoomSettings) && !room_settings)
                 || (is_meeting(&request) && !meetings_on)
+                || (matches!(request, Request::ListActivity { .. } | Request::MarkActivitySeen { .. }) && !activity)
             {
                 (refusal_of(crate::dispatch::E_NOT_ALLOWED), None)
             } else {
@@ -217,6 +220,10 @@ impl Connection {
             // An upload's answer carries the new upload's id or the finished file's (task T330b); a download's, the bytes
             // (task T330d).
             match follow {
+                Some(Follow::Activity(snapshot)) => {
+                    let payload = crewcraft_proto::activity::encode_snapshot(id, &snapshot).map_err(ConnError::Request)?;
+                    out.extend_from_slice(&encode(&payload).map_err(ConnError::Frame)?);
+                }
                 Some(Follow::Current(frames)) => out.extend_from_slice(&frames),
                 Some(Follow::Id(value)) => out.extend_from_slice(&encode(&encode_id(id, &value)).map_err(ConnError::Frame)?),
                 Some(Follow::Files(files)) => {
@@ -475,6 +482,23 @@ fn current_answer(server: &DurableServer, user: &str, id: u32, request: &Request
     })
 }
 
+/// Activity identity comes only from the authenticated connection; no request can name another person.
+fn activity_answer(server: &mut DurableServer, user: &str, request: &Request) -> Option<Result<Answered, DurableConnError>> {
+    use crate::activity::ActivityError;
+    Some(match request {
+        Request::ListActivity { filter } => {
+            let snapshot = server.activity(user, *filter);
+            Ok((Response::Ok { cursor: snapshot.head }, Some(Follow::Activity(snapshot))))
+        }
+        Request::MarkActivitySeen { through } => match server.mark_activity_seen(user, *through) {
+            Ok(seen) => Ok((Response::Ok { cursor: seen }, None)),
+            Err(ActivityError::PastHead) => Ok((refusal_of(crate::dispatch::E_ACTIVITY_POSITION), None)),
+            Err(ActivityError::Storage(error)) => Err(DurableConnError::Storage(error)),
+        },
+        _ => return None,
+    })
+}
+
 /// Answer a call request over a durable server (task T360a1): `None` for any other request. `Ok { cursor }` carries
 /// the call's id; a refusal is an `Error`; a storage failure is fatal. With `media_device` (the client agreed to
 /// `FEATURE_MEDIA` and its device is known), a started or joined call is followed by that device's media credential
@@ -690,6 +714,7 @@ fn upload(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64
 /// What follows a request's answer, when anything does: an id frame (an upload's id or a file's, task T330b) or a
 /// bytes frame (a download, task T330d).
 enum Follow {
+    Activity(crewcraft_proto::activity::ActivitySnapshot),
     /// Already bounded, encoded follow pages captured at one room head (T345).
     Current(Vec<u8>),
     Id([u8; 16]),

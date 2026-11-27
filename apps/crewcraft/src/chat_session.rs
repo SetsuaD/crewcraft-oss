@@ -8,12 +8,13 @@ use crewcraft_client_core::notify::Settings;
 use crewcraft_client_core::requests::Reply as RequestReply;
 use crewcraft_client_core::room_view::{CurrentWindow, RoomView};
 use crewcraft_client_core::session::{ClientSession, Phase, SessionError};
+use crewcraft_proto::activity::{ActivityFilter, ActivityKind, ActivitySnapshot};
 use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
 use crewcraft_proto::request::{
-    FEATURE_CALLS, FEATURE_CONTINUE, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS,
-    FEATURE_READ_STATE, FEATURE_SEARCH, FEATURE_THREADS, MAX_SAVED_PAGE, Request, Response, SavedMessage, SavedPage, SearchHit,
+    FEATURE_ACTIVITY, FEATURE_CALLS, FEATURE_CONTINUE, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED,
+    FEATURE_REACTIONS, FEATURE_READ_STATE, FEATURE_SEARCH, FEATURE_THREADS, MAX_SAVED_PAGE, Request, Response, SavedMessage, SavedPage, SearchHit,
 };
 use crewcraft_proto::signin::{self, Opening, SignIn};
 use zeroize::Zeroizing;
@@ -69,6 +70,7 @@ pub struct ChatSession<S, D> {
     closed: bool,
     /// The session token the server returned; it resumes this session later (task T240). Wiped on drop.
     token: Zeroizing<String>,
+    activity_position: (u64, u64),
 }
 
 impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
@@ -118,8 +120,15 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         let versions = hello.min_version..=hello.max_version;
         let supported_features = hello.features;
         let client = Client::new(email, settings);
-        let mut chat =
-            Self { stream, set_deadline, frame_timeout, session: ClientSession::new(hello, client), closed: false, token: Zeroizing::default() };
+        let mut chat = Self {
+            stream,
+            set_deadline,
+            frame_timeout,
+            session: ClientSession::new(hello, client),
+            closed: false,
+            token: Zeroizing::default(),
+            activity_position: (0, 0),
+        };
         chat.token = chat.authenticate(opening, deadline)?;
 
         let hello = chat.session.start().map_err(ChatError::Session)?;
@@ -348,6 +357,58 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
     /// Whether authoritative personal read state was negotiated (T344).
     pub fn read_states(&self) -> bool {
         self.features() & FEATURE_READ_STATE != 0
+    }
+
+    pub fn activities(&self) -> bool {
+        self.features() & FEATURE_ACTIVITY != 0
+    }
+
+    /// One current-membership Activity result, correlated to its exact request and selected filter (T347).
+    pub fn activity(&mut self, filter: ActivityFilter, now_ms: u64, deadline: Instant) -> Result<ActivitySnapshot, ChatError> {
+        if !self.activities() {
+            return Err(ChatError::Unsupported);
+        }
+        let (id, head) = match self.exchange(Request::ListActivity { filter }, now_ms, 0, deadline)? {
+            (id, Response::Ok { cursor }) => (id, cursor),
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        let frame = self.read_frame(frame::MAX_FRAME, deadline)?;
+        let (answered, snapshot) = crewcraft_proto::activity::decode_snapshot(frame.payload()).map_err(|_| {
+            self.closed = true;
+            ChatError::UnexpectedResponse
+        })?;
+        let wrong_filter = match filter {
+            ActivityFilter::Badge => !snapshot.items.is_empty() || snapshot.more,
+            ActivityFilter::Unread => snapshot.items.iter().any(|item| item.id <= snapshot.seen),
+            ActivityFilter::Mentions => snapshot.items.iter().any(|item| !matches!(item.kind, ActivityKind::Message { mentioned: true, .. })),
+            ActivityFilter::Saved => snapshot.items.iter().any(|item| matches!(item.kind, ActivityKind::MissedCall)),
+            ActivityFilter::All => false,
+        };
+        if answered != id
+            || snapshot.head != head
+            || snapshot.head < self.activity_position.0
+            || snapshot.seen < self.activity_position.1
+            || wrong_filter
+        {
+            self.closed = true;
+            return Err(ChatError::UnexpectedResponse);
+        }
+        self.activity_position = (snapshot.head, snapshot.seen);
+        Ok(snapshot)
+    }
+
+    /// Acknowledge the displayed watermark only; the next list supplies confirmed counters and current rows.
+    pub fn mark_activity_seen(&mut self, through: u64, now_ms: u64, deadline: Instant) -> Result<u64, ChatError> {
+        if !self.activities() {
+            return Err(ChatError::Unsupported);
+        }
+        let seen = self.request(Request::MarkActivitySeen { through }, now_ms, 0, deadline)?;
+        if seen < through || seen < self.activity_position.1 {
+            self.closed = true;
+            return Err(ChatError::UnexpectedResponse);
+        }
+        self.activity_position = (self.activity_position.0.max(seen), seen);
+        Ok(seen)
     }
 
     /// Rewind the read position to before `target`, or before the newest other person's message for zero (T344).
@@ -736,7 +797,7 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
             self.closed = true;
             ChatError::Session(error)
         })?;
-        if events.iter().any(|event| matches!(event, ClientEvent::Current { .. })) {
+        if events.iter().any(|event| matches!(event, ClientEvent::Current { .. } | ClientEvent::Activity { .. })) {
             self.closed = true;
             return Err(ChatError::UnexpectedResponse);
         }

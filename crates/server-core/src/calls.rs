@@ -12,11 +12,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::cursor_log::Since;
 use crate::durable::{DurableError, DurableServer};
 use crate::media::MediaEvent;
 use crate::op::Op;
-use crate::room_service::EventKind;
 use crate::server::Server;
 
 /// A person with no heartbeat for this long has left the call, at their last heartbeat (REQUIREMENTS 2.5).
@@ -87,6 +85,10 @@ pub enum CallError {
 }
 
 impl Calls {
+    pub(crate) fn get(&self, call: u64) -> Option<&Call> {
+        self.calls.get(&call)
+    }
+
     fn start(&mut self, room: &str, actor: &str, video: bool, now_ms: u64, start_cursor: u64) -> u64 {
         self.next += 1;
         let id = self.next;
@@ -361,18 +363,10 @@ impl DurableServer {
         missed
     }
 
-    /// The cursor at which `user` (still a member) last joined `slug`: their latest `Joined` event, or 0 when the log
-    /// shows none (the room's creator, or a join older than the log holds). `None` when not a member.
+    /// The current membership's durable join cursor, unaffected by event-tail eviction (T347).
     fn joined_room_at(&self, slug: &str, user: &str) -> Option<u64> {
         let room = self.server.room(slug).ok()?;
-        room.role(user)?;
-        let events = match room.sync(user, 0).ok()? {
-            Since::Events(events) => events,
-            Since::Gap { .. } => return Some(0),
-        };
-        Some(
-            events.iter().rev().find(|(_, event)| matches!(&event.kind, EventKind::Joined { user: who, .. } if who == user)).map_or(0, |(at, _)| *at),
-        )
+        room.joined_at(user)
     }
 
     fn member(&self, slug: &str, actor: &str) -> Result<(), CallError> {

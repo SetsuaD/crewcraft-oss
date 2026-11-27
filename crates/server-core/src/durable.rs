@@ -16,6 +16,7 @@ use crewcraft_proto::room_settings::RoomSetting;
 
 use rand_core::{OsRng, RngCore};
 
+use crate::activity::{Activity, ActivityView};
 use crate::cursor_log::Since;
 use crate::file_store::{FileStore, FinishError};
 use crate::html_text::html_text;
@@ -41,6 +42,7 @@ pub enum DurableError {
 
 pub struct DurableServer {
     pub(crate) server: Server,
+    pub(crate) activity: Activity,
     journal: Journal,
     poisoned: bool,
     /// Every message's searchable text, by room (task T320a).
@@ -82,6 +84,7 @@ pub(crate) struct CurrentMessage {
     pub(crate) author: String,
     pub(crate) html: String,
     pub(crate) edited: bool,
+    pub(crate) mention_tokens: Vec<String>,
 }
 
 /// An upload in progress (task T330b).
@@ -226,8 +229,18 @@ impl DurableServer {
         let mut calls = crate::calls::Calls::default();
         let mut continuations = crate::continuation::Continuations::default();
         let mut meetings = crate::meetings::Meetings::default();
+        let mut activity = Activity::default();
         for (index, record) in records.iter().enumerate() {
             let op = decode_op(record).map_err(|_| DurableError::Corrupt { index })?;
+            let activity_op = crate::activity::observed_op(&op);
+            let was_reacting = crate::activity::was_reacting(&server, &op);
+            if let Op::MarkActivitySeen { user, through } = &op {
+                if *through > activity.position(user).0 {
+                    return Err(DurableError::Corrupt { index });
+                }
+                activity.observe(&op, ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls }, false);
+                continue;
+            }
             // An import record (task T350a) changes the import's own bookkeeping as well as a room.
             let op = match crate::import::replay(&mut server, &mut imports, &mut parents, op) {
                 Ok(crate::import::Replayed::Done { slug, cursor }) => {
@@ -241,7 +254,14 @@ impl DurableServer {
             };
             // So does a call record (task T360a1).
             let op = match crate::calls::replay(&mut server, &mut calls, op) {
-                Ok(crate::calls::Replayed::Done) => continue,
+                Ok(crate::calls::Replayed::Done) => {
+                    activity.replayed(
+                        activity_op.as_ref(),
+                        ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls },
+                        was_reacting,
+                    );
+                    continue;
+                }
                 Ok(crate::calls::Replayed::NotCall(op)) => op,
                 Err(()) => return Err(DurableError::Corrupt { index }),
             };
@@ -266,7 +286,12 @@ impl DurableServer {
                 check_attachments(&files, &attached, &slug, &author, &posted).map_err(|_| DurableError::Corrupt { index })?;
                 let body = attachment_body(&files, &text, &posted);
                 let cursor = server.post(&slug, &author, &body, now_ms).map_err(|_| DurableError::Corrupt { index })?;
-                index_event(&server, &mut search, &mut previews, &slug, &author, cursor);
+                activity.replayed(
+                    activity_op.as_ref(),
+                    ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls },
+                    was_reacting,
+                );
+                index_event_with_source(&server, &mut search, &mut previews, &slug, &author, cursor, Some(&text));
                 for file in &posted {
                     attached.insert(*file, (slug.clone(), cursor));
                 }
@@ -280,7 +305,12 @@ impl DurableServer {
                     return Err(DurableError::Corrupt { index });
                 }
                 let cursor = server.post(&slug, &author, &text, now_ms).map_err(|_| DurableError::Corrupt { index })?;
-                index_event(&server, &mut search, &mut previews, &slug, &author, cursor);
+                activity.replayed(
+                    activity_op.as_ref(),
+                    ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls },
+                    was_reacting,
+                );
+                index_event_with_source(&server, &mut search, &mut previews, &slug, &author, cursor, Some(&text));
                 parents.insert((slug, cursor), parent);
                 continue;
             }
@@ -298,12 +328,26 @@ impl DurableServer {
             }
             let indexed = searchable(&op);
             let cursor = replay(&mut server, op, &previews).map_err(|_| DurableError::Corrupt { index })?;
+            activity.replayed(
+                activity_op.as_ref(),
+                ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls },
+                was_reacting,
+            );
             if let Some((slug, actor)) = indexed {
-                index_event(&server, &mut search, &mut previews, &slug, &actor, cursor);
+                index_event_with_source(
+                    &server,
+                    &mut search,
+                    &mut previews,
+                    &slug,
+                    &actor,
+                    cursor,
+                    activity_op.as_ref().and_then(crate::activity::message_source),
+                );
             }
         }
         Ok(Self {
             server,
+            activity,
             journal,
             poisoned: false,
             search,
@@ -450,7 +494,7 @@ impl DurableServer {
         let cursor = self.server.post(slug, author, &body, now_ms).map_err(|error| AttachError::Durable(DurableError::Server(error)))?;
         let op = Op::PostFiles { slug: slug.to_owned(), author: author.to_owned(), text: text.to_owned(), now_ms, files: files.to_vec() };
         self.record(&op).map_err(AttachError::Durable)?;
-        index_event(&self.server, &mut self.search, &mut self.previews, slug, author, cursor);
+        index_event_with_source(&self.server, &mut self.search, &mut self.previews, slug, author, cursor, Some(text));
         for file in files {
             self.attached.insert(*file, (slug.to_owned(), cursor));
         }
@@ -469,7 +513,7 @@ impl DurableServer {
         let cursor = self.server.post(slug, author, text, now_ms).map_err(|error| ReplyError::Durable(DurableError::Server(error)))?;
         let op = Op::Reply { slug: slug.to_owned(), author: author.to_owned(), parent, text: text.to_owned(), now_ms };
         self.record(&op).map_err(ReplyError::Durable)?;
-        index_event(&self.server, &mut self.search, &mut self.previews, slug, author, cursor);
+        index_event_with_source(&self.server, &mut self.search, &mut self.previews, slug, author, cursor, Some(text));
         self.parents.insert((slug.to_owned(), cursor), parent);
         Ok(cursor)
     }
@@ -683,7 +727,7 @@ impl DurableServer {
         self.check_alive()?;
         let cursor = self.server.post(slug, author, text, now_ms).map_err(DurableError::Server)?;
         self.record(&Op::Post { slug: slug.to_string(), author: author.to_string(), text: text.to_string(), now_ms })?;
-        index_event(&self.server, &mut self.search, &mut self.previews, slug, author, cursor);
+        index_event_with_source(&self.server, &mut self.search, &mut self.previews, slug, author, cursor, Some(text));
         Ok(cursor)
     }
 
@@ -692,16 +736,18 @@ impl DurableServer {
         let author = self.previews.get(slug).and_then(|room| room.get(&target)).map(|message| message.author.clone());
         let cursor = self.server.edit_validated(slug, actor, target, author.as_deref(), text, now_ms).map_err(DurableError::Server)?;
         self.record(&Op::Edit { slug: slug.to_string(), actor: actor.to_string(), target, text: text.to_string(), now_ms })?;
-        index_event(&self.server, &mut self.search, &mut self.previews, slug, actor, cursor);
+        index_event_with_source(&self.server, &mut self.search, &mut self.previews, slug, actor, cursor, Some(text));
         Ok(cursor)
     }
 
     /// `Server::react`, recorded (task T341a).
     pub fn react(&mut self, slug: &str, actor: &str, target: u64, reaction: u8, on: bool, now_ms: u64) -> Result<u64, DurableError> {
         self.check_alive()?;
+        let op = Op::React { slug: slug.to_string(), actor: actor.to_string(), target, reaction, on, now_ms };
+        let was_reacting = crate::activity::was_reacting(&self.server, &op);
         let live_target = self.previews.get(slug).is_some_and(|messages| messages.contains_key(&target)).then_some(target);
         let cursor = self.server.react_validated(slug, actor, live_target, reaction, on, now_ms).map_err(DurableError::Server)?;
-        self.record(&Op::React { slug: slug.to_string(), actor: actor.to_string(), target, reaction, on, now_ms })?;
+        self.record_observed(&op, was_reacting)?;
         Ok(cursor)
     }
 
@@ -757,6 +803,10 @@ impl DurableServer {
         let more = messages.len() > MAX_SAVED_PAGE;
         messages.truncate(MAX_SAVED_PAGE);
         SavedPage { messages, more }
+    }
+
+    pub(crate) fn has_saved(&self, user: &str, room: &str, target: u64) -> bool {
+        self.saved.get(user).is_some_and(|references| references.contains(&(room.to_owned(), target)))
     }
 
     /// The current pin at the room's head revision, including when its original event has left the sync log.
@@ -832,6 +882,10 @@ impl DurableServer {
     /// disk, and acting on it further would let a restart lose changes callers were told succeeded. An op the codec
     /// cannot encode is reported as `TooLarge`; `Server` limits keep every accepted change well under the codec's.
     pub(crate) fn record(&mut self, op: &Op) -> Result<(), DurableError> {
+        self.record_observed(op, false)
+    }
+
+    fn record_observed(&mut self, op: &Op, was_reacting: bool) -> Result<(), DurableError> {
         let result = match encode_op(op) {
             Ok(bytes) => self.journal.append(&bytes),
             Err(_) => Err(JournalError::TooLarge),
@@ -839,7 +893,13 @@ impl DurableServer {
         result.map_err(|e| {
             self.poisoned = true;
             DurableError::Journal(e)
-        })
+        })?;
+        self.activity.observe(
+            op,
+            ActivityView { server: &self.server, messages: &self.previews, parents: &self.parents, calls: &self.calls },
+            was_reacting,
+        );
+        Ok(())
     }
 }
 
@@ -865,6 +925,7 @@ fn replay(server: &mut Server, op: Op, messages: &HashMap<String, BTreeMap<u64, 
         }
         // Personal bookmark records are handled before the room operation replay.
         Op::SaveMessage { .. } => Ok(0),
+        Op::MarkActivitySeen { .. } => Ok(0),
         Op::MarkRead { slug, user, cursor } => server.mark_read(&slug, &user, cursor).map(|_| 0),
         Op::RoomSetting { slug, user, setting, on } => server.set_room_setting(&slug, &user, setting, on).map(|_| 0),
         Op::MarkUnread { slug, user, target } => {
@@ -966,6 +1027,18 @@ pub(crate) fn index_event(
     actor: &str,
     cursor: u64,
 ) {
+    index_event_with_source(server, search, previews, slug, actor, cursor, None);
+}
+
+fn index_event_with_source(
+    server: &Server,
+    search: &mut RoomSearch,
+    previews: &mut HashMap<String, BTreeMap<u64, CurrentMessage>>,
+    slug: &str,
+    actor: &str,
+    cursor: u64,
+    source: Option<&str>,
+) {
     let Ok(room) = server.room(slug) else { return };
     let Ok(Since::Events(events)) = room.sync(actor, cursor.saturating_sub(1)) else { return };
     let Some((at, event)) = events.iter().find(|(at, _)| *at == cursor) else { return };
@@ -974,13 +1047,22 @@ pub(crate) fn index_event(
     match &event.kind {
         EventKind::Posted => {
             if !room.is_deleted(*at) {
-                messages.insert(*at, CurrentMessage { author: event.actor.clone(), html: event.html.clone(), edited: false });
+                messages.insert(
+                    *at,
+                    CurrentMessage {
+                        author: event.actor.clone(),
+                        html: event.html.clone(),
+                        edited: false,
+                        mention_tokens: source.map_or_else(Vec::new, crate::mentions::mentions),
+                    },
+                );
             }
         }
         EventKind::Edited { target } => {
             if let Some(message) = messages.get_mut(target) {
                 message.html = event.html.clone();
                 message.edited = true;
+                message.mention_tokens = source.map_or_else(Vec::new, crate::mentions::mentions);
             }
         }
         EventKind::Deleted { target } => {
@@ -1280,8 +1362,10 @@ mod pins_saved_tests {
         let mut server = Server::new();
         let room = server.create_archive_room("Archive").unwrap();
         server.add_member(&room, crate::import::ARCHIVE_OWNER, "reader", Role::Guest).unwrap();
-        let messages =
-            HashMap::from([(room.clone(), BTreeMap::from([(1, CurrentMessage { author: "author".into(), html: String::new(), edited: false })]))]);
+        let messages = HashMap::from([(
+            room.clone(),
+            BTreeMap::from([(1, CurrentMessage { author: "author".into(), html: String::new(), edited: false, mention_tokens: Vec::new() })]),
+        )]);
         let mut saved = HashMap::new();
         assert_eq!(change_saved(&server, &messages, &mut saved, &room, "reader", 1, true), Ok(true));
         assert_eq!(validate_pin(&server, &messages, &room, "reader", 1, true), Err(ServerError::Service(ServiceError::NotAllowed)));

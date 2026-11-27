@@ -35,6 +35,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crewcraft_client_core::room_view::{GapNotice, PinnedMessage, ReadState, Shown};
+use crewcraft_proto::activity::{ActivityFilter, ActivitySnapshot};
 use crewcraft_ui_model::Command;
 use rand_core::{OsRng, RngCore};
 use rustls::client::ResolvesClientCert;
@@ -90,6 +91,15 @@ pub enum Event {
         email: String,
         rooms: Vec<String>,
     },
+    Activity {
+        filter: ActivityFilter,
+        snapshot: ActivitySnapshot,
+    },
+    ActivityFailed {
+        problem: Problem,
+        refresh: bool,
+    },
+    ActivityReset,
     /// The open room as it is drawn now. Sent when the room is opened and whenever it changes.
     Room {
         room: String,
@@ -330,6 +340,7 @@ pub enum Problem {
     ContinueNotOffered,
     /// The server does not keep personal room settings (T346).
     RoomSettingsNotOffered,
+    ActivityNotOffered,
     /// A file on this computer could not be read or written (task T330e).
     LocalFile(io::ErrorKind),
 }
@@ -364,6 +375,7 @@ impl std::fmt::Display for Problem {
             Self::ReadStateNotOffered => "This server does not offer shared unread positions.",
             Self::ContinueNotOffered => "This server does not offer continuing archived conversations.",
             Self::RoomSettingsNotOffered => "This server does not keep pinned, muted or hidden rooms.",
+            Self::ActivityNotOffered => "This server does not offer Activity.",
             Self::LocalFile(_) => "CrewCraft could not read or write that file on this computer.",
         })
     }
@@ -392,6 +404,7 @@ impl Problem {
                 | Self::ReadStateNotOffered
                 | Self::ContinueNotOffered
                 | Self::RoomSettingsNotOffered
+                | Self::ActivityNotOffered
                 | Self::LocalFile(_)
         )
     }
@@ -553,6 +566,10 @@ impl Worker {
             room_settings_sent: BTreeMap::new(),
             saved_sent: None,
             saved_requested: false,
+            activity_filter: None,
+            activity_badge_sent: None,
+            activity_sent: None,
+            activity_polling: false,
             archive_sent: BTreeMap::new(),
             continued_sent: BTreeMap::new(),
             in_call: None,
@@ -668,6 +685,10 @@ struct Run {
     saved_sent: Option<Vec<crewcraft_proto::request::SavedMessage>>,
     /// Refresh personal bookmarks after the window first opens or changes the saved list (T343).
     saved_requested: bool,
+    activity_filter: Option<ActivityFilter>,
+    activity_badge_sent: Option<ActivitySnapshot>,
+    activity_sent: Option<(ActivityFilter, ActivitySnapshot)>,
+    activity_polling: bool,
     next_poll: Instant,
     retry: Option<Retry>,
     keeper: Box<dyn TicketKeeper>,
@@ -743,6 +764,12 @@ impl Run {
                     self.saved_requested = true;
                     self.refresh_saved(true);
                 }
+                Some(Input::Command(Command::ListActivity { filter })) => {
+                    self.activity_filter = (filter != ActivityFilter::Badge).then_some(filter);
+                    self.activity_polling = true;
+                    self.refresh_activity(true, filter != ActivityFilter::Badge);
+                }
+                Some(Input::Command(Command::MarkActivitySeen { through })) => self.mark_activity_seen(through),
                 Some(Input::Command(Command::Pin { room, target, on })) => self.pin_message(room, target, on),
                 Some(Input::Command(Command::SaveMessage { room, target, on })) => self.save_message(room, target, on),
                 Some(Input::Command(Command::Preview { file, size })) => {
@@ -790,8 +817,16 @@ impl Run {
     }
 
     fn end_session(&mut self) {
+        let had_session = self.session.is_some();
         self.session = None;
+        self.activity_filter = None;
+        self.activity_badge_sent = None;
+        self.activity_sent = None;
+        self.activity_polling = false;
         self.shared.set_socket(None);
+        if had_session {
+            self.emit(Event::ActivityReset);
+        }
     }
 
     fn connect(&mut self) -> Result<Connection, Problem> {
@@ -853,6 +888,10 @@ impl Run {
     /// Take over a session that was just signed in or resumed: keep its resume ticket, list the person's rooms, report
     /// `SignedIn` and poll.
     fn start_session(&mut self, mut session: SignedInSession, email: &str) {
+        self.activity_filter = None;
+        self.activity_badge_sent = None;
+        self.activity_sent = None;
+        self.activity_polling = session.activities();
         self.pins_sent.clear();
         self.room_settings_sent.clear();
         self.read_states_sent.clear();
@@ -1421,6 +1460,75 @@ impl Run {
         }
     }
 
+    fn refresh_activity(&mut self, force: bool, explicit: bool) {
+        let Some(session) = self.session.as_ref() else {
+            if explicit {
+                self.emit(Event::ActivityFailed { problem: Problem::NotSignedIn, refresh: true });
+            }
+            return;
+        };
+        if !session.activities() {
+            self.activity_polling = false;
+            if explicit {
+                self.emit(Event::ActivityFailed { problem: Problem::ActivityNotOffered, refresh: true });
+            }
+            return;
+        }
+        if !self.activity_polling {
+            return;
+        }
+        let filter = self.activity_filter.unwrap_or(ActivityFilter::Badge);
+        self.fetch_activity(filter, force);
+    }
+
+    fn fetch_activity(&mut self, filter: ActivityFilter, force: bool) -> bool {
+        let Some(session) = self.session.as_mut() else { return false };
+        match session.activity(filter) {
+            Ok(snapshot) => {
+                let changed = if filter == ActivityFilter::Badge {
+                    self.activity_badge_sent.as_ref() != Some(&snapshot)
+                } else {
+                    self.activity_sent.as_ref().is_none_or(|(of, old)| *of != filter || old != &snapshot)
+                };
+                if force || changed {
+                    if filter == ActivityFilter::Badge {
+                        self.activity_badge_sent = Some(snapshot.clone());
+                    } else {
+                        self.activity_sent = Some((filter, snapshot.clone()));
+                    }
+                    self.emit(Event::Activity { filter, snapshot });
+                }
+                true
+            }
+            Err(error) => {
+                self.activity_polling = false;
+                self.activity_sent = None;
+                self.emit(Event::ActivityFailed { problem: problem(error), refresh: true });
+                self.request_failed(error);
+                false
+            }
+        }
+    }
+
+    fn mark_activity_seen(&mut self, through: u64) {
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::ActivityFailed { problem: Problem::NotSignedIn, refresh: false });
+        };
+        match session.mark_activity_seen(through) {
+            Ok(_) => {
+                self.activity_polling = true;
+                self.refresh_activity(true, true);
+            }
+            Err(error) => {
+                let issue = if error == LabError::Chat(ChatError::Unsupported) { Problem::ActivityNotOffered } else { problem(error) };
+                self.emit(Event::ActivityFailed { problem: issue, refresh: false });
+                if error != LabError::Chat(ChatError::Unsupported) {
+                    self.request_failed(error);
+                }
+            }
+        }
+    }
+
     /// An edit or a deletion of one of the person's own messages (task T316): report `Changed`, then sync the room.
     /// A refusal (someone else's message, say) is reported and leaves the session open.
     fn change(&mut self, room: String, apply: impl FnOnce(&mut SignedInSession, &str) -> Result<u64, LabError>) {
@@ -1446,6 +1554,7 @@ impl Run {
     fn poll(&mut self, force: bool) {
         self.next_poll = Instant::now() + self.config.poll_interval;
         self.heartbeat();
+        self.refresh_activity(force, false);
         if self.saved_requested {
             self.refresh_saved(force);
         }

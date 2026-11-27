@@ -58,6 +58,10 @@ pub enum Command {
     SaveMessage { room: String, target: u64, on: bool },
     /// Fetch the person's saved messages in their current state (T343).
     ListSaved,
+    /// Refresh Activity, or monitor only its counters after leaving the pane (T347).
+    ListActivity { filter: crewcraft_client_core::client::ActivityFilter },
+    /// Acknowledge only the Activity head the person actually saw; room read positions are independent (T347).
+    MarkActivitySeen { through: u64 },
     /// Upload the file at `path` to `room`, to attach to the next post there (task T330e).
     Attach { room: String, path: std::path::PathBuf },
     /// Post `text` (may be empty) with `files`, uploads made with `Attach` (task T330e).
