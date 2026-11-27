@@ -1318,29 +1318,34 @@ impl Window {
             scroll: !self.focus_scrolled,
         };
         let mut focus_to = self.focus_to.take();
-        egui::CentralPanel::default_margins().show(ui, |ui| {
-            ScrollArea::vertical().stick_to_bottom(focus.is_none() || self.focus_scrolled).auto_shrink(false).show(ui, |ui| {
-                // Replies live in their thread, not in the conversation (T340b).
-                let mut shown_lines = 0;
-                let mut previous_orphan = None;
-                for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
-                    if let FeedRow::Message { cursor, .. } = row {
-                        shown_lines = call_lines_ui(ui, &call_lines, shown_lines, *cursor);
+        // The conversation draws in a scope of its own id, so its controls keep their ids when the thread pane opens or
+        // closes beside it: otherwise focus sent back to the thread's opener by Close thread would be lost a frame later.
+        let feed = ui.scope_id().with("crewcraft-feed");
+        ui.scope_builder(egui::UiBuilder::new().scope_id(feed), |ui| {
+            egui::CentralPanel::default_margins().show(ui, |ui| {
+                ScrollArea::vertical().stick_to_bottom(focus.is_none() || self.focus_scrolled).auto_shrink(false).show(ui, |ui| {
+                    // Replies live in their thread, not in the conversation (T340b).
+                    let mut shown_lines = 0;
+                    let mut previous_orphan = None;
+                    for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
+                        if let FeedRow::Message { cursor, .. } = row {
+                            shown_lines = call_lines_ui(ui, &call_lines, shown_lines, *cursor);
+                        }
+                        let parent = match row {
+                            FeedRow::Message { cursor, .. } => threads.get(cursor).copied(),
+                            _ => None,
+                        };
+                        if parent.is_some_and(|parent| present.contains(&parent)) {
+                            continue;
+                        }
+                        action = orphan_thread_ui(ui, parent, &mut previous_orphan, &mut focus_to).or(action.take());
+                        if matches!(row, FeedRow::Message { cursor, .. } if Some(*cursor) == focus) {
+                            focus_found = true;
+                        }
+                        action = bubble_ui(ui, row, &look, &mut focus_to).or(action.take());
                     }
-                    let parent = match row {
-                        FeedRow::Message { cursor, .. } => threads.get(cursor).copied(),
-                        _ => None,
-                    };
-                    if parent.is_some_and(|parent| present.contains(&parent)) {
-                        continue;
-                    }
-                    action = orphan_thread_ui(ui, parent, &mut previous_orphan, &mut focus_to).or(action.take());
-                    if matches!(row, FeedRow::Message { cursor, .. } if Some(*cursor) == focus) {
-                        focus_found = true;
-                    }
-                    action = bubble_ui(ui, row, &look, &mut focus_to).or(action.take());
-                }
-                call_lines_ui(ui, &call_lines, shown_lines, u64::MAX);
+                    call_lines_ui(ui, &call_lines, shown_lines, u64::MAX);
+                });
             });
         });
         self.focus_to = focus_to;
