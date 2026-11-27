@@ -27,11 +27,8 @@ pub fn work_week_at(now_ms: u64, utc_offset_minutes: i32, weeks: i64) -> Option<
     let local_ms = i64::try_from(now_ms).ok()?.checked_add(i64::from(utc_offset_minutes).checked_mul(60_000)?)?;
     let today = DateTime::from_timestamp_millis(local_ms)?.date_naive();
     let days = weeks.checked_mul(7)?;
-    let day = if days >= 0 {
-        today.checked_add_days(Days::new(days.unsigned_abs()))?
-    } else {
-        today.checked_sub_days(Days::new(days.unsigned_abs()))?
-    };
+    let day =
+        if days >= 0 { today.checked_add_days(Days::new(days.unsigned_abs()))? } else { today.checked_sub_days(Days::new(days.unsigned_abs()))? };
     work_week(day, utc_offset_minutes)
 }
 

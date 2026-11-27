@@ -95,7 +95,8 @@ fn a_scheduled_meeting_shows_up_in_the_week() {
     assert_eq!((title.as_str(), agenda.as_str()), ("Weekly review", "Numbers, then plans"));
 
     // The server saved it; the form closes and the week the worker reads next holds it.
-    let saved = Meeting { start_ms: *start_ms, duration: *duration, agenda: agenda.clone(), ..meeting(7, 1, "Weekly review", MeetingState::Scheduled) };
+    let saved =
+        Meeting { start_ms: *start_ms, duration: *duration, agenda: agenda.clone(), ..meeting(7, 1, "Weekly review", MeetingState::Scheduled) };
     h.state_mut().apply(Update::MeetingSaved { meeting: saved.clone() });
     h.state_mut().apply(week(vec![saved]));
     h.run();

@@ -302,9 +302,13 @@ impl fmt::Debug for Update {
             Self::Archive { room, times } => f.debug_struct("Archive").field("room", room).field("times", &times.len()).finish(),
             Self::Continued { archive, room } => f.debug_struct("Continued").field("archive", archive).field("room", room).finish(),
             Self::Continuations { room, lines } => f.debug_struct("Continuations").field("room", room).field("lines", &lines.len()).finish(),
-            Self::Meetings { from_ms, meetings, .. } => f.debug_struct("Meetings").field("from_ms", from_ms).field("meetings", &meetings.len()).finish(),
+            Self::Meetings { from_ms, meetings, .. } => {
+                f.debug_struct("Meetings").field("from_ms", from_ms).field("meetings", &meetings.len()).finish()
+            }
             Self::MeetingSaved { meeting } => f.debug_struct("MeetingSaved").field("meeting", &meeting.id).finish(),
-            Self::MeetingRefused { meeting, conflict, .. } => f.debug_struct("MeetingRefused").field("meeting", meeting).field("conflict", conflict).finish(),
+            Self::MeetingRefused { meeting, conflict, .. } => {
+                f.debug_struct("MeetingRefused").field("meeting", meeting).field("conflict", conflict).finish()
+            }
             Self::Reactions { room, reactions } => f.debug_struct("Reactions").field("room", room).field("messages", &reactions.len()).finish(),
             Self::RoomSettings { room, settings } => f.debug_struct("RoomSettings").field("room", room).field("settings", settings).finish(),
             Self::Pin { room, pinned } => f.debug_struct("Pin").field("room", room).field("target", &pinned.as_ref().map(|pin| pin.target)).finish(),
