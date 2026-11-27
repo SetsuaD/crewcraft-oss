@@ -14,7 +14,7 @@ REQUIREMENTS section is fully met.
 | Chat | One-to-one and group chats, formatting, emoji, reactions, replies, edit and delete, pin | 2.1, 2.2 | M1, M3 | partial |
 | Chat | Mentions of people, teams, channels and groups | 2.1, 2.12 | M1, M4 | partial |
 | Chat | Priority and urgent messages, scheduled send, read receipts | 2.1, 2.3 | M3 | partial |
-| Chat | Forward, share to another chat, save for later | 2.1 | M3 | planned |
+| Chat | Forward, share to another chat, save for later | 2.1 | M3 | partial (pinned messages and a Saved list; no forward or share yet) |
 | Teams | Teams with owners and members, standard and private channels, General channel | 2.2 | M1, M3 | partial |
 | Teams | Posts with threaded replies, announcements, channel moderation | 2.2, 2.11 | M3 | partial |
 | Teams | Team templates, archive and restore a team | 2.2 | M4 | planned |
@@ -23,9 +23,9 @@ REQUIREMENTS section is fully met.
 | Activity | Activity feed with mentions, replies, reactions, missed calls | 2.7 | M3 | partial |
 | Search | Messages, people, files; filters; jump to message | 2.6 | M1, M3 | partial |
 | Presence | Automatic and chosen presence, status message, out of office | 2.3, 2.16 | M1, M9 | partial |
-| Calls | Audio and video calls in any chat, screen sharing, device choice | 2.5 | M7 | planned |
+| Calls | Audio and video calls in any chat, screen sharing, device choice | 2.5 | M7 | partial (start, join and ring in any room, end-to-end encrypted media through CrewCraft's media server; audio not yet connected to devices, no video or screen sharing) |
 | Calls | Call history, missed calls, call from the directory | 2.5, 2.17 | M7, M9 | partial |
-| Meetings | Scheduled and instant meetings with chat, lobby, raise hand, reactions | 2.5 | M7 | planned |
+| Meetings | Scheduled and instant meetings with chat, lobby, raise hand, reactions | 2.5 | M7 | partial (scheduled meetings from the calendar, join and start now, guest lobby with admit, decline and remove; no raise hand or meeting reactions) |
 | Meetings | Grid and focus layouts, pop-out windows, background blur | 2.5, 2.20 | M7 | planned |
 | Meetings | Recording and transcription with consent, live captions | 2.5 | M12 | planned (local processing only) |
 | Meetings | Breakout rooms, polls, meeting notes | 2.5, 2.15 | M12 | planned |
@@ -48,11 +48,11 @@ REQUIREMENTS section is fully met.
 | Admin | Users, groups, roles, bulk import and export, deactivation | 2.12 | M4 | partial |
 | Admin | Policies for messaging, meetings, files, guests and retention | 2.12 | M4 | planned |
 | Admin | Audit log, retention, export, signed-in devices | 2.11 | M1, M4 | partial |
-| Admin | Directory provisioning (SCIM), single sign-on (OpenID Connect) | 2.12, 7 | M4 | planned |
+| Admin | Directory provisioning (SCIM), single sign-on (OpenID Connect) | 2.12, 7 | M4 | partial (sign-in and enrollment through an OpenID Connect provider; no SCIM) |
 | Apps | Bots, slash commands, message actions, tabs, webhooks | 2.18 | M11 | planned |
 | Apps | Approve, install and manage apps per organization and team | 2.18 | M11 | planned |
-| Look | Themes (light, dark, high contrast), density, organization accent and logo | 2.19 | M3, M11 | planned |
-| Clients | Desktop (Windows, macOS, Linux), web, Android, iOS with notifications | 2.9, 2.10 | M3 to M6 | planned |
+| Look | Themes (light, dark, high contrast), density, organization accent and logo | 2.19 | M3, M11 | partial (theme files with contrast checks, organization theme and name) |
+| Clients | Desktop (Windows, macOS, Linux), web, Android, iOS with notifications | 2.9, 2.10 | M3 to M6 | partial (the desktop app on all three systems; early Android and iOS builds; no web client) |
 | Phone system | Calling ordinary phone numbers, dial-in | n/a | n/a | non-goal (needs a telephone carrier) |
 | AI assistant | Built-in AI summaries and drafting | 2.18 | n/a | non-goal in the core; a plugin may add one |
 | Workforce apps | Shifts, walkie-talkie, approvals, tasks boards | 2.18 | n/a | non-goal in the core; plugins |
