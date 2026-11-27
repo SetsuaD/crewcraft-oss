@@ -1,7 +1,8 @@
 //! Transport adapters for the CrewCraft server binary.
 
-#[cfg(unix)]
 pub mod audit_file;
+// The control socket is a Unix socket (T238); on Windows, invite, room and add-member run with the server stopped.
+#[cfg(unix)]
 pub mod control;
 pub mod device_session;
 pub mod export_teams;

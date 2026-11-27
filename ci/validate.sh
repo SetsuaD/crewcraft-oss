@@ -16,8 +16,27 @@ step "sanitize"; bash tools/sanitize-scan.sh
 step "rust-only"; bash tools/rust-only.sh
 step "agents";   bash tools/agents-check.sh --self-test
 step "task names"; bash tools/task.sh check-names
-step "cargo-deny"
 skipped=""
+step "windows check"
+# The release ships crewcraft and crewcraft-server for Windows (docs/RELEASE.md), so both must compile for it. cargo check
+# needs only the target's standard library, no linker. WINDOWS_CHECK_REQUIRED=1 turns a missing target into a failure.
+case "${WINDOWS_CHECK_REQUIRED:-}" in
+  ""|1) ;;
+  *) echo "windows check: WINDOWS_CHECK_REQUIRED must be unset, empty or 1, not '${WINDOWS_CHECK_REQUIRED}'"; exit 1 ;;
+esac
+win_target=x86_64-pc-windows-gnu
+if [ -d "$(rustc --print sysroot)/lib/rustlib/$win_target/lib" ]; then
+  cargo check --locked --target "$win_target" -p crewcraft -p crewcraft-server
+elif [ "${WINDOWS_CHECK_REQUIRED:-}" = 1 ]; then
+  echo "windows check: the $win_target standard library is not installed, and WINDOWS_CHECK_REQUIRED=1"
+  exit 1
+else
+  echo "windows check: the $win_target standard library is not installed here, SKIPPED"
+  echo "               (rustup target add $win_target enables it; WINDOWS_CHECK_REQUIRED=1 makes this a failure)"
+  skipped="${skipped} (windows check SKIPPED)"
+fi
+
+step "cargo-deny"
 case "${CARGO_DENY_REQUIRED:-}" in
   ""|1) ;;
   *) echo "cargo-deny: CARGO_DENY_REQUIRED must be unset, empty or 1, not '${CARGO_DENY_REQUIRED}'"; exit 1 ;;
@@ -30,7 +49,7 @@ elif [ "${CARGO_DENY_REQUIRED:-}" = 1 ]; then
 else
   echo "cargo-deny: not installed here, SKIPPED (licenses, advisories, bans and sources were not checked;"
   echo "            CARGO_DENY_REQUIRED=1 makes this a failure)"
-  skipped=" (cargo-deny SKIPPED: licenses not checked)"
+  skipped="${skipped} (cargo-deny SKIPPED: licenses not checked)"
 fi
 
 if [ "${1:-}" = "--tasks" ]; then
