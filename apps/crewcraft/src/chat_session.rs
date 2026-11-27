@@ -72,6 +72,10 @@ pub struct ChatSession<S, D> {
     /// The session token the server returned; it resumes this session later (task T240). Wiped on drop.
     token: Zeroizing<String>,
     activity_position: (u64, u64),
+    /// Each room's meeting lines, by cursor, as `author text` (task T370b2).
+    meeting_lines: std::collections::BTreeMap<String, std::collections::BTreeMap<u64, String>>,
+    /// How many meeting lines this session has seen, so a calendar knows when to ask again (task T370b2).
+    meeting_changes: u64,
 }
 
 impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
@@ -129,6 +133,8 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
             closed: false,
             token: Zeroizing::default(),
             activity_position: (0, 0),
+            meeting_lines: std::collections::BTreeMap::new(),
+            meeting_changes: 0,
         };
         chat.token = chat.authenticate(opening, deadline)?;
 
@@ -867,7 +873,26 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
             self.closed = true;
             return Err(ChatError::UnexpectedResponse);
         }
+        // A meeting's system line is kept for its room, as call lines are (task T370b2).
+        for event in &events {
+            if let ClientEvent::MeetingLine { room, cursor, author, text, .. } = event {
+                let lines = self.meeting_lines.entry(room.clone()).or_default();
+                if lines.insert(*cursor, format!("{author} {text}")).is_none() {
+                    self.meeting_changes += 1;
+                }
+            }
+        }
         Ok(events)
+    }
+
+    /// The meeting lines of `room` this session has seen, by cursor (task T370b2).
+    pub fn meeting_lines(&self, room: &str) -> Vec<(u64, String)> {
+        self.meeting_lines.get(room).map(|lines| lines.iter().map(|(cursor, text)| (*cursor, text.clone())).collect()).unwrap_or_default()
+    }
+
+    /// How many meeting lines this session has seen so far (task T370b2).
+    pub fn meeting_changes(&self) -> u64 {
+        self.meeting_changes
     }
 
     fn prepare_frame(&mut self, deadline: Instant) -> Result<(), ChatError> {

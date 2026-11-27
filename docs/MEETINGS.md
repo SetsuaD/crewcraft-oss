@@ -177,8 +177,8 @@ and call binding. Staff operations keep journal family 40 and the existing wire 
    first. The form takes the start as `YYYY-MM-DD HH:MM` in UTC and checks every field before sending. A refused save
    keeps what was typed; a conflict disables Save until Reload, which shows the meeting as it is now. Start now
    schedules a meeting that starts now and joins it. Not yet: the app reads no time zone, so the week and every time
-   are UTC (the area says so); the agenda refreshes after each change and when asked, not when another person changes
-   a meeting while it is open; meeting system lines are not shown in the room yet.
+   are UTC (the area says so); since T370b2 the open calendar reads its week again when a meeting line arrives in a room
+   the app follows, and meeting lines show in the room between messages, like call lines.
 3. **T370c, guest meetings and the lobby**, with the guest entrance; then audit entries in `audit.log`.
 >>>>>>> c8439a4 (T370b: the calendar in the app)
 

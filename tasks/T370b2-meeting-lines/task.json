@@ -1,0 +1,26 @@
+{
+  "id": "T370b2-meeting-lines",
+  "title": "Meeting lines in the room, an open calendar that follows other people's changes, and the form by keyboard",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "crates/desktop-ui/src/calendar.rs",
+    "crates/desktop-ui/tests/t370b2_calendar_keyboard.rs",
+    "apps/crewcraft-server/tests/t370b2_meeting_lines.rs",
+    "docs/MEETINGS.md",
+    "docs/ACCESSIBILITY.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t370b2_meeting_lines.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t370b2_meeting_lines",
+  "depends_on": [
+    "T370b-calendar-app"
+  ],
+  "spec": "docs/MEETINGS.md, slice T370b follow-up. The app's chat session keeps each room's MeetingLine pushes (client-core's ClientEvent::MeetingLine) by cursor as 'author text' and counts them; SignedInSession::calls lists them among the room's history lines in cursor order, so the window shows them between messages like call lines (they never count as unread: the server's rule). When the count changes after a room sync and the window has asked for a calendar week, the worker reads that week again, so another device's change reaches an open calendar without a command from the window. The calendar form opens with focus in its title; Tab goes title, start, length, agenda, Save, Discard changes; Enter in a one-line field saves as Save does (crates/desktop-ui/tests/t370b2_calendar_keyboard.rs). End to end over a real server: Bob's app shows Alice's scheduled line and next week's meeting, and after Alice edits it on her device his worker reports the edited line and the week with the new title.",
+  "status": "done",
+  "context": [
+    "docs/MEETINGS.md",
+    "docs/ACCESSIBILITY.md"
+  ]
+}
