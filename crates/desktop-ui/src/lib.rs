@@ -482,6 +482,47 @@ pub struct Window {
     /// The Calendar area (T370b).
     calendar: calendar::Calendar,
     guest_lobby: guest_lobby::LobbyUi,
+    /// Give keyboard focus to this control when it is next drawn: the safe answer of a confirmation that just opened,
+    /// or the control that opened a pane, a confirmation or the search results that just closed (T407).
+    focus_to: Option<Return>,
+    /// The control that opened the thread pane, which focus returns to when it closes (T407).
+    thread_opener: Option<Return>,
+    /// The control that sent the last message search, which focus returns to when its results close (T407).
+    search_opener: Option<Return>,
+    /// The attach path entry had keyboard focus last frame: Esc there closes only the entry.
+    attach_focused: bool,
+    /// The announcement says which screen just opened (the chat, after signing in). It goes once focus lands on a
+    /// control: by then the person is working on that screen (T407).
+    arrival: bool,
+}
+
+/// A control in the chat area that keyboard focus moves to (rule 1 of the Craft accessibility standard, T407).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Return {
+    /// The app bar's buttons that open the Activity, Files and Saved panes.
+    Activity,
+    Files,
+    Saved,
+    /// The message search box, or its Search button.
+    SearchBox,
+    SearchButton,
+    /// A message's own text, by cursor: it takes focus, and Enter selects it.
+    Message(u64),
+    /// A message's reply count, which opens its thread.
+    Replies(u64),
+    /// The View thread button over replies to the unavailable message at this cursor.
+    Orphan(u64),
+    /// A message's Delete button, and the Keep answer of its "Delete this message?" confirmation.
+    Delete(u64),
+    KeepMessage(u64),
+}
+
+/// Focus `response` if it is the control `focus_to` names, once.
+fn focus_if(focus_to: &mut Option<Return>, control: Return, response: &egui::Response) {
+    if *focus_to == Some(control) {
+        response.request_focus();
+        *focus_to = None;
+    }
 }
 
 /// What a message is drawn with (T340b): who is reading, the theme's colours, which message is selected, the files and
@@ -516,8 +557,9 @@ enum MessageAction {
     Select(u64),
     /// Save a message's file (T330e).
     Save(FileChip),
-    /// Open the thread of the message at this cursor (T340b).
-    OpenThread(u64),
+    /// Open the thread of the message at this cursor (T340b), from this control, which focus returns to when it
+    /// closes (T407).
+    OpenThread(u64, Return),
     /// Add (`true`) or take back a reaction on the message at this cursor (T341b).
     React(u64, u8, bool),
     Pin(u64, bool),
@@ -623,9 +665,17 @@ impl Window {
             Update::SignedIn { email, rooms } => {
                 self.reset_guest_lobby();
                 // Signed in again while the chat was showing: the worker resumed the session after a lost connection.
+                // Otherwise the chat is a new screen, and the status line says so: focus is on nothing until the person
+                // presses Tab, and no field is focused for them (on a phone that would raise the keyboard unasked).
                 if self.screen() == Screen::Chat {
                     self.announce("Connected to the server again.".to_owned());
+                } else {
+                    self.announce(format!("Signed in to {}.", self.title()));
+                    self.arrival = true;
                 }
+                self.focus_to = None;
+                self.thread_opener = None;
+                self.search_opener = None;
                 self.email = email;
                 self.pins.clear();
                 self.saved_messages = None;
@@ -825,6 +875,11 @@ impl Window {
             Update::SignedOut => {
                 self.reset_guest_lobby();
                 self.announcement = None;
+                self.arrival = false;
+                self.focus_to = None;
+                self.thread_opener = None;
+                self.search_opener = None;
+                self.attach_focused = false;
                 self.activity_filter = None;
                 self.activity_snapshot = None;
                 self.activity_counters = None;
@@ -880,6 +935,12 @@ impl Window {
             ui.memory_mut(|memory| memory.stop_text_input());
         }
         self.drawn = Some(screen);
+        // The screen's arrival was announced; once focus lands on a control the person is working there, and the
+        // status line is left for changes away from focus.
+        if self.arrival && ui.memory(|memory| memory.focused().is_some()) {
+            self.arrival = false;
+            self.announcement = None;
+        }
         if screen == Screen::Chat {
             self.lobby_attention(ui);
             // The status line: the last problem or hint, and the last change away from focus. Both are live regions,
@@ -894,7 +955,10 @@ impl Window {
                     }
                 });
             }
-            self.chat_ui(ui);
+            // The chat draws in a scope of its own id, so its controls keep their ids whether or not the status line
+            // shows: otherwise a line appearing or going would move keyboard focus off the control that has it.
+            let chat = ui.scope_id().with("crewcraft-chat");
+            ui.scope_builder(egui::UiBuilder::new().scope_id(chat), |ui| self.chat_ui(ui));
             return;
         }
         egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -924,6 +988,7 @@ impl Window {
     /// Say `text` through the status line's live region (rule 4 of the Craft accessibility standard).
     fn announce(&mut self, text: String) {
         self.announcement = Some(text);
+        self.arrival = false;
     }
 
     /// What the status line last announced, while it shows.
@@ -938,7 +1003,7 @@ impl Window {
     }
 
     fn enroll_ui(&mut self, ui: &mut Ui) {
-        ui.heading("Join a CrewCraft server");
+        screen_heading(ui, "Join a CrewCraft server");
         ui.label("Paste the invitation link your administrator sent you, and choose a password.");
         let link_field = secret_field(ui, "Invitation link", &mut self.link, false);
         // A link that names the way in offers only that way (T611k); otherwise both are offered.
@@ -981,7 +1046,7 @@ impl Window {
     }
 
     fn authenticator_ui(&mut self, ui: &mut Ui) {
-        ui.heading("Set up your authenticator");
+        screen_heading(ui, "Set up your authenticator");
         ui.label("Add this entry to your authenticator app, then type the code it shows.");
         // The entry is read-only, but it takes focus so it can be read and copied; its label names it.
         let mut uri = self.otpauth_uri.as_str();
@@ -1001,7 +1066,7 @@ impl Window {
     }
 
     fn sign_in_ui(&mut self, ui: &mut Ui) {
-        ui.heading(format!("Sign in to {}", self.title()));
+        screen_heading(ui, &format!("Sign in to {}", self.title()));
         if !self.server.is_empty() {
             ui.label(format!("Server: {}", self.server));
         }
@@ -1039,6 +1104,7 @@ impl Window {
             self.phone_chat_ui(ui);
             return;
         }
+        self.chat_escape(ui);
         egui::Panel::top("crewcraft-title-bar").show(ui, |ui| {
             // In a narrow window the server's name gives way, so the search boxes and Sign out always fit (T320c).
             let show_server = ui.available_width() >= TITLE_BAR_SERVER_WIDTH;
@@ -1052,11 +1118,15 @@ impl Window {
                 let label = ui.label("Search messages");
                 let search =
                     ui.add(TextEdit::singleline(&mut self.message_query).hint_text("Find a message").desired_width(180.0)).labelled_by(label.id);
+                focus_if(&mut self.focus_to, Return::SearchBox, &search);
                 let enter = search.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
-                if ui.button("Search").clicked() || enter {
+                let button = ui.button("Search");
+                focus_if(&mut self.focus_to, Return::SearchButton, &button);
+                if button.clicked() || enter {
                     let query = self.message_query.trim();
                     if !query.is_empty() && query.len() <= MAX_SEARCH_BYTES {
                         self.actions.push(Action::Room(Command::Search { query: query.to_owned() }));
+                        self.search_opener = Some(if enter { Return::SearchBox } else { Return::SearchButton });
                     }
                 }
                 let total = self.rooms.total_unread();
@@ -1078,10 +1148,11 @@ impl Window {
         // a button that does nothing.
         egui::Panel::left("crewcraft-app-bar").resizable(false).exact_size(72.0).show(ui, |ui| {
             ui.add_space(8.0);
+            // Activity, Files and Saved take focus back when their pane closes from inside it (T407).
             let activity = self.activity_label();
-            if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(self.activity_filter.is_some(), activity)).clicked()
-                && self.activity_filter.is_none()
-            {
+            let activity = ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(self.activity_filter.is_some(), activity));
+            focus_if(&mut self.focus_to, Return::Activity, &activity);
+            if activity.clicked() && self.activity_filter.is_none() {
                 self.open_activity(ActivityFilter::All);
             }
             let total = self.rooms.total_unread();
@@ -1102,16 +1173,18 @@ impl Window {
                 self.open_calendar();
             }
             // The Files area (T331b): every file in my rooms.
-            if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.files_view.is_some(), "Files")).clicked()
-                && self.files_view.is_none()
-            {
+            let files = ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.files_view.is_some(), "Files"));
+            focus_if(&mut self.focus_to, Return::Files, &files);
+            if files.clicked() && self.files_view.is_none() {
                 self.close_activity();
                 self.files_view = Some(None);
                 self.saved_view = false;
                 self.close_calendar();
                 self.actions.push(Action::Room(Command::ListFiles));
             }
-            if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.saved_view, "Saved")).clicked() && !self.saved_view {
+            let saved = ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.saved_view, "Saved"));
+            focus_if(&mut self.focus_to, Return::Saved, &saved);
+            if saved.clicked() && !self.saved_view {
                 self.open_saved();
             }
         });
@@ -1244,31 +1317,38 @@ impl Window {
             focus,
             scroll: !self.focus_scrolled,
         };
-        egui::CentralPanel::default_margins().show(ui, |ui| {
-            ScrollArea::vertical().stick_to_bottom(focus.is_none() || self.focus_scrolled).auto_shrink(false).show(ui, |ui| {
-                // Replies live in their thread, not in the conversation (T340b).
-                let mut shown_lines = 0;
-                let mut previous_orphan = None;
-                for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
-                    if let FeedRow::Message { cursor, .. } = row {
-                        shown_lines = call_lines_ui(ui, &call_lines, shown_lines, *cursor);
+        let mut focus_to = self.focus_to.take();
+        // The conversation draws in a scope of its own id, so its controls keep their ids when the thread pane opens or
+        // closes beside it: otherwise focus sent back to the thread's opener by Close thread would be lost a frame later.
+        let feed = ui.scope_id().with("crewcraft-feed");
+        ui.scope_builder(egui::UiBuilder::new().scope_id(feed), |ui| {
+            egui::CentralPanel::default_margins().show(ui, |ui| {
+                ScrollArea::vertical().stick_to_bottom(focus.is_none() || self.focus_scrolled).auto_shrink(false).show(ui, |ui| {
+                    // Replies live in their thread, not in the conversation (T340b).
+                    let mut shown_lines = 0;
+                    let mut previous_orphan = None;
+                    for row in self.feeds.get(&room).map(Vec::as_slice).unwrap_or_default() {
+                        if let FeedRow::Message { cursor, .. } = row {
+                            shown_lines = call_lines_ui(ui, &call_lines, shown_lines, *cursor);
+                        }
+                        let parent = match row {
+                            FeedRow::Message { cursor, .. } => threads.get(cursor).copied(),
+                            _ => None,
+                        };
+                        if parent.is_some_and(|parent| present.contains(&parent)) {
+                            continue;
+                        }
+                        action = orphan_thread_ui(ui, parent, &mut previous_orphan, &mut focus_to).or(action.take());
+                        if matches!(row, FeedRow::Message { cursor, .. } if Some(*cursor) == focus) {
+                            focus_found = true;
+                        }
+                        action = bubble_ui(ui, row, &look, &mut focus_to).or(action.take());
                     }
-                    let parent = match row {
-                        FeedRow::Message { cursor, .. } => threads.get(cursor).copied(),
-                        _ => None,
-                    };
-                    if parent.is_some_and(|parent| present.contains(&parent)) {
-                        continue;
-                    }
-                    action = orphan_thread_ui(ui, parent, &mut previous_orphan).or(action.take());
-                    if matches!(row, FeedRow::Message { cursor, .. } if Some(*cursor) == focus) {
-                        focus_found = true;
-                    }
-                    action = bubble_ui(ui, row, &look).or(action.take());
-                }
-                call_lines_ui(ui, &call_lines, shown_lines, u64::MAX);
+                    call_lines_ui(ui, &call_lines, shown_lines, u64::MAX);
+                });
             });
         });
+        self.focus_to = focus_to;
         self.message_action(&room, action);
         if focus_found {
             self.focus_scrolled = true;
@@ -1293,6 +1373,10 @@ impl Window {
     /// The phone layout: one pane at a time, a bottom tab bar, and larger touch targets (T402).
     fn phone_chat_ui(&mut self, ui: &mut Ui) {
         ui.spacing_mut().interact_size.y = TOUCH_TARGET;
+        // The phone layout has no app bar or title-bar search to give focus back to.
+        if matches!(self.focus_to, Some(Return::Activity | Return::Files | Return::Saved | Return::SearchBox | Return::SearchButton)) {
+            self.focus_to = None;
+        }
         let in_conversation = self.activity_filter.is_none() && self.phone_pane == PhonePane::Conversation && self.rooms.selected().is_some();
         if !in_conversation {
             egui::Panel::bottom("crewcraft-tabs").show(ui, |ui| {
@@ -1392,6 +1476,7 @@ impl Window {
                     focus,
                     scroll: !self.focus_scrolled,
                 };
+                let mut focus_to = self.focus_to.take();
                 egui::CentralPanel::default_margins().show(ui, |ui| {
                     ScrollArea::vertical().stick_to_bottom(focus.is_none() || self.focus_scrolled).auto_shrink(false).show(ui, |ui| {
                         let mut shown_lines = 0;
@@ -1407,15 +1492,16 @@ impl Window {
                             if parent.is_some_and(|parent| present.contains(&parent)) {
                                 continue;
                             }
-                            action = orphan_thread_ui(ui, parent, &mut previous_orphan).or(action.take());
+                            action = orphan_thread_ui(ui, parent, &mut previous_orphan, &mut focus_to).or(action.take());
                             if matches!(row, FeedRow::Message { cursor, .. } if Some(*cursor) == focus) {
                                 focus_found = true;
                             }
-                            action = bubble_ui(ui, row, &look).or(action.take());
+                            action = bubble_ui(ui, row, &look, &mut focus_to).or(action.take());
                         }
                         call_lines_ui(ui, &call_lines, shown_lines, u64::MAX);
                     });
                 });
+                self.focus_to = focus_to;
                 self.message_action(&room, action);
                 if focus_found {
                     self.focus_scrolled = true;
@@ -1500,7 +1586,7 @@ impl Window {
             ui.horizontal(|ui| {
                 ui.heading(format!("Messages matching \"{query}\""));
                 if ui.button("Close search").clicked() {
-                    self.results = None;
+                    self.close_results();
                 }
             });
         });
@@ -1524,6 +1610,51 @@ impl Window {
         }
     }
 
+    /// Close the search results, with focus back on the search box or button that sent the search (T407).
+    fn close_results(&mut self) {
+        self.results = None;
+        self.focus_to = self.search_opener.take();
+    }
+
+    /// Close the thread pane, with focus back on the control that opened it (T407). A thread opened from elsewhere
+    /// (a search result, Activity, a saved message) gives focus to its message in the conversation.
+    fn close_thread(&mut self) {
+        let Some((room, parent)) = self.open_thread.take() else { return };
+        let shown = self.rooms.selected() == Some(room.as_str()) && self.message_cursors(&room).contains(&parent);
+        self.focus_to = self.thread_opener.take().or(shown.then_some(Return::Message(parent)));
+    }
+
+    /// Esc in the wide chat window closes the innermost thing open, and focus goes back to the control that opened it
+    /// (rule 1 of the Craft accessibility standard, T407): the Activity, Saved or Files pane, else the search results,
+    /// else a message's Delete confirmation, else the thread pane. The Calendar and the attach path entry handle their
+    /// own Esc, and an open drop-down list takes its own.
+    fn chat_escape(&mut self, ui: &Ui) {
+        if self.calendar.open || (self.attach_path.is_some() && self.attach_focused) {
+            return;
+        }
+        if !ui.input(|input| input.key_pressed(Key::Escape)) || egui::Popup::is_any_open(ui.ctx()) {
+            return;
+        }
+        let selected = self.rooms.selected().map(str::to_owned);
+        if self.activity_filter.is_some() {
+            self.close_activity();
+            self.focus_to = Some(Return::Activity);
+        } else if self.saved_view {
+            self.saved_view = false;
+            self.focus_to = Some(Return::Saved);
+        } else if self.files_view.is_some() {
+            self.files_view = None;
+            self.focus_to = Some(Return::Files);
+        } else if self.results.is_some() && selected.is_some() {
+            self.close_results();
+        } else if let Some(cursor) = self.selected_message.filter(|_| self.confirm_delete) {
+            self.confirm_delete = false;
+            self.focus_to = Some(Return::Delete(cursor));
+        } else if self.open_thread.as_ref().is_some_and(|(room, _)| Some(room) == selected.as_ref()) {
+            self.close_thread();
+        }
+    }
+
     fn open_message(&mut self, room: &str, cursor: u64) {
         self.close_activity();
         self.results = None;
@@ -1531,6 +1662,7 @@ impl Window {
         self.open_room(room, true);
         let parent = self.threads.get(room).and_then(|threads| threads.get(&cursor)).copied();
         self.open_thread = parent.map(|parent| (room.to_owned(), parent));
+        self.thread_opener = None;
         self.focus = Some((room.to_owned(), parent.unwrap_or(cursor)));
         self.focus_scrolled = false;
         self.phone_pane = PhonePane::Conversation;
@@ -1710,6 +1842,7 @@ impl Window {
         self.results = None;
         self.open_room(&item.room, true);
         self.open_thread = if thread { item.parent.map(|parent| (item.room.clone(), parent)) } else { None };
+        self.thread_opener = None;
         self.focus = None;
         self.phone_pane = PhonePane::Conversation;
     }
@@ -1783,6 +1916,7 @@ impl Window {
                 }
                 if ui.button("Close saved messages").clicked() {
                     self.saved_view = false;
+                    self.focus_to = Some(Return::Saved);
                 }
             });
         });
@@ -1994,7 +2128,7 @@ impl Window {
         ui.horizontal(|ui| {
             ui.strong("Thread");
             if ui.button("Close thread").clicked() {
-                self.open_thread = None;
+                self.close_thread();
             }
         });
         if !rows.iter().any(|row| matches!(row, FeedRow::Message { cursor, .. } if *cursor == parent)) {
@@ -2027,8 +2161,9 @@ impl Window {
         };
         let mut action = None;
         ScrollArea::vertical().max_height(ui.available_height() - 90.0).auto_shrink(false).show(ui, |ui| {
+            // The thread's copies of its messages take no returning focus: that goes to the conversation.
             for row in &rows {
-                action = bubble_ui(ui, row, &look).or(action.take());
+                action = bubble_ui(ui, row, &look, &mut None).or(action.take());
             }
         });
         self.message_action(room, action);
@@ -2072,13 +2207,20 @@ impl Window {
                 self.draft = text;
                 self.selected_message = None;
             }
-            Some(MessageAction::AskDelete) => self.confirm_delete = true,
+            // The confirmation opens with focus on its safe answer, Keep; Keep (or Esc) puts focus back on Delete (T407).
+            Some(MessageAction::AskDelete) => {
+                self.confirm_delete = true;
+                self.focus_to = self.selected_message.map(Return::KeepMessage);
+            }
             Some(MessageAction::Delete(cursor)) => {
                 self.actions.push(Action::Room(Command::Delete { room: room.to_owned(), target: cursor }));
                 self.selected_message = None;
                 self.confirm_delete = false;
             }
-            Some(MessageAction::Keep) => self.confirm_delete = false,
+            Some(MessageAction::Keep) => {
+                self.confirm_delete = false;
+                self.focus_to = self.selected_message.map(Return::Delete);
+            }
             Some(MessageAction::React(target, reaction, on)) => {
                 self.selected_message = None;
                 self.actions.push(Action::Room(Command::React { room: room.to_owned(), target, reaction, on }));
@@ -2094,8 +2236,9 @@ impl Window {
             Some(MessageAction::MarkUnread(target)) => {
                 self.actions.push(Action::Room(Command::MarkUnread { room: room.to_owned(), target }));
             }
-            Some(MessageAction::OpenThread(parent)) => {
+            Some(MessageAction::OpenThread(parent, opener)) => {
                 self.open_thread = Some((room.to_owned(), parent));
+                self.thread_opener = Some(opener);
                 self.selected_message = None;
             }
             Some(MessageAction::Save(chip)) => {
@@ -2245,6 +2388,7 @@ impl Window {
             let label = ui.label("Path of the file to attach");
             let id = ui.make_persistent_id("crewcraft-attach-path");
             let entry = ui.add(TextEdit::singleline(&mut typed).id(id).desired_width(320.0)).labelled_by(label.id);
+            self.attach_focused = entry.has_focus();
             if self.attach_focus == Some(true) {
                 entry.request_focus();
                 self.attach_focus = None;
@@ -2282,6 +2426,9 @@ impl Window {
             self.close_calendar();
         }
         if let Some(command) = self.rooms.select(room) {
+            // Controls waiting for focus belong to the room that was open.
+            self.focus_to = None;
+            self.thread_opener = None;
             self.focus = None;
             self.selected_message = None;
             self.confirm_delete = false;
@@ -2361,21 +2508,24 @@ fn message_text(html: &str) -> String {
 }
 
 /// Keep orphaned replies visible with their true parent and an ordinary accessible thread action (T345).
-fn orphan_thread_ui(ui: &mut Ui, parent: Option<u64>, previous: &mut Option<u64>) -> Option<MessageAction> {
+fn orphan_thread_ui(ui: &mut Ui, parent: Option<u64>, previous: &mut Option<u64>, focus_to: &mut Option<Return>) -> Option<MessageAction> {
     let show = parent.is_some() && parent != *previous;
     *previous = parent;
-    if show {
+    if let Some(parent) = parent.filter(|_| show) {
         ui.label("Replies to an unavailable message");
-        if ui.add(egui::Button::new("View thread").min_size(egui::vec2(0.0, TOUCH_TARGET))).clicked() {
-            return parent.map(MessageAction::OpenThread);
+        let view = ui.add(egui::Button::new("View thread").min_size(egui::vec2(0.0, TOUCH_TARGET)));
+        focus_if(focus_to, Return::Orphan(parent), &view);
+        if view.clicked() {
+            return Some(MessageAction::OpenThread(parent, Return::Orphan(parent)));
         }
     }
     None
 }
 
 /// One feed row as a bubble (T315): the person's own on the right, everyone else's on the left. Selected messages
-/// offer personal bookmarks, room pins and the message's allowed editing/reply actions.
-fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAction> {
+/// offer personal bookmarks, room pins and the message's allowed editing/reply actions. Where actions are offered (the
+/// conversation, not the thread pane), the control `focus_to` names takes keyboard focus when it is drawn (T407).
+fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>, focus_to: &mut Option<Return>) -> Option<MessageAction> {
     let (me, colors, selected, confirming, files) = (look.me, look.colors, look.selected, look.confirming, look.files);
     let mine = side(row, me) == Side::Mine;
     // Any message can be selected to reply to it; one's own also to edit or delete it (T340b).
@@ -2433,7 +2583,11 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
             };
             let label = egui::Label::new(rich).wrap();
             let label = if selectable.is_some() { label.sense(egui::Sense::click()) } else { label };
-            if ui.add(label).clicked()
+            let response = ui.add(label);
+            if let Some(cursor) = selectable.filter(|_| look.actions) {
+                focus_if(focus_to, Return::Message(cursor), &response);
+            }
+            if response.clicked()
                 && let Some(cursor) = selectable
             {
                 action = Some(MessageAction::Select(cursor));
@@ -2534,8 +2688,12 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
         let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
         ui.with_layout(layout, |ui| {
             let text = if count == 1 { "1 reply".to_owned() } else { format!("{count} replies") };
-            if ui.small_button(text).clicked() {
-                action = Some(MessageAction::OpenThread(cursor));
+            let replies = ui.small_button(text);
+            if look.actions {
+                focus_if(focus_to, Return::Replies(cursor), &replies);
+            }
+            if replies.clicked() {
+                action = Some(MessageAction::OpenThread(cursor, Return::Replies(cursor)));
             }
         });
     }
@@ -2545,16 +2703,19 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
         && look.actions
         && !look.read_only
     {
+        // Reply goes away with the selection, so focus comes back to the message itself when the thread closes.
         ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
             if ui.button("Reply").clicked() {
-                action = Some(MessageAction::OpenThread(cursor));
+                action = Some(MessageAction::OpenThread(cursor, Return::Message(cursor)));
             }
         });
     }
     if let Some((cursor, text)) = own_message.filter(|(cursor, _)| Some(*cursor) == selected && look.actions && !look.read_only) {
         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
             if confirming {
-                if ui.button("Keep").clicked() {
+                let keep = ui.button("Keep");
+                focus_if(focus_to, Return::KeepMessage(cursor), &keep);
+                if keep.clicked() {
                     action = Some(MessageAction::Keep);
                 }
                 if ui.button("Delete").clicked() {
@@ -2562,14 +2723,16 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
                 }
                 ui.label("Delete this message?");
             } else {
-                if ui.button("Delete").clicked() {
+                let delete = ui.button("Delete");
+                focus_if(focus_to, Return::Delete(cursor), &delete);
+                if delete.clicked() {
                     action = Some(MessageAction::AskDelete);
                 }
                 if ui.button("Edit").clicked() {
                     action = Some(MessageAction::Edit(cursor, text));
                 }
                 if ui.button("Reply").clicked() {
-                    action = Some(MessageAction::OpenThread(cursor));
+                    action = Some(MessageAction::OpenThread(cursor, Return::Message(cursor)));
                 }
             }
         });
@@ -2643,6 +2806,13 @@ fn live_label(ui: &mut Ui, id: &str, text: RichText) {
         let response = ui.label(text);
         ui.ctx().accesskit_node_builder(response.id, |node| node.set_live(egui::accesskit::Live::Polite));
     });
+}
+
+/// The heading of the joining, authenticator and sign-in screens: one polite live region they share, so moving to the
+/// next screen changes its text and a screen reader says the new screen. Focus is not moved into a field to say it: on
+/// a phone that would raise the on-screen keyboard unasked (T407).
+fn screen_heading(ui: &mut Ui, text: &str) {
+    live_label(ui, "crewcraft-screen-heading", RichText::new(text).heading());
 }
 
 /// A labelled one-line field whose text is zeroed when dropped. `hidden` draws it as a password field.

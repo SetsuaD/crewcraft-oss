@@ -30,14 +30,14 @@ standard egui widgets that should work this way, with no test that proves it. "N
 
 | Core task | Screen reader | Keyboard only | 200% text | High contrast |
 |---|---|---|---|---|
-| Join from an invitation link, set up the authenticator | Fields are named from their labels (tested for the invitation link field: `t611k_enroll_way`); the read-only authenticator entry is named "Authenticator entry" and its value is the entry (tested: `t406_keyboard_route`) | Tab goes invitation link, new password, Enroll this device, and Shift+Tab goes back; Enter on the focused button enrolls, and so does Enter in the password field. On the authenticator screen Tab goes entry, Copy entry, code; Enter in the code field confirms once it is a code, and until then focus stays in the field (tested by keyboard: `t406_keyboard_route`). The way in through the organization's page is reachable by Tab but not tested by keyboard | Not verified | Built-in high-contrast theme; the system setting is not followed |
-| Sign in | Named (tested: `t305_desktop_window`, `t611h_signin_button`) | Tab goes email, password, code, Sign in; Enter on Sign in signs in, and so does Enter in any of the three fields once all are filled (tested by keyboard: `t406_keyboard_route`). Sign in with your organization is not tested by keyboard | Not verified | As above |
+| Join from an invitation link, set up the authenticator | Fields are named from their labels (tested for the invitation link field: `t611k_enroll_way`); the read-only authenticator entry is named "Authenticator entry" and its value is the entry (tested: `t406_keyboard_route`). Each screen's heading is a polite live region, so moving on to the authenticator screen is said while focus stays on nothing (tested: `t407_keyboard_panels`) | Tab goes invitation link, new password, Enroll this device, and Shift+Tab goes back; Enter on the focused button enrolls, and so does Enter in the password field. On the authenticator screen Tab goes entry, Copy entry, code; Enter in the code field confirms once it is a code, and until then focus stays in the field (tested by keyboard: `t406_keyboard_route`). The way in through the organization's page is reachable by Tab but not tested by keyboard | Not verified | Built-in high-contrast theme; the system setting is not followed |
+| Sign in | Named (tested: `t305_desktop_window`, `t611h_signin_button`). The sign-in screen's heading is said when the authenticator is set up, and after signing in the status line says "Signed in to" and the organization's name, both as polite live regions while focus stays on nothing; that line goes once focus lands on a control (tested: `t407_keyboard_panels`) | Tab goes email, password, code, Sign in; Enter on Sign in signs in, and so does Enter in any of the three fields once all are filled (tested by keyboard: `t406_keyboard_route`). Sign in with your organization is not tested by keyboard | Not verified | As above |
 | Choose a room, read messages | Room buttons are named (tested); messages are text rows; image previews are images named by their file name (tested: `a11y_image_names`); a new message in another room is announced through a live region (tested: `a11y_announcements`); a new message in the open room is not announced yet | Tab reaches every room button and Enter opens the room (tested by keyboard: `t406_keyboard_route`); after an unread action is confirmed, focus returns to the room button (tested: `t344_mark_unread_window`). Messages themselves are not tested by Tab | Not verified | As above |
 | Send a message | The message box is named "Message" (tested) | Tab reaches the message box from the room list; Enter sends and focus stays in the box (tested by keyboard: `t406_keyboard_route`); Shift+Enter adds a line (tested: `t305_desktop_window`) | Not verified | As above |
-| Search, open a result | The search box is named (tested) | Enter searches; opening a result moves the window's focus to the message (tested: `t321_search_focus_window`). Whether that also moves egui's keyboard focus there is not verified | Not verified | As above |
-| Threads, reactions, edit and delete, pins | Controls are named (tested in their window tests) | Expected; not tested | Not verified | As above |
+| Search, open a result | The search box is named (tested) | Enter searches; opening a result moves the window's focus to the message (tested: `t321_search_focus_window`). Whether that also moves egui's keyboard focus there is not verified. Esc or Close search closes the results, and focus goes back to the search box or the Search button, whichever sent the search (tested by keyboard: `t407_keyboard_panels`) | Not verified | As above |
+| Threads, reactions, edit and delete, pins | Controls are named (tested in their window tests) | A message takes focus by Tab, and Enter selects it. Its Delete confirmation opens with focus on Keep; Esc or Keep closes it and focus goes back to Delete. The thread pane closes on Esc or Close thread, and focus goes back to the reply count that opened it, or to the message when its Reply opened it (Reply goes away with the selection) (tested by keyboard: `t407_keyboard_panels`). Reactions, edit, pins and writing a reply are not tested by keyboard | Not verified | As above |
 | Calendar: schedule, edit, cancel, join a meeting | Buttons are named with the meeting's title ("Join Weekly review"); the form's fields are named from their labels; a cancelled meeting says "(cancelled)" in its title, not by colour (tested: `t370b_calendar_window`); a refused save is also announced through the status line | The form opens with focus in its title; Tab goes title, start, length, agenda, Save, Discard changes, and Enter in a one-line field saves (tested by keyboard: `t370b2_calendar_keyboard`). Esc closes the form unsaved; the Cancel confirmation opens with focus on Keep the meeting, and Esc keeps the meeting. When the form or the confirmation closes, by Esc or its own button, focus goes back to the Edit, Schedule a meeting or Cancel button that opened it. Esc with nothing open inside the Calendar, or Close calendar, closes it and focus goes back to the Calendar button (tested by keyboard: `t406_keyboard_route`) | Not verified | As above |
-| Calendar guest lobby | Guest controls name their actions and relevant visitor or meeting. A waiting-count increase is announced through the polite status region (tested by `t370d_guest_lobby_window`). | Native controls take keyboard focus. Waiting notices leave focus where it is. The lobby opens with focus on Back to calendar; Esc leaves it and focus goes back to its Lobby button. Its confirmations (direct entry, closing the link, removing a guest) open with focus on the answer that changes nothing; Esc or that answer dismisses them and focus goes back to the control that asked (tested by keyboard: `t406_keyboard_route`). After a confirmed change, focus is not placed anywhere | Not verified | As above |
+| Calendar guest lobby | Guest controls name their actions and relevant visitor or meeting. A waiting-count increase is announced through the polite status region (tested by `t370d_guest_lobby_window`). | Native controls take keyboard focus. Waiting notices leave focus where it is. The lobby opens with focus on Back to calendar; Esc leaves it and focus goes back to its Lobby button. Its confirmations (direct entry, closing the link, removing a guest) open with focus on the answer that changes nothing; Esc or that answer dismisses them and focus goes back to the control that asked (tested by keyboard: `t406_keyboard_route`). After a confirmed removal or closing of the link, focus goes to Back to calendar, the lobby's first control, and stays there when the lobby reports the change (tested by keyboard: `t407_keyboard_panels`) | Not verified | As above |
 | Attach a file | The Attach file button and the path entry are named from their labels (tested) | Attach file opens a path entry that takes focus; Enter attaches, Esc closes, and focus returns to the button (tested by keyboard: `a11y_attach_keyboard`). There is no file browser: the full path is typed or pasted | Not verified | As above |
 
 ## What the apps do today
@@ -47,18 +47,23 @@ standard egui widgets that should work this way, with no test that proves it. "N
   names through the AccessKit tree: `get_by_label` and `query_by_label`, about 280 uses across `crates/desktop-ui/tests`
   and `apps/crewcraft/tests`.
 - **Real focus.** Where the window moves focus on purpose, it uses egui's `request_focus`, not only a highlight.
-  Examples: returning to the room button after a confirmed unread action (T344), and returning to the control that
-  opened the Calendar's form, a confirmation, the guest lobby or the attach path entry when it closes (T406).
-- **A new screen starts with nothing focused.** Going from joining to the authenticator, to sign-in and to the chat
-  clears focus, so the first Tab reaches the new screen's first control rather than whatever shares an old control's
-  id. Focus is not put into a text field on its own: on a phone that would raise the on-screen keyboard unasked.
+  Examples: returning to the room button after a confirmed unread action (T344), returning to the control that
+  opened the Calendar's form, a confirmation, the guest lobby or the attach path entry when it closes (T406), and
+  returning to the control that opened a message's Delete confirmation, the thread pane, Files, Saved, Activity or the
+  search results when it closes (T407).
+- **A new screen starts with nothing focused, and is said.** Going from joining to the authenticator, to sign-in and to
+  the chat clears focus, so the first Tab reaches the new screen's first control rather than whatever shares an old
+  control's id. Focus is not put into a text field on its own: on a phone that would raise the on-screen keyboard
+  unasked. Instead the joining, authenticator and sign-in screens share one heading that is a polite live region, so
+  its text changes with the screen, and the chat's status line says "Signed in to" and the organization's name (T407).
 - **Contrast.** Every theme, built-in or an installed addon, must pass WCAG 2.2 AA contrast before it is used: 4.5:1
   for text and 3:1 for controls and the focus ring, on each background it is drawn on (`crates/theme/src/lib.rs`, the
   contrast rule table; REQUIREMENTS 2.19). A theme that fails is refused and the default applies (`t314_themes`).
 - **Themes.** Light, dark, follow the system's light or dark choice, and a built-in high-contrast theme
   (`crewcraft-high-contrast`).
 - **Announcements.** Changes away from focus go to the status line, a polite AccessKit live region: new messages in
-  another room, a call someone starts, the connection lost and back, and errors and hints.
+  another room, a call someone starts, the connection lost and back, errors and hints, and arriving in the chat after
+  signing in. That last line goes once focus lands on a control.
 - **Colour is not the only signal for presence.** The contrast rules exempt presence colours because presence is also
   shown by the icon's shape (`crates/theme/src/lib.rs`).
 
@@ -83,17 +88,21 @@ Each gap names the standard's rule it falls under. The "Known failures" items of
    from the theme, and the app sets no zoom.
 5. **No keyboard shortcuts or shortcuts dialog** (rule 1; REQUIREMENTS 2.20 asks for both). There is also no F6 movement
    between the room list, the conversation and the side pane.
-6. **Partly closed: Esc** (rule 1). Esc closes the attach path entry (`a11y_attach_keyboard`) and, in the Calendar,
+6. **Mostly closed: Esc** (rule 1). Esc closes the attach path entry (`a11y_attach_keyboard`) and, in the Calendar,
    the guest lobby's confirmations, the lobby, the meeting form, the Cancel confirmation and the area itself, innermost
-   first, with focus back on the control that opened what closed (`t406_keyboard_route`). Still not handled: the
-   message's Delete confirmation, the thread pane, Files, Saved, Activity and search results do not close on Esc, and
-   where focus goes when they close is not checked.
+   first, with focus back on the control that opened what closed (`t406_keyboard_route`). In the wide chat window it
+   closes the Activity, Saved or Files pane, else the search results, else a message's Delete confirmation, else the
+   thread pane, with focus back on the app-bar button, the search box or Search button, Delete, or the reply count or
+   message that opened the thread (`t407_keyboard_panels`). Still not handled: Esc in the phone layout outside the
+   Calendar; opening Files, Saved or Activity leaves focus on its app-bar button rather than moving into the pane; and
+   after a confirmed Delete, focus is not placed anywhere.
 7. **Partly closed: keyboard paths in tests** (Checks). Driven by keyboard only in tests: joining, the authenticator,
    sign-in, opening a room and sending (`t406_keyboard_route`), the calendar form (`t370b2_calendar_keyboard`) and its
-   panels and the guest lobby (`t406_keyboard_route`), attaching a file (`a11y_attach_keyboard`), focus after an
-   unread action and the search focus. Still untested: threads, reactions, edit and delete, pins, Files, Saved,
-   Activity and search results by Tab; the organization sign-in buttons; the phone layout; and focus visibility in
-   both themes.
+   panels and the guest lobby (`t406_keyboard_route`, `t407_keyboard_panels`), attaching a file
+   (`a11y_attach_keyboard`), focus after an unread action and the search focus, and opening and closing a message's
+   Delete confirmation, the thread pane, Files, Saved, Activity and the search results (`t407_keyboard_panels`). Still
+   untested: reactions, editing, pins and writing a reply by Tab; what is inside Files, Saved and Activity; the
+   organization sign-in buttons; the phone layout; and focus visibility in both themes.
 8. **The keyboard focus indicator is not checked as such** (rule 2). The theme's `focus-ring` colour passes 3:1, but it
    is drawn as the pressed-state outline. Whether egui's keyboard focus outline uses a checked colour in every theme
    has not been verified.
@@ -101,10 +110,12 @@ Each gap names the standard's rule it falls under. The "Known failures" items of
    NSAccessibility. The Craft suite runs such checks in its hosted CI, which CrewCraft does not use.
 10. **Not checked on phones or with real assistive technology.** No TalkBack, VoiceOver, NVDA, Narrator or Orca run
     has been recorded: what a native screen reader says is not yet observed on a real desktop.
-11. **A new screen is not announced** (rule 4). After joining, signing in or signing out, focus is on nothing until the
-    person presses Tab, so a screen reader is not told the screen changed. Moving focus into the first field would
-    say it, but on a phone it would also raise the on-screen keyboard unasked (`t421_ios_window` keeps that off), so
-    an announcement through the live region is the likely fix.
+11. **Partly closed: a new screen is announced** (rule 4). Focus still stays on nothing after a screen changes, so no
+    field raises a phone's keyboard unasked (`t421_ios_window` keeps that off). The joining, authenticator and sign-in
+    screens share one heading that is a polite live region, so moving from one to the next changes its text; after
+    signing in, the chat's status line says so as a live region (`t407_keyboard_panels` reads both from the tree).
+    Not checked: whether a screen reader speaks a live region that appears with a new screen rather than changing in
+    place (the chat's line after signing in, the sign-in heading after signing out), which waits on gap 10.
 
 ## Next steps, in order
 
@@ -112,7 +123,9 @@ Each gap names the standard's rule it falls under. The "Known failures" items of
 2. Done: names for image previews, from the file name (gap 3).
 3. Announce new messages in the open room, sent messages, upload results and search result counts through the
    status line's live region (the rest of gap 1).
-4. Partly done: keyboard tests for join, sign-in, send and the Calendar's panels, with Esc there (T406). Still to do:
-   F6, Esc with focus return for the other panes (gaps 5 to 7), and announcing a new screen (gap 11).
+4. Partly done: keyboard tests for join, sign-in, send and the Calendar's panels, with Esc there (T406), and Esc with
+   focus return for the chat's panes and confirmations, and announcing a new screen (T407). Still to do: F6 (gap 5),
+   Esc in the phone layout and the rest of gaps 6 and 7, and checking the screen announcements with a real screen
+   reader (gaps 10 and 11).
 5. Follow the system's high contrast and text size settings (gap 4).
 6. A first manual pass with NVDA on Windows and Orca on Linux over the core tasks, recorded in this file (gap 10).
