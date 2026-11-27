@@ -114,7 +114,9 @@ impl Calls {
         self.open.get(room).filter(|id| **id == call).and_then(|id| self.calls.get(id))
     }
 
-    pub(crate) fn has_open(&self, room: &str) -> bool { self.open.contains_key(room) }
+    pub(crate) fn has_open(&self, room: &str) -> bool {
+        self.open.contains_key(room)
+    }
 
     fn open_in_mut(&mut self, room: &str, call: u64) -> Option<&mut Call> {
         let id = *self.open.get(room).filter(|id| **id == call)?;
@@ -202,7 +204,9 @@ impl DurableServer {
             return Err(CallError::NotMember);
         }
         if let Some(&open) = self.calls.open.get(slug) {
-            if self.is_guest_call(open) { return Err(CallError::NotAllowed); }
+            if self.is_guest_call(open) {
+                return Err(CallError::NotAllowed);
+            }
             return self.call_join(slug, actor, open, now_ms).map(|()| open);
         }
         if room.is_read_only() || room.role(actor) == Some(crate::room::Role::Guest) {
@@ -220,7 +224,9 @@ impl DurableServer {
         self.check_alive().map_err(CallError::Durable)?;
         self.member(slug, actor)?;
         let record = self.calls.open_in(slug, call).ok_or(CallError::NoSuchCall)?;
-        if self.is_guest_call(call) && !record.present.contains_key(actor) { return Err(CallError::NotAllowed); }
+        if self.is_guest_call(call) && !record.present.contains_key(actor) {
+            return Err(CallError::NotAllowed);
+        }
         self.call_join_for_meeting(slug, actor, call, now_ms)
     }
 

@@ -75,7 +75,15 @@ impl DurableServer {
         self.reconcile_guest_drops();
     }
 
-    pub(crate) fn guest_media_credential(&self, call: u64, room: &str, person: &str, device: u64, now_ms: u64, expires_ms: u64) -> Result<Vec<u8>, GuestError> {
+    pub(crate) fn guest_media_credential(
+        &self,
+        call: u64,
+        room: &str,
+        person: &str,
+        device: u64,
+        now_ms: u64,
+        expires_ms: u64,
+    ) -> Result<Vec<u8>, GuestError> {
         let media = self.media.issuer.as_ref().ok_or(GuestError::MediaUnavailable)?;
         let deadline = expires_ms.checked_sub(1).filter(|deadline| *deadline >= now_ms).ok_or(GuestError::LinkClosed)?;
         media.issuer.issue_until(call, room, person, device, &media.server_name, (now_ms, deadline)).map_err(|_| GuestError::MediaUnavailable)

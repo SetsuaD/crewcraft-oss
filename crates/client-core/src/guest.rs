@@ -18,7 +18,10 @@ pub enum GuestRequestError {
     /// Both the meetings and guest-meetings features must have been negotiated.
     Unsupported,
     Codec(CodecError),
-    Refused { code: u16, detail: String },
+    Refused {
+        code: u16,
+        detail: String,
+    },
     /// A result's id, kind, meeting or revision does not match the acknowledged request.
     Malformed,
 }
@@ -156,7 +159,10 @@ mod tests {
         let (mut first, _) = GuestRequest::list(&mut session, 7, 0).map_err(error)?;
         let (mut second, _) = GuestRequest::list(&mut session, 8, 0).map_err(error)?;
         let mut bytes = answer(second.id(), 5, &lobby(8, 5))?;
-        bytes.extend(frame(&encode_push(&Push::GuestLobbyState { room: "room".into(), cursor: 40, revision: 6, waiting: 2 }).map_err(error)?).map_err(error)?);
+        bytes.extend(
+            frame(&encode_push(&Push::GuestLobbyState { room: "room".into(), cursor: 40, revision: 6, waiting: 2 }).map_err(error)?)
+                .map_err(error)?,
+        );
         bytes.extend(answer(first.id(), 4, &lobby(7, 4))?);
         let mut first_result = None;
         let mut second_result = None;

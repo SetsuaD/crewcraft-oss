@@ -134,7 +134,9 @@ impl Staff {
         let hello = Hello { min_version: 1, max_version: 1, features, client: "Fixture client".into() };
         stream.write_all(&encode(&handshake::encode_hello(&hello).unwrap()).unwrap()).unwrap();
         let reply = read_frame(&mut stream, 4096).unwrap().unwrap();
-        assert!(matches!(handshake::decode_reply(reply.as_bytes()).unwrap(), handshake::Reply::Welcome { features: negotiated, .. } if negotiated == features));
+        assert!(
+            matches!(handshake::decode_reply(reply.as_bytes()).unwrap(), handshake::Reply::Welcome { features: negotiated, .. } if negotiated == features)
+        );
         Self { stream, client: Client::new(person.email, Settings::default()), server: Some(server) }
     }
 
@@ -180,12 +182,7 @@ impl Staff {
     }
 
     fn decide(&mut self, snapshot: &GuestLobby, proof: &GuestProof, decision: GuestDecision) -> GuestLobby {
-        lobby(self.guest(Request::GuestLobbyDecide {
-            meeting: snapshot.meeting,
-            guest: proof.guest,
-            revision: snapshot.revision,
-            decision,
-        }))
+        lobby(self.guest(Request::GuestLobbyDecide { meeting: snapshot.meeting, guest: proof.guest, revision: snapshot.revision, decision }))
     }
 }
 
@@ -218,8 +215,7 @@ fn draft(room: &str) -> GuestMeetingDraft {
 }
 
 fn create(owner: &mut Staff, room: &str) -> (GuestLobby, GuestCode) {
-    let GuestReply::Created { lobby, code } = owner.guest(Request::GuestMeetingSave { change: GuestMeetingChange::Create(draft(room)) })
-    else {
+    let GuestReply::Created { lobby, code } = owner.guest(Request::GuestMeetingSave { change: GuestMeetingChange::Create(draft(room)) }) else {
         panic!("expected a newly created guest link");
     };
     (lobby, code)
@@ -269,15 +265,19 @@ fn enrolled_staff_manage_guests_media_and_a_durable_lobby() {
     owner.client.inbox_mut().follow(&room, false);
     old.client.inbox_mut().follow(&room, false);
 
-    let staff = cursor(owner.ask(Request::MeetingSave {
-        room: room.clone(),
-        meeting: 0,
-        version: 0,
-        start_ms: NOW,
-        duration: 30,
-        title: "Staff only".into(),
-        agenda: String::new(),
-    }).0);
+    let staff = cursor(
+        owner
+            .ask(Request::MeetingSave {
+                room: room.clone(),
+                meeting: 0,
+                version: 0,
+                start_ms: NOW,
+                duration: 30,
+                title: "Staff only".into(),
+                agenda: String::new(),
+            })
+            .0,
+    );
     refuse(owner.ask(Request::GuestLobbyList { meeting: staff }).0, E_NO_SUCH_GUEST);
     let (meeting, code) = create(&mut owner, &room);
     let id = meeting.meeting;
@@ -295,7 +295,9 @@ fn enrolled_staff_manage_guests_media_and_a_durable_lobby() {
     refuse(old.ask(Request::MeetingJoin { meeting: id }).0, E_NO_SUCH_MEETING);
     let (answer, events, _) = old.ask(Request::MeetingList { from_ms: NOW, to_ms: NOW + 3_600_000 });
     assert_eq!(answer, Response::Ok { cursor: 1 });
-    assert!(events.iter().any(|event| matches!(event, ClientEvent::Meetings { page, .. } if page.meetings.len() == 1 && page.meetings[0].id == staff)));
+    assert!(
+        events.iter().any(|event| matches!(event, ClientEvent::Meetings { page, .. } if page.meetings.len() == 1 && page.meetings[0].id == staff))
+    );
 
     let head = cursor(owner.ask(Request::Sync { room: room.clone(), cursor: 0 }).0);
     let (patient, refused) = {
@@ -338,7 +340,10 @@ fn enrolled_staff_manage_guests_media_and_a_durable_lobby() {
     let waiting = owner.lobby(id);
     let admitted = owner.decide(&waiting, &patient, GuestDecision::Admit);
     assert_eq!(state(&admitted, &patient), GuestState::Admitted);
-    refuse(owner.ask(Request::GuestLobbyDecide { meeting: id, guest: refused.guest, revision: waiting.revision, decision: GuestDecision::Decline }).0, E_CONFLICT);
+    refuse(
+        owner.ask(Request::GuestLobbyDecide { meeting: id, guest: refused.guest, revision: waiting.revision, decision: GuestDecision::Decline }).0,
+        E_CONFLICT,
+    );
     let declined = owner.decide(&admitted, &refused, GuestDecision::Decline);
     assert_eq!(state(&declined, &refused), GuestState::Declined);
 
@@ -398,9 +403,12 @@ fn enrolled_staff_manage_guests_media_and_a_durable_lobby() {
     assert!(matches!(&pushes[..], [Push::GuestLobbyState { waiting: 0, .. }]));
     assert_eq!(owner.client.inbox().view(&room).unwrap().guest_lobby_state().unwrap().waiting, 0);
     assert!(events.iter().any(|event| matches!(event, ClientEvent::MeetingLine { change: MeetingChange::Lobby, .. })));
-    assert!(!old.ask(Request::Sync { room: room.clone(), cursor: 0 }).1.iter().any(|event| {
-        matches!(event, ClientEvent::MeetingLine { change: MeetingChange::Lobby, .. })
-    }));
+    assert!(
+        !old.ask(Request::Sync { room: room.clone(), cursor: 0 })
+            .1
+            .iter()
+            .any(|event| { matches!(event, ClientEvent::MeetingLine { change: MeetingChange::Lobby, .. }) })
+    );
     cursor(owner.ask(Request::CallLeave { room: room.clone(), call }).0);
     assert_missed_calls(&rooms.lock().unwrap(), ordinary, call);
 

@@ -161,7 +161,9 @@ impl Issuer {
     /// Issue within an additional authority deadline, preserving the staff credential format and expiry semantics.
     pub fn issue_until(&self, call: u64, room: &str, person: &str, device: u64, media_server: &str, validity: (u64, u64)) -> Result<Vec<u8>, Error> {
         let (now_ms, deadline) = validity;
-        if deadline < now_ms { return Err(Error::Unusable); }
+        if deadline < now_ms {
+            return Err(Error::Unusable);
+        }
         let nonce = random::<16>()?;
         let grant = Grant {
             call,

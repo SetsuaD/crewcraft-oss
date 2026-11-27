@@ -244,7 +244,11 @@ impl DurableServer {
                 if *through > activity.position(user).0 {
                     return Err(DurableError::Corrupt { index });
                 }
-                activity.observe(&op, ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls, guests: &guests }, false);
+                activity.observe(
+                    &op,
+                    ActivityView { server: &server, messages: &previews, parents: &parents, calls: &calls, guests: &guests },
+                    false,
+                );
                 continue;
             }
             // An import record (task T350a) changes the import's own bookkeeping as well as a room.

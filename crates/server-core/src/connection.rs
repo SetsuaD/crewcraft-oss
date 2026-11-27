@@ -301,8 +301,7 @@ impl Connection {
                     }
                     // Nor to meetings, past their system lines (task T370a).
                     if let Push::MeetingLine { meeting, change, .. } = &push
-                        && (!meetings_on
-                            || (!guests_on && (*change == MeetingChange::Lobby || server.guest_meeting_for(&self.user, *meeting))))
+                        && (!meetings_on || (!guests_on && (*change == MeetingChange::Lobby || server.guest_meeting_for(&self.user, *meeting))))
                     {
                         push = Push::Other { room: room.clone(), cursor: ev_cursor };
                     }
@@ -641,10 +640,7 @@ fn guest_meetings_enabled(features: u32) -> bool {
 fn is_guest_meeting(request: &Request) -> bool {
     matches!(
         request,
-        Request::GuestMeetingSave { .. }
-            | Request::GuestLinkClose { .. }
-            | Request::GuestLobbyList { .. }
-            | Request::GuestLobbyDecide { .. }
+        Request::GuestMeetingSave { .. } | Request::GuestLinkClose { .. } | Request::GuestLobbyList { .. } | Request::GuestLobbyDecide { .. }
     )
 }
 
@@ -702,12 +698,7 @@ fn meetings(
     })
 }
 
-fn guest_meetings(
-    server: &mut DurableServer,
-    user: &str,
-    request: &Request,
-    now_ms: u64,
-) -> Option<Result<Answered, DurableConnError>> {
+fn guest_meetings(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64) -> Option<Result<Answered, DurableConnError>> {
     use crate::dispatch::{E_BAD_TEXT, E_CONFLICT, E_GUEST_LINK_CLOSED, E_NO_SUCH_GUEST, E_NOT_ALLOWED, E_RATE_LIMITED};
     let reply = match request {
         Request::GuestMeetingSave { change } => server.guest_meeting_save(user, change, now_ms),

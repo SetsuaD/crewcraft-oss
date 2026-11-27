@@ -45,10 +45,16 @@ pub enum GuestError {
 #[derive(Clone, PartialEq, Eq)]
 pub struct GuestBearer(pub [u8; 32]);
 
-impl Drop for GuestBearer { fn drop(&mut self) { self.0.zeroize(); } }
+impl Drop for GuestBearer {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 impl fmt::Debug for GuestBearer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("GuestBearer([redacted])") }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("GuestBearer([redacted])")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -59,10 +65,16 @@ pub struct GuestProof {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GuestPreview { pub title: String, pub host_name: String }
+pub struct GuestPreview {
+    pub title: String,
+    pub host_name: String,
+}
 
 #[derive(Debug, Clone)]
-pub struct GuestKnock { pub proof: GuestProof, pub state: GuestState }
+pub struct GuestKnock {
+    pub proof: GuestProof,
+    pub state: GuestState,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestStatus {
@@ -95,10 +107,18 @@ pub trait GuestEntrance {
     fn media(&mut self, peer: IpAddr, proof: &GuestProof) -> Result<GuestMedia, GuestError>;
 }
 
-pub struct GuestAccess<'a, C> { server: &'a mut DurableServer, clock: C }
+pub struct GuestAccess<'a, C> {
+    server: &'a mut DurableServer,
+    clock: C,
+}
 
 #[derive(Debug, Clone)]
-struct Visitor { name: String, digest: [u8; 32], state: GuestState, revision: u64 }
+struct Visitor {
+    name: String,
+    digest: [u8; 32],
+    state: GuestState,
+    revision: u64,
+}
 
 #[derive(Debug, Clone)]
 struct Link {
@@ -125,7 +145,17 @@ pub(crate) struct Guests {
 
 impl Default for Guests {
     fn default() -> Self {
-        Self { next: 0, links: BTreeMap::new(), codes: BTreeMap::new(), bound: BTreeMap::new(), rooms: BTreeMap::new(), waiting: BTreeMap::new(), deadlines: BTreeSet::new(), sources: Limiter::new(30, 2), global: TokenBucket::new(200, 20, 0) }
+        Self {
+            next: 0,
+            links: BTreeMap::new(),
+            codes: BTreeMap::new(),
+            bound: BTreeMap::new(),
+            rooms: BTreeMap::new(),
+            waiting: BTreeMap::new(),
+            deadlines: BTreeSet::new(),
+            sources: Limiter::new(30, 2),
+            global: TokenBucket::new(200, 20, 0),
+        }
     }
 }
 
@@ -148,10 +178,17 @@ fn digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
 }
 
 fn name(text: &str) -> Result<String, GuestError> {
-    if text.len() > 1024 { return Err(GuestError::BadText); }
-    let cleaned: String = text.chars().filter(|c| !c.is_control() && !matches!(*c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')).collect();
+    if text.len() > 1024 {
+        return Err(GuestError::BadText);
+    }
+    let cleaned: String = text
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(*c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        .collect();
     let normalized = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    if !(1..=60).contains(&normalized.chars().count()) { return Err(GuestError::BadText); }
+    if !(1..=60).contains(&normalized.chars().count()) {
+        return Err(GuestError::BadText);
+    }
     Ok(normalized)
 }
 
@@ -181,7 +218,9 @@ fn staff(server: &Server, meetings: &Meetings, user: &str, id: u64, manage: bool
     let meeting = meetings.meetings.get(&id).filter(|meeting| meeting.audience == Audience::Guests).ok_or(GuestError::NoSuchGuest)?;
     let room = server.room(&meeting.room).map_err(|_| GuestError::NoSuchGuest)?;
     let role = room.role(user).ok_or(GuestError::NoSuchGuest)?;
-    if room.is_read_only() || role == Role::Guest || (manage && user != meeting.owner && !matches!(role, Role::Admin | Role::Owner)) { return Err(GuestError::NotAllowed); }
+    if room.is_read_only() || role == Role::Guest || (manage && user != meeting.owner && !matches!(role, Role::Admin | Role::Owner)) {
+        return Err(GuestError::NotAllowed);
+    }
     Ok(())
 }
 
@@ -192,43 +231,99 @@ impl Guests {
 
     fn lobby(&self, id: u64) -> Result<GuestLobby, GuestError> {
         let link = self.links.get(&id).ok_or(GuestError::NoSuchGuest)?;
-        Ok(GuestLobby { meeting: id, revision: link.revision, expires_ms: link.expires_ms, lobby: link.lobby, closed: link.closed, entries: link.visitors.iter().map(|(&guest, visitor)| GuestEntry { guest, name: visitor.name.clone(), state: visitor.state, revision: visitor.revision }).collect() })
+        Ok(GuestLobby {
+            meeting: id,
+            revision: link.revision,
+            expires_ms: link.expires_ms,
+            lobby: link.lobby,
+            closed: link.closed,
+            entries: link
+                .visitors
+                .iter()
+                .map(|(&guest, visitor)| GuestEntry { guest, name: visitor.name.clone(), state: visitor.state, revision: visitor.revision })
+                .collect(),
+        })
     }
 
     fn limit(&mut self, peer: IpAddr, now_ms: u64) -> Result<(), GuestError> {
         self.sources.prune(now_ms);
-        if !self.global.try_take(now_ms) || self.sources.len() >= MAX_SOURCES || !self.sources.check(&peer, now_ms) { return Err(GuestError::RateLimited); }
+        if !self.global.try_take(now_ms) || self.sources.len() >= MAX_SOURCES || !self.sources.check(&peer, now_ms) {
+            return Err(GuestError::RateLimited);
+        }
         Ok(())
     }
 
     fn authenticate(&self, proof: &GuestProof) -> Result<&Visitor, GuestError> {
         let visitor = self.links.get(&proof.meeting).and_then(|link| link.visitors.get(&proof.guest)).ok_or(GuestError::NoSuchGuest)?;
-        if visitor.digest != digest(b"crewcraft.guest.bearer.v1\0", &proof.bearer.0) { return Err(GuestError::NoSuchGuest); }
+        if visitor.digest != digest(b"crewcraft.guest.bearer.v1\0", &proof.bearer.0) {
+            return Err(GuestError::NoSuchGuest);
+        }
         Ok(visitor)
     }
 
-    pub(crate) fn bound_to(&self, call: u64) -> Option<u64> { self.bound.get(&call).copied() }
+    pub(crate) fn bound_to(&self, call: u64) -> Option<u64> {
+        self.bound.get(&call).copied()
+    }
 }
 
 /// Apply exactly one journal transition. Called only after validation and durable append, or while replaying.
 pub(crate) fn apply(server: &mut Server, meetings: &mut Meetings, calls: &mut Calls, guests: &mut Guests, op: &GuestOp) -> Result<(), GuestError> {
-    let id = match op { GuestOp::Create { meeting, .. } | GuestOp::Lobby { meeting, .. } | GuestOp::Knock { meeting, .. } | GuestOp::Decide { meeting, .. } | GuestOp::Close { meeting, .. } | GuestOp::Bind { meeting, .. } => *meeting };
-    let before_waiting = guests.links.get(&id).map_or(0, |link| link.visitors.values().filter(|visitor| visitor.state == GuestState::Waiting).count() as u32);
+    let id = match op {
+        GuestOp::Create { meeting, .. }
+        | GuestOp::Lobby { meeting, .. }
+        | GuestOp::Knock { meeting, .. }
+        | GuestOp::Decide { meeting, .. }
+        | GuestOp::Close { meeting, .. }
+        | GuestOp::Bind { meeting, .. } => *meeting,
+    };
+    let before_waiting =
+        guests.links.get(&id).map_or(0, |link| link.visitors.values().filter(|visitor| visitor.state == GuestState::Waiting).count() as u32);
     let (id, actor, text) = match op {
         GuestOp::Create { meeting, owner, draft, code, now_ms } => {
             let room = server.room(&draft.room).map_err(|_| GuestError::NoSuchGuest)?;
             let role = room.role(owner).ok_or(GuestError::NoSuchGuest)?;
-            if room.is_read_only() || role == Role::Guest || meetings.next.checked_add(1) != Some(*meeting) || guests.codes.contains_key(code) { return Err(GuestError::NotAllowed); }
+            if room.is_read_only() || role == Role::Guest || meetings.next.checked_add(1) != Some(*meeting) || guests.codes.contains_key(code) {
+                return Err(GuestError::NotAllowed);
+            }
             let normalized_host = name(&draft.host_name)?;
-            let (title, agenda) = crate::meetings::checked(&Draft { title: &draft.title, start_ms: draft.start_ms, duration: draft.duration, agenda: &draft.agenda }).map_err(|_| GuestError::BadText)?;
+            let (title, agenda) =
+                crate::meetings::checked(&Draft { title: &draft.title, start_ms: draft.start_ms, duration: draft.duration, agenda: &draft.agenda })
+                    .map_err(|_| GuestError::BadText)?;
             let lifetime = draft.expires_ms.checked_sub(*now_ms).ok_or(GuestError::BadText)?;
-            if !(MIN_LINK_MS..=MAX_LINK_MS).contains(&lifetime) || (!draft.lobby && !draft.confirm_direct) { return Err(GuestError::BadText); }
-            let made = Meeting { id: *meeting, room: draft.room.clone(), owner: owner.clone(), audience: Audience::Guests, title, start_ms: draft.start_ms, duration: draft.duration, agenda, version: 1, cancelled: false, calls: BTreeSet::new() };
-            if made.end_ms() <= *now_ms { return Err(GuestError::BadText); }
+            if !(MIN_LINK_MS..=MAX_LINK_MS).contains(&lifetime) || (!draft.lobby && !draft.confirm_direct) {
+                return Err(GuestError::BadText);
+            }
+            let made = Meeting {
+                id: *meeting,
+                room: draft.room.clone(),
+                owner: owner.clone(),
+                audience: Audience::Guests,
+                title,
+                start_ms: draft.start_ms,
+                duration: draft.duration,
+                agenda,
+                version: 1,
+                cancelled: false,
+                calls: BTreeSet::new(),
+            };
+            if made.end_ms() <= *now_ms {
+                return Err(GuestError::BadText);
+            }
             let text = crate::meetings::line(&made, MeetingChange::Scheduled);
             meetings.next = *meeting;
             meetings.meetings.insert(*meeting, made);
-            guests.links.insert(*meeting, Link { code: *code, expires_ms: draft.expires_ms, lobby: draft.lobby, closed: false, revision: 1, host_name: normalized_host, visitors: BTreeMap::new() });
+            guests.links.insert(
+                *meeting,
+                Link {
+                    code: *code,
+                    expires_ms: draft.expires_ms,
+                    lobby: draft.lobby,
+                    closed: false,
+                    revision: 1,
+                    host_name: normalized_host,
+                    visitors: BTreeMap::new(),
+                },
+            );
             guests.codes.insert(*code, *meeting);
             guests.deadlines.insert((draft.expires_ms, *meeting));
             (*meeting, owner.as_str(), text)
@@ -236,7 +331,9 @@ pub(crate) fn apply(server: &mut Server, meetings: &mut Meetings, calls: &mut Ca
         GuestOp::Lobby { meeting, actor, revision, lobby, now_ms } => {
             staff(server, meetings, actor, *meeting, true)?;
             let link = guests.live(*meeting, *now_ms)?;
-            if link.revision != *revision || link.lobby == *lobby { return Err(GuestError::Conflict); }
+            if link.revision != *revision || link.lobby == *lobby {
+                return Err(GuestError::Conflict);
+            }
             let link = guests.links.get_mut(meeting).ok_or(GuestError::NoSuchGuest)?;
             link.lobby = *lobby;
             link.revision = link.revision.checked_add(1).ok_or(GuestError::NotAllowed)?;
@@ -244,21 +341,32 @@ pub(crate) fn apply(server: &mut Server, meetings: &mut Meetings, calls: &mut Ca
         }
         GuestOp::Knock { meeting, guest, name: display, digest, now_ms } => {
             let link = guests.live(*meeting, *now_ms)?;
-            if guests.next.checked_add(1) != Some(*guest) || link.visitors.len() >= MAX_GUESTS || (link.lobby && link.visitors.values().filter(|visitor| visitor.state == GuestState::Waiting).count() >= MAX_WAITING) { return Err(GuestError::Full); }
+            if guests.next.checked_add(1) != Some(*guest)
+                || link.visitors.len() >= MAX_GUESTS
+                || (link.lobby && link.visitors.values().filter(|visitor| visitor.state == GuestState::Waiting).count() >= MAX_WAITING)
+            {
+                return Err(GuestError::Full);
+            }
             let display = name(display)?;
             let link = guests.links.get_mut(meeting).ok_or(GuestError::NoSuchGuest)?;
             let state = if link.lobby { GuestState::Waiting } else { GuestState::Admitted };
             link.visitors.insert(*guest, Visitor { name: display.clone(), digest: *digest, state, revision: 1 });
             link.revision = link.revision.checked_add(1).ok_or(GuestError::NotAllowed)?;
             guests.next = *guest;
-            let text = if state == GuestState::Admitted { format!("admitted {display} (guest) automatically") } else { format!("{display} (guest) asked to join") };
+            let text = if state == GuestState::Admitted {
+                format!("admitted {display} (guest) automatically")
+            } else {
+                format!("{display} (guest) asked to join")
+            };
             (*meeting, "guest", text)
         }
         GuestOp::Decide { meeting, guest, actor, revision, decision, now_ms } => {
             staff(server, meetings, actor, *meeting, false)?;
             guests.live(*meeting, *now_ms)?;
             let link = guests.links.get_mut(meeting).ok_or(GuestError::NoSuchGuest)?;
-            if link.revision != *revision { return Err(GuestError::Conflict); }
+            if link.revision != *revision {
+                return Err(GuestError::Conflict);
+            }
             let visitor = link.visitors.get_mut(guest).ok_or(GuestError::NoSuchGuest)?;
             let (state, action) = match (visitor.state, decision) {
                 (GuestState::Waiting, GuestDecision::Admit) => (GuestState::Admitted, "admitted"),
@@ -274,12 +382,20 @@ pub(crate) fn apply(server: &mut Server, meetings: &mut Meetings, calls: &mut Ca
         GuestOp::Close { meeting, actor, revision, now_ms, cancel } => {
             let link = guests.links.get(meeting).ok_or(GuestError::NoSuchGuest)?;
             if actor.is_empty() {
-                if *now_ms < link.expires_ms || *cancel { return Err(GuestError::NotAllowed); }
-            } else { staff(server, meetings, actor, *meeting, true)?; }
-            if link.revision != *revision || (link.closed && !cancel) { return Err(GuestError::Conflict); }
+                if *now_ms < link.expires_ms || *cancel {
+                    return Err(GuestError::NotAllowed);
+                }
+            } else {
+                staff(server, meetings, actor, *meeting, true)?;
+            }
+            if link.revision != *revision || (link.closed && !cancel) {
+                return Err(GuestError::Conflict);
+            }
             let record = meetings.meetings.get_mut(meeting).ok_or(GuestError::NoSuchGuest)?;
             if *cancel {
-                if record.cancelled || !record.calls.is_empty() { return Err(GuestError::NotAllowed); }
+                if record.cancelled || !record.calls.is_empty() {
+                    return Err(GuestError::NotAllowed);
+                }
                 record.cancelled = true;
                 record.version = record.version.checked_add(1).ok_or(GuestError::NotAllowed)?;
             }
@@ -288,17 +404,38 @@ pub(crate) fn apply(server: &mut Server, meetings: &mut Meetings, calls: &mut Ca
             guests.deadlines.remove(&(link.expires_ms, *meeting));
             link.revision = link.revision.checked_add(1).ok_or(GuestError::NotAllowed)?;
             for visitor in link.visitors.values_mut() {
-                let state = match visitor.state { GuestState::Waiting => GuestState::Declined, GuestState::Admitted => GuestState::Removed, state => state };
-                if state != visitor.state { visitor.state = state; visitor.revision = visitor.revision.checked_add(1).ok_or(GuestError::NotAllowed)?; }
+                let state = match visitor.state {
+                    GuestState::Waiting => GuestState::Declined,
+                    GuestState::Admitted => GuestState::Removed,
+                    state => state,
+                };
+                if state != visitor.state {
+                    visitor.state = state;
+                    visitor.revision = visitor.revision.checked_add(1).ok_or(GuestError::NotAllowed)?;
+                }
             }
-            (*meeting, if actor.is_empty() { "system" } else { actor.as_str() }, if *cancel { "cancelled the guest meeting and closed its link" } else { "closed the meeting link" }.to_owned())
+            (
+                *meeting,
+                if actor.is_empty() { "system" } else { actor.as_str() },
+                if *cancel { "cancelled the guest meeting and closed its link" } else { "closed the meeting link" }.to_owned(),
+            )
         }
         GuestOp::Bind { meeting, call, actor, now_ms } => {
             staff(server, meetings, actor, *meeting, false)?;
-            if !guests.links.contains_key(meeting) { return Err(GuestError::NoSuchGuest); }
+            if !guests.links.contains_key(meeting) {
+                return Err(GuestError::NoSuchGuest);
+            }
             let record = meetings.meetings.get_mut(meeting).ok_or(GuestError::NoSuchGuest)?;
-            if record.cancelled || calls.open_in(&record.room, *call).is_some() || calls.next.checked_add(1) != Some(*call) || calls.has_open(&record.room) { return Err(GuestError::NotAllowed); }
-            let cursor = server.call_line(&record.room, actor, *call, false, "started a call").map_err(|error| GuestError::Durable(DurableError::Server(error)))?;
+            if record.cancelled
+                || calls.open_in(&record.room, *call).is_some()
+                || calls.next.checked_add(1) != Some(*call)
+                || calls.has_open(&record.room)
+            {
+                return Err(GuestError::NotAllowed);
+            }
+            let cursor = server
+                .call_line(&record.room, actor, *call, false, "started a call")
+                .map_err(|error| GuestError::Durable(DurableError::Server(error)))?;
             calls.start(&record.room, actor, true, *now_ms, cursor);
             record.calls.insert(*call);
             guests.bound.insert(*call, *meeting);
@@ -306,19 +443,30 @@ pub(crate) fn apply(server: &mut Server, meetings: &mut Meetings, calls: &mut Ca
         }
     };
     let record = meetings.meetings.get(&id).ok_or(GuestError::NoSuchGuest)?;
-    let after_waiting = guests.links.get(&id).map_or(0, |link| link.visitors.values().filter(|visitor| visitor.state == GuestState::Waiting).count() as u32);
+    let after_waiting =
+        guests.links.get(&id).map_or(0, |link| link.visitors.values().filter(|visitor| visitor.state == GuestState::Waiting).count() as u32);
     let waiting = guests.waiting.entry(record.room.clone()).or_default();
     *waiting = waiting.saturating_sub(before_waiting).saturating_add(after_waiting);
     let revision = guests.rooms.entry(record.room.clone()).or_default();
     *revision = revision.checked_add(1).ok_or(GuestError::NotAllowed)?;
-    if matches!(op, GuestOp::Knock { .. }) && guests.links.get(&id).is_some_and(|link| link.lobby) { return Ok(()); }
-    let change = if matches!(op, GuestOp::Create { .. }) { MeetingChange::Scheduled } else if matches!(op, GuestOp::Close { cancel: true, .. }) { MeetingChange::Cancelled } else { MeetingChange::Lobby };
+    if matches!(op, GuestOp::Knock { .. }) && guests.links.get(&id).is_some_and(|link| link.lobby) {
+        return Ok(());
+    }
+    let change = if matches!(op, GuestOp::Create { .. }) {
+        MeetingChange::Scheduled
+    } else if matches!(op, GuestOp::Close { cancel: true, .. }) {
+        MeetingChange::Cancelled
+    } else {
+        MeetingChange::Lobby
+    };
     server.meeting_line(&record.room, actor, id, change, record.version, &text).map_err(|error| GuestError::Durable(DurableError::Server(error)))?;
     Ok(())
 }
 
 impl DurableServer {
-    pub fn guest_entrance<C: Fn() -> u64>(&mut self, clock: C) -> GuestAccess<'_, C> { GuestAccess { server: self, clock } }
+    pub fn guest_entrance<C: Fn() -> u64>(&mut self, clock: C) -> GuestAccess<'_, C> {
+        GuestAccess { server: self, clock }
+    }
 
     pub fn guest_meeting_save(&mut self, user: &str, change: &GuestMeetingChange, now_ms: u64) -> Result<GuestReply, GuestError> {
         self.check_alive().map_err(GuestError::Durable)?;
@@ -327,26 +475,48 @@ impl DurableServer {
             GuestMeetingChange::Create(draft) => {
                 let room = self.server.room(&draft.room).map_err(|_| GuestError::NoSuchGuest)?;
                 let role = room.role(user).ok_or(GuestError::NoSuchGuest)?;
-                if role == Role::Guest || room.is_read_only() { return Err(GuestError::NotAllowed); }
-                let (title, agenda) = crate::meetings::checked(&Draft { title: &draft.title, start_ms: draft.start_ms, duration: draft.duration, agenda: &draft.agenda }).map_err(|_| GuestError::BadText)?;
+                if role == Role::Guest || room.is_read_only() {
+                    return Err(GuestError::NotAllowed);
+                }
+                let (title, agenda) = crate::meetings::checked(&Draft {
+                    title: &draft.title,
+                    start_ms: draft.start_ms,
+                    duration: draft.duration,
+                    agenda: &draft.agenda,
+                })
+                .map_err(|_| GuestError::BadText)?;
                 let host_name = name(&draft.host_name)?;
                 let duration = draft.expires_ms.checked_sub(now_ms).ok_or(GuestError::BadText)?;
-                if !draft.lobby && !draft.confirm_direct { return Err(GuestError::NotAllowed); }
-                if !(MIN_LINK_MS..=MAX_LINK_MS).contains(&duration) || draft.start_ms.saturating_add(u64::from(draft.duration) * 60_000) <= now_ms { return Err(GuestError::BadText); }
+                if !draft.lobby && !draft.confirm_direct {
+                    return Err(GuestError::NotAllowed);
+                }
+                if !(MIN_LINK_MS..=MAX_LINK_MS).contains(&duration) || draft.start_ms.saturating_add(u64::from(draft.duration) * 60_000) <= now_ms {
+                    return Err(GuestError::BadText);
+                }
                 let code = code()?;
                 let code_hash = digest(b"crewcraft.guest.link.v1\0", code.as_bytes());
-                if self.guests.codes.contains_key(&code_hash) { return Err(GuestError::MediaUnavailable); }
+                if self.guests.codes.contains_key(&code_hash) {
+                    return Err(GuestError::MediaUnavailable);
+                }
                 let id = self.meetings.next.checked_add(1).ok_or(GuestError::NotAllowed)?;
                 let draft = GuestMeetingDraft { title, agenda, host_name, ..draft.clone() };
-                self.record_guest(&GuestOp::Create { meeting: id, owner: user.to_owned(), draft, code: code_hash, now_ms }).map_err(GuestError::Durable)?;
+                self.record_guest(&GuestOp::Create { meeting: id, owner: user.to_owned(), draft, code: code_hash, now_ms })
+                    .map_err(GuestError::Durable)?;
                 Ok(GuestReply::Created { lobby: self.guests.lobby(id)?, code: GuestCode(code) })
             }
             GuestMeetingChange::SetLobby { meeting, revision, lobby, confirm_direct } => {
                 staff(&self.server, &self.meetings, user, *meeting, true)?;
                 let link = self.guests.live(*meeting, now_ms)?;
-                if link.revision != *revision { return Err(GuestError::Conflict); }
-                if !lobby && !confirm_direct { return Err(GuestError::NotAllowed); }
-                if link.lobby != *lobby { self.record_guest(&GuestOp::Lobby { meeting: *meeting, actor: user.to_owned(), revision: *revision, lobby: *lobby, now_ms }).map_err(GuestError::Durable)?; }
+                if link.revision != *revision {
+                    return Err(GuestError::Conflict);
+                }
+                if !lobby && !confirm_direct {
+                    return Err(GuestError::NotAllowed);
+                }
+                if link.lobby != *lobby {
+                    self.record_guest(&GuestOp::Lobby { meeting: *meeting, actor: user.to_owned(), revision: *revision, lobby: *lobby, now_ms })
+                        .map_err(GuestError::Durable)?;
+                }
                 Ok(GuestReply::Lobby(self.guests.lobby(*meeting)?))
             }
         }
@@ -357,7 +527,9 @@ impl DurableServer {
         self.sweep_guest_links(now_ms).map_err(GuestError::Durable)?;
         staff(&self.server, &self.meetings, user, meeting, true)?;
         let link = self.guests.links.get(&meeting).ok_or(GuestError::NoSuchGuest)?;
-        if revision != link.revision { return Err(GuestError::Conflict); }
+        if revision != link.revision {
+            return Err(GuestError::Conflict);
+        }
         if !link.closed {
             let dropping = self.admitted_guests(meeting);
             self.record_guest(&GuestOp::Close { meeting, actor: user.to_owned(), revision, now_ms, cancel: false }).map_err(GuestError::Durable)?;
@@ -373,22 +545,44 @@ impl DurableServer {
         self.guests.lobby(meeting)
     }
 
-    pub fn guest_lobby_decide(&mut self, user: &str, meeting: u64, guest: u64, revision: u64, decision: GuestDecision, now_ms: u64) -> Result<GuestLobby, GuestError> {
+    pub fn guest_lobby_decide(
+        &mut self,
+        user: &str,
+        meeting: u64,
+        guest: u64,
+        revision: u64,
+        decision: GuestDecision,
+        now_ms: u64,
+    ) -> Result<GuestLobby, GuestError> {
         self.check_alive().map_err(GuestError::Durable)?;
         self.sweep_guest_links(now_ms).map_err(GuestError::Durable)?;
         staff(&self.server, &self.meetings, user, meeting, false)?;
         let link = self.guests.live(meeting, now_ms)?;
-        if link.revision != revision { return Err(GuestError::Conflict); }
+        if link.revision != revision {
+            return Err(GuestError::Conflict);
+        }
         let visitor = link.visitors.get(&guest).ok_or(GuestError::NoSuchGuest)?;
-        if !matches!((visitor.state, decision), (GuestState::Waiting, GuestDecision::Admit | GuestDecision::Decline) | (GuestState::Admitted, GuestDecision::Remove)) { return Err(GuestError::NotAllowed); }
+        if !matches!(
+            (visitor.state, decision),
+            (GuestState::Waiting, GuestDecision::Admit | GuestDecision::Decline) | (GuestState::Admitted, GuestDecision::Remove)
+        ) {
+            return Err(GuestError::NotAllowed);
+        }
         self.record_guest(&GuestOp::Decide { meeting, guest, actor: user.to_owned(), revision, decision, now_ms }).map_err(GuestError::Durable)?;
-        if decision == GuestDecision::Remove { self.drop_guest_ids(meeting, &[guest]); }
+        if decision == GuestDecision::Remove {
+            self.drop_guest_ids(meeting, &[guest]);
+        }
         self.guests.lobby(meeting)
     }
 
     pub fn sweep_guest_links(&mut self, now_ms: u64) -> Result<(), DurableError> {
         self.check_alive()?;
-        let expired: Vec<_> = self.guests.deadlines.range(..=(now_ms, u64::MAX)).filter_map(|&(at, meeting)| self.guests.links.get(&meeting).map(|link| (meeting, link.revision, at))).collect();
+        let expired: Vec<_> = self
+            .guests
+            .deadlines
+            .range(..=(now_ms, u64::MAX))
+            .filter_map(|&(at, meeting)| self.guests.links.get(&meeting).map(|link| (meeting, link.revision, at)))
+            .collect();
         for (meeting, revision, at) in expired {
             let dropping = self.admitted_guests(meeting);
             self.record_guest(&GuestOp::Close { meeting, actor: String::new(), revision, now_ms: at, cancel: false })?;
@@ -399,13 +593,19 @@ impl DurableServer {
 
     pub fn guest_lobby_state(&self, room: &str, user: &str) -> Option<(u64, u32)> {
         let service = self.server.room(room).ok()?;
-        if service.role(user)? == Role::Guest || service.is_read_only() { return None; }
+        if service.role(user)? == Role::Guest || service.is_read_only() {
+            return None;
+        }
         let waiting = self.guests.waiting.get(room).copied().unwrap_or(0);
         Some((self.guests.rooms.get(room).copied().unwrap_or(0), waiting))
     }
 
-    pub fn guest_meeting_for(&self, user: &str, id: u64) -> bool { self.visible(user, id).is_some_and(|record| record.audience == Audience::Guests) }
-    pub fn is_guest_call(&self, call: u64) -> bool { self.guests.bound.contains_key(&call) }
+    pub fn guest_meeting_for(&self, user: &str, id: u64) -> bool {
+        self.visible(user, id).is_some_and(|record| record.audience == Audience::Guests)
+    }
+    pub fn is_guest_call(&self, call: u64) -> bool {
+        self.guests.bound.contains_key(&call)
+    }
 
     pub(crate) fn cancel_guest_schedule(&mut self, actor: &str, meeting: u64, now_ms: u64) -> Result<u64, GuestError> {
         let revision = self.guests.links.get(&meeting).ok_or(GuestError::NoSuchGuest)?.revision;
@@ -417,12 +617,21 @@ impl DurableServer {
 
     pub(crate) fn join_guest_meeting(&mut self, actor: &str, meeting: u64, now_ms: u64) -> Result<(String, u64), MeetingError> {
         self.sweep_calls(now_ms).map_err(MeetingError::Durable)?;
-        if !self.guests.links.contains_key(&meeting) { return Err(MeetingError::NoSuchMeeting); }
+        if !self.guests.links.contains_key(&meeting) {
+            return Err(MeetingError::NoSuchMeeting);
+        }
         let room = self.meeting(meeting).ok_or(MeetingError::NoSuchMeeting)?.room.clone();
-        if self.server.room(&room).is_ok_and(|room| room.is_read_only()) { return Err(MeetingError::NotAllowed); }
+        if self.server.room(&room).is_ok_and(|room| room.is_read_only()) {
+            return Err(MeetingError::NotAllowed);
+        }
         if let Some(call) = self.open_call(&room).map(|call| call.id) {
-            if self.guests.bound_to(call) != Some(meeting) { return Err(MeetingError::NotAllowed); }
-            self.call_join_for_meeting(&room, actor, call, now_ms).map_err(|error| match error { CallError::Durable(error) => MeetingError::Durable(error), _ => MeetingError::NotAllowed })?;
+            if self.guests.bound_to(call) != Some(meeting) {
+                return Err(MeetingError::NotAllowed);
+            }
+            self.call_join_for_meeting(&room, actor, call, now_ms).map_err(|error| match error {
+                CallError::Durable(error) => MeetingError::Durable(error),
+                _ => MeetingError::NotAllowed,
+            })?;
             return Ok((room, call));
         }
         let call = self.calls.next.checked_add(1).ok_or(MeetingError::NotAllowed)?;
@@ -432,18 +641,33 @@ impl DurableServer {
     }
 
     fn admitted_guests(&self, meeting: u64) -> Vec<u64> {
-        self.guests.links.get(&meeting).map(|link| link.visitors.iter().filter(|(_, visitor)| visitor.state == GuestState::Admitted).map(|(&id, _)| id).collect()).unwrap_or_default()
+        self.guests
+            .links
+            .get(&meeting)
+            .map(|link| link.visitors.iter().filter(|(_, visitor)| visitor.state == GuestState::Admitted).map(|(&id, _)| id).collect())
+            .unwrap_or_default()
     }
 
     fn drop_guest_ids(&mut self, meeting: u64, ids: &[u64]) {
         let Some(record) = self.meeting(meeting) else { return };
         let Some(call) = self.open_call(&record.room).filter(|call| record.calls.contains(&call.id)).map(|call| call.id) else { return };
-        for id in ids { self.media.push(MediaEvent::DropPerson { call, person: format!("guest:{id}") }); }
+        for id in ids {
+            self.media.push(MediaEvent::DropPerson { call, person: format!("guest:{id}") });
+        }
     }
 
     pub(crate) fn reconcile_guest_drops(&mut self) {
-        let ids: Vec<_> = self.guests.links.iter().map(|(&meeting, link)| (meeting, link.visitors.iter().filter(|(_, visitor)| visitor.state == GuestState::Removed).map(|(&id, _)| id).collect::<Vec<_>>())).collect();
-        for (meeting, guests) in ids { self.drop_guest_ids(meeting, &guests); }
+        let ids: Vec<_> = self
+            .guests
+            .links
+            .iter()
+            .map(|(&meeting, link)| {
+                (meeting, link.visitors.iter().filter(|(_, visitor)| visitor.state == GuestState::Removed).map(|(&id, _)| id).collect::<Vec<_>>())
+            })
+            .collect();
+        for (meeting, guests) in ids {
+            self.drop_guest_ids(meeting, &guests);
+        }
     }
 }
 
@@ -457,7 +681,9 @@ impl<C: Fn() -> u64> GuestAccess<'_, C> {
     }
 
     fn meeting(&self, code: &str, now_ms: u64) -> Result<u64, GuestError> {
-        if code.len() != 24 || !code.bytes().all(|byte| ALPHABET.contains(&byte)) { return Err(GuestError::LinkClosed); }
+        if code.len() != 24 || !code.bytes().all(|byte| ALPHABET.contains(&byte)) {
+            return Err(GuestError::LinkClosed);
+        }
         let id = *self.server.guests.codes.get(&digest(b"crewcraft.guest.link.v1\0", code.as_bytes())).ok_or(GuestError::LinkClosed)?;
         self.server.guests.live(id, now_ms)?;
         Ok(id)
@@ -478,10 +704,16 @@ impl<C: Fn() -> u64> GuestEntrance for GuestAccess<'_, C> {
         let meeting = self.meeting(code, now_ms)?;
         let display = name(display)?;
         let link = self.server.guests.live(meeting, now_ms)?;
-        if link.visitors.len() >= MAX_GUESTS || (link.lobby && link.visitors.values().filter(|visitor| visitor.state == GuestState::Waiting).count() >= MAX_WAITING) { return Err(GuestError::Full); }
+        if link.visitors.len() >= MAX_GUESTS
+            || (link.lobby && link.visitors.values().filter(|visitor| visitor.state == GuestState::Waiting).count() >= MAX_WAITING)
+        {
+            return Err(GuestError::Full);
+        }
         let bearer = GuestBearer(random::<32>()?);
         let guest = self.server.guests.next.checked_add(1).ok_or(GuestError::Full)?;
-        self.server.record_guest(&GuestOp::Knock { meeting, guest, name: display, digest: digest(b"crewcraft.guest.bearer.v1\0", &bearer.0), now_ms }).map_err(GuestError::Durable)?;
+        self.server
+            .record_guest(&GuestOp::Knock { meeting, guest, name: display, digest: digest(b"crewcraft.guest.bearer.v1\0", &bearer.0), now_ms })
+            .map_err(GuestError::Durable)?;
         let state = self.server.guests.authenticate(&GuestProof { meeting, guest, bearer: bearer.clone() })?.state;
         Ok(GuestKnock { proof: GuestProof { meeting, guest, bearer }, state })
     }
@@ -497,9 +729,15 @@ impl<C: Fn() -> u64> GuestEntrance for GuestAccess<'_, C> {
         let now = self.begin(peer)?;
         let visitor = self.server.guests.authenticate(proof)?;
         let link = self.server.guests.live(proof.meeting, now)?;
-        if visitor.state != GuestState::Admitted { return Err(GuestError::NotAllowed); }
+        if visitor.state != GuestState::Admitted {
+            return Err(GuestError::NotAllowed);
+        }
         let meeting = self.server.meeting(proof.meeting).ok_or(GuestError::NoSuchGuest)?;
-        let call = self.server.open_call(&meeting.room).filter(|call| self.server.guests.bound_to(call.id) == Some(proof.meeting)).ok_or(GuestError::LinkClosed)?;
+        let call = self
+            .server
+            .open_call(&meeting.room)
+            .filter(|call| self.server.guests.bound_to(call.id) == Some(proof.meeting))
+            .ok_or(GuestError::LinkClosed)?;
         let person = format!("guest:{}", proof.guest);
         let credential = self.server.guest_media_credential(call.id, &meeting.room, &person, proof.guest, now, link.expires_ms)?;
         let address = self.server.media_address().ok_or(GuestError::MediaUnavailable)?.to_owned();
@@ -517,7 +755,11 @@ mod tests {
     const OWNER: &str = "host@example.org";
 
     struct Scratch(PathBuf);
-    impl Drop for Scratch { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn fixture() -> Result<(Scratch, DurableServer, String), GuestError> {
         let path = std::env::temp_dir().join(format!("crewcraft-guest-{}-{}", std::process::id(), u64::from_be_bytes(random::<8>()?)));
@@ -529,14 +771,26 @@ mod tests {
     }
 
     fn create(server: &mut DurableServer, room: &str, lobby: bool) -> Result<(GuestLobby, GuestCode), GuestError> {
-        let draft = GuestMeetingDraft { room: room.to_owned(), start_ms: NOW + 60_000, duration: 30, title: "A meeting".into(), agenda: String::new(), host_name: "Host".into(), expires_ms: NOW + MIN_LINK_MS, lobby, confirm_direct: !lobby };
+        let draft = GuestMeetingDraft {
+            room: room.to_owned(),
+            start_ms: NOW + 60_000,
+            duration: 30,
+            title: "A meeting".into(),
+            agenda: String::new(),
+            host_name: "Host".into(),
+            expires_ms: NOW + MIN_LINK_MS,
+            lobby,
+            confirm_direct: !lobby,
+        };
         match server.guest_meeting_save(OWNER, &GuestMeetingChange::Create(draft), NOW)? {
             GuestReply::Created { lobby, code } => Ok((lobby, code)),
             GuestReply::Lobby(_) => Err(GuestError::NoSuchGuest),
         }
     }
 
-    fn peer() -> IpAddr { IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 20)) }
+    fn peer() -> IpAddr {
+        IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 20))
+    }
 
     #[test]
     fn lobby_revision_controls_decisions_and_waiting_knocks_leave_room_head_unchanged() -> Result<(), GuestError> {
@@ -549,11 +803,17 @@ mod tests {
         assert_eq!(state.entries[0].name, "Visitor One");
         assert!(state.revision > lobby.revision);
         assert_eq!(server.guest_lobby_state(&room, OWNER), Some((state.revision, 1)));
-        assert_eq!(server.guest_lobby_decide(OWNER, lobby.meeting, knock.proof.guest, lobby.revision, GuestDecision::Admit, NOW + 3), Err(GuestError::Conflict));
+        assert_eq!(
+            server.guest_lobby_decide(OWNER, lobby.meeting, knock.proof.guest, lobby.revision, GuestDecision::Admit, NOW + 3),
+            Err(GuestError::Conflict)
+        );
         let admitted = server.guest_lobby_decide(OWNER, lobby.meeting, knock.proof.guest, state.revision, GuestDecision::Admit, NOW + 3)?;
         assert_eq!(admitted.entries[0].state, GuestState::Admitted);
         let declined = server.guest_lobby_decide(OWNER, lobby.meeting, knock.proof.guest, admitted.revision, GuestDecision::Remove, NOW + 4)?;
-        assert_eq!(server.guest_lobby_decide(OWNER, lobby.meeting, knock.proof.guest, declined.revision, GuestDecision::Admit, NOW + 5), Err(GuestError::NotAllowed));
+        assert_eq!(
+            server.guest_lobby_decide(OWNER, lobby.meeting, knock.proof.guest, declined.revision, GuestDecision::Admit, NOW + 5),
+            Err(GuestError::NotAllowed)
+        );
         Ok(())
     }
 

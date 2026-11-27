@@ -634,7 +634,9 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
         }
         GUEST => {
             let op = decode_guest(bytes, &mut pos)?;
-            if pos != bytes.len() { return Err(CodecError::TrailingBytes); }
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
             Ok(Op::Guest(op))
         }
         REPLY => {
@@ -886,7 +888,11 @@ fn encode_guest(out: &mut Vec<u8>, record: &crate::guests::GuestOp) -> Result<()
             out.extend_from_slice(&guest.to_be_bytes());
             encode_str(out, actor)?;
             out.extend_from_slice(&revision.to_be_bytes());
-            out.push(match decision { GuestDecision::Admit => 1, GuestDecision::Decline => 2, GuestDecision::Remove => 3 });
+            out.push(match decision {
+                GuestDecision::Admit => 1,
+                GuestDecision::Decline => 2,
+                GuestDecision::Remove => 3,
+            });
             out.extend_from_slice(&now_ms.to_be_bytes());
         }
         GuestOp::Close { meeting, actor, revision, now_ms, cancel } => {
@@ -909,14 +915,20 @@ fn encode_guest(out: &mut Vec<u8>, record: &crate::guests::GuestOp) -> Result<()
 }
 
 fn guest_bool(bytes: &[u8], pos: &mut usize) -> Result<bool, CodecError> {
-    match decode_array::<1>(bytes, pos)? { [0] => Ok(false), [1] => Ok(true), [other] => Err(CodecError::BadKind(other)) }
+    match decode_array::<1>(bytes, pos)? {
+        [0] => Ok(false),
+        [1] => Ok(true),
+        [other] => Err(CodecError::BadKind(other)),
+    }
 }
 
 fn decode_guest(bytes: &[u8], pos: &mut usize) -> Result<crate::guests::GuestOp, CodecError> {
     use crate::guests::GuestOp;
     use crewcraft_proto::guest::{GuestDecision, GuestMeetingDraft};
     let [kind] = decode_array::<1>(bytes, pos)?;
-    if !(1..=6).contains(&kind) { return Err(CodecError::BadKind(kind)); }
+    if !(1..=6).contains(&kind) {
+        return Err(CodecError::BadKind(kind));
+    }
     let meeting = decode_u64(bytes, pos)?;
     Ok(match kind {
         1 => {
@@ -932,7 +944,13 @@ fn decode_guest(bytes: &[u8], pos: &mut usize) -> Result<crate::guests::GuestOp,
             let confirm_direct = guest_bool(bytes, pos)?;
             let code = decode_array::<32>(bytes, pos)?;
             let now_ms = decode_u64(bytes, pos)?;
-            GuestOp::Create { meeting, owner, draft: GuestMeetingDraft { room, start_ms, duration, title, agenda, host_name, expires_ms, lobby, confirm_direct }, code, now_ms }
+            GuestOp::Create {
+                meeting,
+                owner,
+                draft: GuestMeetingDraft { room, start_ms, duration, title, agenda, host_name, expires_ms, lobby, confirm_direct },
+                code,
+                now_ms,
+            }
         }
         2 => {
             let actor = decode_str(bytes, pos)?;
@@ -952,7 +970,12 @@ fn decode_guest(bytes: &[u8], pos: &mut usize) -> Result<crate::guests::GuestOp,
             let guest = decode_u64(bytes, pos)?;
             let actor = decode_str(bytes, pos)?;
             let revision = decode_u64(bytes, pos)?;
-            let decision = match decode_array::<1>(bytes, pos)? { [1] => GuestDecision::Admit, [2] => GuestDecision::Decline, [3] => GuestDecision::Remove, [other] => return Err(CodecError::BadKind(other)) };
+            let decision = match decode_array::<1>(bytes, pos)? {
+                [1] => GuestDecision::Admit,
+                [2] => GuestDecision::Decline,
+                [3] => GuestDecision::Remove,
+                [other] => return Err(CodecError::BadKind(other)),
+            };
             let now_ms = decode_u64(bytes, pos)?;
             GuestOp::Decide { meeting, guest, actor, revision, decision, now_ms }
         }

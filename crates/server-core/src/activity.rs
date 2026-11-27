@@ -8,8 +8,8 @@ use crewcraft_proto::activity::{ActivityFilter, ActivityItem, ActivityKind, Acti
 use crewcraft_proto::request::{MAX_AUTHOR, MAX_SNIPPET};
 
 use crate::calls::Calls;
-use crate::guests::Guests;
 use crate::durable::{CurrentMessage, DurableError, DurableServer};
+use crate::guests::Guests;
 use crate::html_text::html_text;
 use crate::mentions::{mentions, resolve_tokens};
 use crate::op::Op;
@@ -237,7 +237,9 @@ impl Activity {
     }
 
     fn missed_call(&mut self, view: &ActivityView<'_>, slug: &str, call: u64, ended_ms: u64) {
-        if view.guests.bound_to(call).is_some() { return; }
+        if view.guests.bound_to(call).is_some() {
+            return;
+        }
         let Some(call) = view.calls.get(call) else { return };
         let Ok(room) = view.server.room(slug) else { return };
         if room.is_read_only() || call.started_by.is_empty() || call.started_by.len() > MAX_AUTHOR {
