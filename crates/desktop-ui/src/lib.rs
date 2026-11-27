@@ -327,6 +327,9 @@ pub struct Window {
     /// The text box's copy of the open room's draft; synced into `composer` every frame.
     draft: String,
     notice: Option<String>,
+    /// A change that happened away from focus (a new message in another room, the connection coming back), shown in
+    /// the status line and announced by screen readers through a live region.
+    announcement: Option<String>,
     busy: bool,
     /// An external sign-in is waiting for the person to finish in the browser (T611h).
     waiting_for_browser: bool,
@@ -529,6 +532,10 @@ impl Window {
                 self.go(Screen::SignIn);
             }
             Update::SignedIn { email, rooms } => {
+                // Signed in again while the chat was showing: the worker resumed the session after a lost connection.
+                if self.screen() == Screen::Chat {
+                    self.announce("Connected to the server again.".to_owned());
+                }
                 self.email = email;
                 self.pins.clear();
                 self.saved_messages = None;
@@ -564,7 +571,11 @@ impl Window {
                 }
             }
             Update::Unread { room, unread } => {
-                self.rooms.set_unread(&room, unread);
+                let before = self.rooms.rows().into_iter().find(|row| row.name == room).map(|row| row.unread);
+                let away = self.rooms.selected() != Some(room.as_str()) && !self.archived.contains(&room);
+                if self.rooms.set_unread(&room, unread) && away && before.is_some_and(|before| unread > before) {
+                    self.announce(format!("New messages in {room}: {unread} unread"));
+                }
             }
             Update::ReadState { room, unread } => {
                 self.rooms.set_read_state(&room, unread);
@@ -656,6 +667,7 @@ impl Window {
             Update::InvitationLink(_) | Update::WaitingForBrowser => {}
             Update::Failed(text) => self.notice = Some(text),
             Update::SignedOut => {
+                self.announcement = None;
                 self.phone_pane = PhonePane::Chats;
                 self.selected_message = None;
                 self.focus_room = None;
@@ -695,9 +707,16 @@ impl Window {
         self.prepare_previews(ui.ctx());
         let screen = self.screen();
         if screen == Screen::Chat {
-            if let Some(notice) = self.notice.clone() {
+            // The status line: the last problem or hint, and the last change away from focus. Both are live regions,
+            // so a screen reader speaks them when they appear or change, wherever focus is.
+            if self.notice.is_some() || self.announcement.is_some() {
                 egui::Panel::top("crewcraft-notice").show(ui, |ui| {
-                    ui.colored_label(ui.visuals().warn_fg_color, notice);
+                    if let Some(notice) = &self.notice {
+                        live_label(ui, "crewcraft-notice-text", RichText::new(notice).color(ui.visuals().warn_fg_color));
+                    }
+                    if let Some(announcement) = &self.announcement {
+                        live_label(ui, "crewcraft-announcement", RichText::new(announcement));
+                    }
                 });
             }
             self.chat_ui(ui);
@@ -714,7 +733,7 @@ impl Window {
                     ui.with_layout(Layout::top_down(Align::Min), |ui| {
                         ui.spacing_mut().item_spacing.y = 8.0;
                         if let Some(notice) = &self.notice {
-                            ui.colored_label(ui.visuals().warn_fg_color, notice.as_str());
+                            live_label(ui, "crewcraft-notice-text", RichText::new(notice).color(ui.visuals().warn_fg_color));
                         }
                         match screen {
                             Screen::Enroll => self.enroll_ui(ui),
@@ -725,6 +744,16 @@ impl Window {
                 });
             });
         });
+    }
+
+    /// Say `text` through the status line's live region (rule 4 of the Craft accessibility standard).
+    fn announce(&mut self, text: String) {
+        self.announcement = Some(text);
+    }
+
+    /// What the status line last announced, while it shows.
+    pub fn announcement(&self) -> Option<&str> {
+        self.announcement.as_deref()
     }
 
     fn go(&mut self, screen: Screen) {
@@ -1751,6 +1780,10 @@ impl Window {
     }
 
     fn open_room(&mut self, room: &str, deliberate: bool) {
+        // The person has moved on: the last announcement no longer describes what they are looking at.
+        if deliberate {
+            self.announcement = None;
+        }
         if let Some(command) = self.rooms.select(room) {
             self.focus = None;
             self.selected_message = None;
@@ -2070,6 +2103,15 @@ pub fn utc_time(ms: u64) -> String {
     let Some(date) = i64::try_from(rest * 86_400).ok().and_then(|at| DateTime::from_timestamp(at, 0)) else { return String::new() };
     let year = u64::from(date.year().unsigned_abs()) + 400 * cycles;
     format!("{year:04}-{:02}-{:02} {:02}:{:02} UTC", date.month(), date.day(), of_day / 3600, of_day % 3600 / 60)
+}
+
+/// A label that is a polite live region: screen readers speak it when it appears and whenever its text changes, without
+/// moving focus. `id` keeps it the same node from frame to frame.
+fn live_label(ui: &mut Ui, id: &str, text: RichText) {
+    ui.push_id(id, |ui| {
+        let response = ui.label(text);
+        ui.ctx().accesskit_node_builder(response.id, |node| node.set_live(egui::accesskit::Live::Polite));
+    });
 }
 
 /// A labelled one-line field whose text is zeroed when dropped. `hidden` draws it as a password field.

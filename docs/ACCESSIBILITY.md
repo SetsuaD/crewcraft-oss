@@ -32,7 +32,7 @@ standard egui widgets that should work this way, with no test that proves it. "N
 |---|---|---|---|---|
 | Join from an invitation link, set up the authenticator | Fields are named from their labels (tested for the invitation link field: `t611k_enroll_way`) | Expected (Tab between fields, Enter on buttons); not tested | Not verified | Built-in high-contrast theme; the system setting is not followed |
 | Sign in | Named (tested: `t305_desktop_window`, `t611h_signin_button`) | Expected; not tested | Not verified | As above |
-| Choose a room, read messages | Room buttons are named (tested); messages are text rows; image previews are images named by their file name (tested: `a11y_image_names`); no announcement when a new message arrives | Room buttons take focus; after an unread action is confirmed, focus returns to the room button (tested: `t344_mark_unread_window`) | Not verified | As above |
+| Choose a room, read messages | Room buttons are named (tested); messages are text rows; image previews are images named by their file name (tested: `a11y_image_names`); a new message in another room is announced through a live region (tested: `a11y_announcements`); a new message in the open room is not announced yet | Room buttons take focus; after an unread action is confirmed, focus returns to the room button (tested: `t344_mark_unread_window`) | Not verified | As above |
 | Send a message | The message box is named "Message" (tested) | Enter sends, Shift+Enter adds a line (tested: `t305_desktop_window`) | Not verified | As above |
 | Search, open a result | The search box is named (tested) | Enter searches; opening a result moves the window's focus to the message (tested: `t321_search_focus_window`). Whether that also moves egui's keyboard focus there is not verified | Not verified | As above |
 | Threads, reactions, edit and delete, pins | Controls are named (tested in their window tests) | Expected; not tested | Not verified | As above |
@@ -51,6 +51,8 @@ standard egui widgets that should work this way, with no test that proves it. "N
   contrast rule table; REQUIREMENTS 2.19). A theme that fails is refused and the default applies (`t314_themes`).
 - **Themes.** Light, dark, follow the system's light or dark choice, and a built-in high-contrast theme
   (`crewcraft-high-contrast`).
+- **Announcements.** Changes away from focus go to the status line, a polite AccessKit live region: new messages in
+  another room, a call someone starts, the connection lost and back, and errors and hints.
 - **Colour is not the only signal for presence.** The contrast rules exempt presence colours because presence is also
   shown by the icon's shape (`crates/theme/src/lib.rs`).
 
@@ -58,8 +60,11 @@ standard egui widgets that should work this way, with no test that proves it. "N
 
 Each gap names the standard's rule it falls under. The "Known failures" items of the standard are marked (KF).
 
-1. **No live-region announcements** (rule 4, KF "a state change nobody hears"). Nothing is announced away from focus:
-   a new message, a finished upload, a search result count, an error, "sent".
+1. **Partly closed: live-region announcements** (rule 4, KF "a state change nobody hears"). The status line at the
+   top of the window is a polite live region: a new message in another room, a call someone starts, a lost
+   connection, the connection coming back and every error or hint shown there are announced without moving focus
+   (`a11y_announcements` reads the tree and checks focus stays put). Still not announced: a new message in the open
+   room, a finished upload, a search result count and "sent".
 2. **Drag-only file attachment** (rule 7, KF "an action that only works by dragging"). The composer says "Drop a file
    onto the window to attach it", and there is no button or file chooser.
 3. **Closed: image previews are named** (rule 5). The previews under messages (T333) are image nodes whose name is
@@ -87,7 +92,8 @@ Each gap names the standard's rule it falls under. The "Known failures" items of
 
 1. A button or file chooser that attaches a file without dragging (gap 2).
 2. Done: names for image previews, from the file name (gap 3).
-3. A live region for new messages in the open room, sent messages, upload results and errors (gap 1).
+3. Announce new messages in the open room, sent messages, upload results and search result counts through the
+   status line's live region (the rest of gap 1).
 4. Esc and F6 behaviour, with kittest keyboard tests for join, sign-in, send and closing a pane (gaps 5 to 7).
 5. Follow the system's high contrast and text size settings (gap 4).
 6. A first manual pass with NVDA on Windows and Orca on Linux over the core tasks, recorded in this file (gap 10).
