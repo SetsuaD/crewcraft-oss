@@ -368,6 +368,11 @@ pub struct Window {
     results: Option<(String, Vec<SearchResult>)>,
     /// Files uploaded to attach to the next post, per room (T330e).
     pending_files: HashMap<String, Vec<FileChip>>,
+    /// The typed path of a file to attach, while the composer's path entry is open: attaching without dragging.
+    attach_path: Option<String>,
+    /// Give keyboard focus to the path entry (`Some(true)`) or back to the Attach file button (`Some(false)`) when they
+    /// are next drawn.
+    attach_focus: Option<bool>,
     /// The files each message carries, per room and cursor (T330e).
     message_files: HashMap<String, std::collections::BTreeMap<u64, Vec<FileChip>>>,
     /// Each reply's parent, per room, by the reply's cursor (T340b).
@@ -698,6 +703,8 @@ impl Window {
                 self.results = None;
                 self.message_query.clear();
                 self.pending_files.clear();
+                self.attach_path = None;
+                self.attach_focus = None;
                 self.message_files.clear();
                 self.threads.clear();
                 self.reactions.clear();
@@ -1769,8 +1776,9 @@ impl Window {
                     }
                 }
             });
-        } else if editing.is_none() {
-            ui.weak("Drop a file onto the window to attach it.");
+        }
+        if editing.is_none() {
+            self.attach_ui(ui, room, pending.is_empty());
         }
         ui.horizontal(|ui| {
             let label = ui.label("Message");
@@ -1827,6 +1835,62 @@ impl Window {
         });
     }
 
+    /// Attach a file without dragging: the Attach file button opens a path entry in the composer, and Enter or Attach
+    /// uploads the file through the same command a dropped file uses. Esc or Cancel closes it. Focus moves into the
+    /// entry when it opens and back to the button when it closes, so the whole path works from the keyboard.
+    fn attach_ui(&mut self, ui: &mut Ui, room: &str, nothing_pending: bool) {
+        let Some(mut typed) = self.attach_path.take() else {
+            ui.horizontal(|ui| {
+                let button = ui.button("Attach file");
+                if self.attach_focus == Some(false) {
+                    button.request_focus();
+                    self.attach_focus = None;
+                }
+                if button.clicked() {
+                    self.attach_path = Some(String::new());
+                    self.attach_focus = Some(true);
+                }
+                if nothing_pending {
+                    ui.weak("Drop a file onto the window to attach it.");
+                }
+            });
+            return;
+        };
+        let mut close = false;
+        ui.horizontal(|ui| {
+            let label = ui.label("Path of the file to attach");
+            let id = ui.make_persistent_id("crewcraft-attach-path");
+            let entry = ui.add(TextEdit::singleline(&mut typed).id(id).desired_width(320.0)).labelled_by(label.id);
+            if self.attach_focus == Some(true) {
+                entry.request_focus();
+                self.attach_focus = None;
+            }
+            let (enter, escape) = ui.input(|input| (input.key_pressed(Key::Enter), input.key_pressed(Key::Escape)));
+            let attach = ui.button("Attach").clicked() || (entry.lost_focus() && enter);
+            if ui.button("Cancel").clicked() || (entry.lost_focus() && escape) {
+                close = true;
+            } else if attach {
+                match attach_path(&typed) {
+                    Ok(path) => {
+                        self.notice = None;
+                        self.actions.push(Action::Room(Command::Attach { room: room.to_owned(), path }));
+                        close = true;
+                    }
+                    Err(problem) => {
+                        // Say what is wrong and leave the text there to fix, with focus back in it.
+                        self.notice = Some(problem.to_owned());
+                        self.attach_focus = Some(true);
+                    }
+                }
+            }
+        });
+        if close {
+            self.attach_focus = Some(false);
+        } else {
+            self.attach_path = Some(typed);
+        }
+    }
+
     fn open_room(&mut self, room: &str, deliberate: bool) {
         // The person has moved on: the last announcement no longer describes what they are looking at.
         if deliberate {
@@ -1843,6 +1907,25 @@ impl Window {
             self.actions.push(Action::Room(Command::Read { room: room.to_owned() }));
         }
     }
+}
+
+/// The file a path typed into the composer's path entry names, or what is wrong with it. Surrounding space and
+/// quotes (as a file manager's "copy as path" adds them) are dropped. It must be a full path, and not end in a folder
+/// separator; whether the file exists and can be read is checked when it is uploaded, outside the window.
+pub fn attach_path(typed: &str) -> Result<std::path::PathBuf, &'static str> {
+    let trimmed = typed.trim();
+    let unquoted = trimmed.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')).unwrap_or(trimmed).trim();
+    if unquoted.is_empty() {
+        return Err("Type the path of the file to attach.");
+    }
+    if unquoted.ends_with(['/', '\\']) {
+        return Err("That path ends in a folder separator. Type the path of a file.");
+    }
+    let path = std::path::PathBuf::from(unquoted);
+    if !path.is_absolute() {
+        return Err("Type the file's full path, starting from the drive or the top folder.");
+    }
+    Ok(path)
 }
 
 /// Which side of the feed a row is drawn on: the person's own messages on the right, everyone else's on the left.
