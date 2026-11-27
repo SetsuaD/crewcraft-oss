@@ -1,0 +1,26 @@
+{
+  "id": "T239-from-zero",
+  "title": "From zero: the real server binary and the desktop-app stack install, join, chat and keep the message over a restart",
+  "crate": "crewcraft-server",
+  "files": [
+    "README.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t239_from_zero.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t239_from_zero",
+  "depends_on": [
+    "T231-first-run",
+    "T235-clean-stop",
+    "T237-invitation-file",
+    "T238-admin-while-serving",
+    "T240-session-resume",
+    "T311-join-from-link"
+  ],
+  "spec": "No new behaviour: an acceptance test of the newcomer path as the README gives it, Unix only. The crewcraft-server binary runs first-run with --name localhost, a fixed loopback listen port and --invitation-file, then serve, then room while serving. A desktop-app Controller with join_from_link takes the link from the invitation file, fetches the root against its fingerprint and enrolls; the TOTP secret is read from the otpauth:// URI the app shows (checked to be the default entry for the account), the current step's code confirms it and the next step's code signs in, and the signed-in room list holds the new room. The app sends a message and sees it. serve is stopped with SIGTERM (exit 0, 'CrewCraft stopped.') and started again on the same directory; the open app reports the lost connection and resumes without signing out. A Controller opened afresh on the same data folder resumes and shows the message after a sync. Wall time only; the server makes its own secrets.",
+  "status": "done",
+  "context": [
+    "README.md",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/src/worker.rs"
+  ]
+}
