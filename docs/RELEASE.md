@@ -32,6 +32,35 @@ one list.
 Before a release, set `workspace.package.version` in `Cargo.toml` to the release version: the binaries print it for
 `--version`, and `dist` warns when it differs from `--version`.
 
+## Verify a release candidate
+
+Build the desktop and server packages from the same clean Git revision on both builders. Set the
+workspace version before building. Give each build an empty package directory and a separate
+receipt path outside that directory. Candidate mode (`--receipt`) refuses a version mismatch,
+a dirty checkout, or a Linux build without the required AppImage.
+
+```sh
+# On the Linux builder, from the repository root.
+cargo xtask dist --version 0.1.0-beta.1 --out ../linux-windows --receipt ../linux-windows.receipt \
+  --appimage-runtime /path/to/runtime-x86_64
+# On the macOS builder, from the same revision.
+cargo xtask dist --version 0.1.0-beta.1 --out ../macos --receipt ../macos.receipt --target macos-universal
+```
+
+Copy the seven packages into a fresh staging directory. Keep the two receipts beside the directory
+for verification. Use the full Git SHA selected for this release.
+
+```sh
+cargo xtask preflight --version 0.1.0-beta.1 --commit "$RELEASE_COMMIT" --dir ../staged-packages \
+  --receipt ../linux-windows.receipt --receipt ../macos.receipt
+(cd ../staged-packages && sha256sum -c SHA256SUMS.txt)
+```
+
+Preflight checks the exact file list, version, source revision in each receipt, and checksum of
+each package before writing `SHA256SUMS.txt`. Retain the receipts with the build evidence. A
+receipt records what an owned builder produced. Signing and native installation tests each supply
+their own release evidence.
+
 ## What it writes
 
 | Asset | Contents |
@@ -116,10 +145,9 @@ and writes:
 | `crewcraft-<v>-macos-universal.dmg` | A compressed disk image (`hdiutil create -format UDZO`, volume `CrewCraft`) holding `CrewCraft.app` and a link to `/Applications` to drag it onto. The app: `Contents/MacOS/crewcraft` (universal), `Contents/Info.plist` (identifier `io.github.setsuad.crewcraft`, version shown as the release version, `CFBundleVersion` the same three numbers as the MSI version, macOS 11.0 or later, high-resolution capable), `Contents/Resources/crewcraft.icns` (16 to 1024 px, rendered from the SVG) and the license files in `Contents/Resources/licenses/` |
 | `crewcraft-server-<v>-macos-universal.tar.gz` | The same folder as the Linux server archive, with the universal server |
 
-To publish one release with every platform, run `dist` on Linux and on the Mac into two folders, copy the assets into
-one folder and run `sha256sum *.AppImage *.deb *.dmg *.msi *.tar.gz *.zip > SHA256SUMS.txt` there. The plist, the icon and the
-bundle layout are checked on Linux by `cargo test -p xtask`; on any other system `--target macos-universal` stops
-before building, with an error.
+To assemble one release with every platform, follow [Verify a release candidate](#verify-a-release-candidate)
+with separate Linux and macOS build receipts. The plist, icon and bundle layout are checked on Linux by
+`cargo test -p xtask`. On any other system `--target macos-universal` stops before building.
 
 ## Android
 

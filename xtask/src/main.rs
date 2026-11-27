@@ -1,6 +1,7 @@
 //! `cargo xtask <command>`: CrewCraft's build tasks, in Rust (docs/SPEC.md section 7). See docs/RELEASE.md.
 
 use std::env;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
@@ -8,10 +9,46 @@ usage: cargo xtask <command>
 
 commands:
   dist    build the release packages (cargo xtask dist --help)
+  preflight  check the complete release package set against build receipts (cargo xtask preflight --help)
   apk     build the Android app (cargo xtask apk --help)
   ios     build CrewCraft.app for the iOS Simulator, on a Mac (cargo xtask ios --help)
   icons   rewrite assets/icon/crewcraft.ico from assets/icon/crewcraft.svg
   release make a release key, write and sign a release manifest, verify one (cargo xtask release --help)";
+
+const PREFLIGHT_USAGE: &str = "\
+usage: cargo xtask preflight --version <version> --commit <40-character Git SHA>
+                             --dir <packages-dir> --receipt <build-receipt>...
+
+Checks all desktop and server packages from one source revision, then writes SHA256SUMS.txt into <packages-dir>.";
+
+fn preflight(args: &[String]) -> xtask::Result<()> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("{PREFLIGHT_USAGE}");
+        return Ok(());
+    }
+    let (mut version, mut commit, mut dir) = (None, None, None);
+    let mut receipts = Vec::new();
+    let mut flags = args.iter();
+    while let Some(flag) = flags.next() {
+        let value = flags.next().ok_or_else(|| xtask::Error::new(format!("{flag} needs a value\n\n{PREFLIGHT_USAGE}")))?;
+        match flag.as_str() {
+            "--version" if version.is_none() => version = Some(xtask::version::Version::parse(value)?),
+            "--commit" if commit.is_none() => commit = Some(value.as_str()),
+            "--dir" if dir.is_none() => dir = Some(PathBuf::from(value)),
+            "--receipt" => receipts.push(PathBuf::from(value)),
+            _ => return Err(xtask::Error::new(format!("unknown or repeated argument {flag:?}\n\n{PREFLIGHT_USAGE}"))),
+        }
+    }
+    let (Some(version), Some(commit), Some(dir)) = (version, commit, dir) else {
+        return Err(xtask::Error::new(PREFLIGHT_USAGE));
+    };
+    if receipts.is_empty() {
+        return Err(xtask::Error::new(PREFLIGHT_USAGE));
+    }
+    let sums = xtask::sums::preflight(&dir, &version, commit, &receipts)?;
+    println!("== {} in {}\n{sums}", xtask::sums::SUMS_FILE, dir.display());
+    Ok(())
+}
 
 fn run(args: &[String]) -> xtask::Result<()> {
     match args.split_first() {
@@ -22,6 +59,7 @@ fn run(args: &[String]) -> xtask::Result<()> {
             }
             xtask::dist::run(&xtask::dist::parse_args(rest)?)
         }
+        Some((command, rest)) if command == "preflight" => preflight(rest),
         Some((command, rest)) if command == "apk" => {
             if rest.iter().any(|arg| arg == "--help" || arg == "-h") {
                 println!("{}", xtask::android::USAGE);
