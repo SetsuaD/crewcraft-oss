@@ -152,6 +152,78 @@ separately from that count. Guests use typed in-process messages. Errors 18 and 
 records and unavailable links. Journal family 42 records guest operations and replays the same transitions
 and call binding. Staff operations keep journal family 40 and the existing wire contract.
 
+## Browser guest lobby (planned lab contract)
+
+The initial listener serves a lobby on loopback when explicitly configured. It uses a dedicated
+HTTPS identity, listener and configuration section. Its certificate covers the configured host
+and chains to a lab trust root. An absent section starts no guest socket.
+A lab address must be loopback. The staff port keeps its existing certificate and sign-in checks.
+The lobby shares only the typed guest entrance and the room journal with the staff service.
+
+The listener serves a fixed page at `GET /guest/` and a static script at `GET /guest/lobby.js`.
+The page accepts an invite code in a field without a form name and clears it after a successful
+knock. Its script handles submission. No code or proof appears in a path, query, cookie, browser
+storage, logs or telemetry. The browser keeps the proof in memory and clears it on confirmed
+leave, a terminal status or page exit. If a leave times out, the page retains the proof for a
+deliberate retry. Closing a tab can discard the local proof without completing a leave. Restoring
+the page from browser history starts a fresh lobby. The script renders meeting and guest strings
+as text.
+
+| JSON request | Body and authentication | Successful response |
+|---|---|---|
+| `POST /v1/guest/lookup` | `{code}` using the existing 24-character Base32 invite | `200 {title, hostName}` |
+| `POST /v1/guest/knock` | `{code, name}` using the existing typed name rules | `201 {proof, state}` |
+| `POST /v1/guest/status` | `{}` and `Authorization: Bearer <proof>` | `200 {state}` for this guest |
+| `POST /v1/guest/leave` | `{}` and `Authorization: Bearer <proof>` | `204` after recording a leave, including a repeated authenticated leave on a live link |
+
+`proof` encodes the big-endian 64-bit meeting ID, the 64-bit guest ID, and the existing 32-byte
+bearer in unpadded Base64url. Its 64-character encoding is canonical. The typed authority verifies
+the proof against the exact meeting and guest, compares the bearer digest in constant time, and
+expires authority at link closure. Status returns `waiting`, `admitted`, `declined` or `removed`.
+An admitted status authorizes no staff features. Media, relay credentials and SDP have no HTTP route.
+
+Leave is a guest-authorized, durable transition for that guest alone. Waiting becomes declined and
+admitted becomes removed. A terminal guest remains terminal. A successful write updates the staff
+lobby and, where relevant, uses the existing removal event. The new journal transition requires
+replay tests for older records and repeated leave without a second journal write. For a lab
+rollback, reopen the saved pre-change checkpoint with the old binary. Later synthetic writes
+remain in the upgraded lab journal.
+Knock is submitted once per user action. If its answer is lost, the page shows that the outcome is
+unknown and avoids an automatic duplicate request.
+
+Every request checks the configured HTTP host. The JSON POSTs also require the configured origin.
+They use `application/json`, exact paths, and a fixed set of fields with no duplicates. The
+listener omits CORS response headers. Apply a direct-address and global connection budget before
+TLS and allow at most 16 concurrent connections. Give the handshake and the following HTTP
+exchange separate absolute five-second deadlines. The HTTP header budget is 8 KiB and 32 fields.
+Require one decimal Content-Length on POST and at most 4 KiB of JSON. Reject repeated Host,
+Origin, Authorization or Content-Type, ambiguous framing, transfer codings, Expect, upgrades
+and already-buffered trailing request bytes. Close after the first response.
+
+Keep API replies within 2 KiB and static assets bounded. The existing typed per-address and
+global limits use the direct socket address. Browser polling runs at intervals of at least five
+seconds and backs off after rate limits. Ignore forwarding headers.
+
+A fixed error body accompanies each status. Use `404` for unknown, invalid, expired or closed
+invites and missing, mismatched or expired proof. Malformed request framing or JSON uses `400`.
+Headers or bodies above budget use `431` or `413`. Resource-independent limits can return `429`
+with a fixed `Retry-After`. Ineligible and full lobbies use the same refusal shape. Credentials
+and staff data never appear in errors. All replies are `Cache-Control: no-store`. The page uses
+a same-origin content security policy. Its policy blocks native form submission, framing and base
+URL overrides, and it sends no referrer.
+
+Reuse rustls, the already locked `serde_json`, and the existing workspace `subtle`. The proposed
+optional request-head parser is [httparse 1.10.1](https://github.com/seanmonstar/httparse), licensed
+MIT OR Apache-2.0. Check the pinned release and locked graph with the repository dependency audit
+before implementation. Framing follows the fixed-length subset described in
+[RFC 9112 section 6](https://www.rfc-editor.org/rfc/rfc9112.html#section-6).
+
+Lab acceptance runs the actual server on isolated listeners with synthetic state. It proves lookup,
+knock, scoped status and leave, with durable replay and unchanged staff authorization. It also
+exercises wrong proof, expired and closed invites, equivalent refusal bodies, oversize and malformed
+requests, deadline and rate limits, and a certless request to the staff endpoint receiving no
+application data. A local browser check can reuse the owned browser runner when available.
+
 ## Slices
 
 1. **T370a, server-side staff meetings (this design's first slice).** The wire above in `crates/proto`, journal-backed
