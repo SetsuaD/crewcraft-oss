@@ -128,6 +128,18 @@ pub(crate) fn valid_room(room: &str) -> bool {
     !room.is_empty() && room.len() <= MAX_NAME && room.chars().all(|ch| !ch.is_control() && !ch.is_whitespace())
 }
 
+/// A meeting to schedule (`meeting` and `version` 0) or edit (task T370b). `start_ms` is UTC; `duration` is in minutes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeetingSave {
+    pub room: String,
+    pub meeting: u64,
+    pub version: u64,
+    pub start_ms: u64,
+    pub duration: u16,
+    pub title: String,
+    pub agenda: String,
+}
+
 /// Sign in over a verified device connection and negotiate the chat protocol, all within one operation deadline. The
 /// client offers `FEATURE_LIST_ROOMS`; a server that does not agree to it is still used, without the room list.
 pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str) -> Result<SignedInSession, LabError> {
@@ -147,7 +159,8 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
             | FEATURE_GAP_REPLAY
             | FEATURE_CONTINUE
             | crewcraft_proto::request::FEATURE_ROOM_SETTINGS
-            | FEATURE_ACTIVITY,
+            | FEATURE_ACTIVITY
+            | crewcraft_proto::request::FEATURE_MEETINGS,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -176,7 +189,8 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
             | FEATURE_GAP_REPLAY
             | FEATURE_CONTINUE
             | crewcraft_proto::request::FEATURE_ROOM_SETTINGS
-            | FEATURE_ACTIVITY,
+            | FEATURE_ACTIVITY
+            | crewcraft_proto::request::FEATURE_MEETINGS,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -220,7 +234,8 @@ pub(crate) fn finish_external(
             | FEATURE_GAP_REPLAY
             | FEATURE_CONTINUE
             | crewcraft_proto::request::FEATURE_ROOM_SETTINGS
-            | FEATURE_ACTIVITY,
+            | FEATURE_ACTIVITY
+            | crewcraft_proto::request::FEATURE_MEETINGS,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -527,6 +542,43 @@ impl SignedInSession {
     pub fn calls(&mut self, room: &str) -> (Option<crewcraft_client_core::room_view::OpenCall>, Vec<(u64, String)>) {
         let Some(view) = self.chat.view(room) else { return (None, Vec::new()) };
         (view.call().cloned(), view.call_lines().iter().map(|(cursor, line)| (*cursor, line.text.clone())).collect())
+    }
+
+    /// Whether the server agreed to meetings and the calendar (task T370b).
+    pub fn meetings(&self) -> bool {
+        self.chat.meetings()
+    }
+
+    /// The meetings in my rooms that overlap the UTC window `from_ms` to `to_ms` (task T370b).
+    pub fn meeting_list(&mut self, from_ms: u64, to_ms: u64) -> Result<crewcraft_proto::meeting::MeetingPage, LabError> {
+        self.chat.meeting_list(from_ms, to_ms, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// Schedule (`meeting` 0) or edit a meeting last seen at `version` (task T370b), returning it as saved.
+    pub fn meeting_save(&mut self, save: MeetingSave) -> Result<crewcraft_proto::meeting::Meeting, LabError> {
+        if !valid_room(&save.room) {
+            return Err(LabError::Usage);
+        }
+        let MeetingSave { room, meeting, version, start_ms, duration, title, agenda } = save;
+        let request = Request::MeetingSave { room, meeting, version, start_ms, duration, title, agenda };
+        self.chat.meeting_save(request, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// Cancel meeting `meeting` of `room`, last seen at `version` (task T370b); returns the new version.
+    pub fn meeting_cancel(&mut self, room: &str, meeting: u64, version: u64) -> Result<u64, LabError> {
+        if !valid_room(room) || meeting == 0 {
+            return Err(LabError::Usage);
+        }
+        let request = Request::MeetingCancel { room: room.to_owned(), meeting, version };
+        self.chat.meeting_request(request, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// Join meeting `meeting`'s call (task T370b); returns the call's id.
+    pub fn meeting_join(&mut self, meeting: u64) -> Result<u64, LabError> {
+        if meeting == 0 {
+            return Err(LabError::Usage);
+        }
+        self.chat.meeting_request(Request::MeetingJoin { meeting }, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
     }
 
     /// Whether the server agreed to continuing archived conversations (task T352).

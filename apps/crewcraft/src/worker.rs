@@ -46,7 +46,7 @@ use crate::external_flow::{BROWSER_TIMEOUT, ExternalServer, FlowError, run_unles
 use crate::lab_client::LabError;
 use crate::loopback::LoopbackError;
 use crate::server_endpoint::ServerEndpoint;
-use crate::signed_in::{Credentials, ResumeTicket, SignedInSession, valid_room};
+use crate::signed_in::{Credentials, MeetingSave, ResumeTicket, SignedInSession, valid_room};
 
 /// The most rooms one worker follows (and polls).
 pub const MAX_FOLLOWED: usize = 64;
@@ -178,6 +178,26 @@ pub enum Event {
     Continuations {
         room: String,
         lines: Vec<(u64, String, String)>,
+    },
+    /// The calendar's work week (task T370b): its UTC window, when the worker read it, and the meetings in my rooms
+    /// that overlap it, cancelled ones included; `more` when the server had more than it sent.
+    Meetings {
+        from_ms: u64,
+        to_ms: u64,
+        now_ms: u64,
+        meetings: Vec<crewcraft_proto::meeting::Meeting>,
+        more: bool,
+    },
+    /// A meeting was saved, scheduled or edited (task T370b).
+    MeetingSaved {
+        meeting: crewcraft_proto::meeting::Meeting,
+    },
+    /// Saving or cancelling meeting `meeting` (0: a new one) was refused; `conflict` when someone changed it since it
+    /// was read (task T370b). Nothing was resent.
+    MeetingRefused {
+        meeting: u64,
+        conflict: bool,
+        reason: String,
     },
     /// The files in the person's rooms, newest message first (task T331b).
     Files {
@@ -338,6 +358,8 @@ pub enum Problem {
     ReadStateNotOffered,
     /// The server does not offer continuing archived conversations (task T352).
     ContinueNotOffered,
+    /// The server does not offer meetings (task T370b).
+    MeetingsNotOffered,
     /// The server does not keep personal room settings (T346).
     RoomSettingsNotOffered,
     ActivityNotOffered,
@@ -374,6 +396,7 @@ impl std::fmt::Display for Problem {
             Self::HistoryGap => "Some earlier messages are outside the server's retained history.",
             Self::ReadStateNotOffered => "This server does not offer shared unread positions.",
             Self::ContinueNotOffered => "This server does not offer continuing archived conversations.",
+            Self::MeetingsNotOffered => "This server does not offer meetings.",
             Self::RoomSettingsNotOffered => "This server does not keep pinned, muted or hidden rooms.",
             Self::ActivityNotOffered => "This server does not offer Activity.",
             Self::LocalFile(_) => "CrewCraft could not read or write that file on this computer.",
@@ -403,6 +426,7 @@ impl Problem {
                 | Self::HistoryGap
                 | Self::ReadStateNotOffered
                 | Self::ContinueNotOffered
+                | Self::MeetingsNotOffered
                 | Self::RoomSettingsNotOffered
                 | Self::ActivityNotOffered
                 | Self::LocalFile(_)
@@ -413,6 +437,26 @@ impl Problem {
     fn retryable(self) -> bool {
         matches!(self, Self::Unreachable(_) | Self::Lost(_) | Self::Protocol)
     }
+}
+
+/// A stale meeting version (docs/MEETINGS.md "Wire": `E_CONFLICT`).
+const E_CONFLICT: u16 = 13;
+
+/// What to tell the person when the server refuses a meeting change with `code` (docs/MEETINGS.md "Wire").
+fn meeting_refusal(code: u16) -> &'static str {
+    match code {
+        E_CONFLICT => "Someone changed this meeting since you opened it.",
+        1 => "That room was not found.",
+        3 => "This meeting can no longer be changed, or you may not change it.",
+        4 => "Check the title, start, length and agenda: the meeting must not end in the past.",
+        14 => "That meeting was not found.",
+        _ => "The server refused that change.",
+    }
+}
+
+/// The time now, Unix milliseconds (0 if the clock is before 1970).
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
 }
 
 fn problem(error: LabError) -> Problem {
@@ -572,6 +616,7 @@ impl Worker {
             activity_polling: false,
             archive_sent: BTreeMap::new(),
             continued_sent: BTreeMap::new(),
+            calendar_weeks: None,
             in_call: None,
             next_heartbeat: Instant::now(),
             crypto: None,
@@ -676,6 +721,8 @@ struct Run {
     archive_sent: BTreeMap<String, Vec<(u64, u64)>>,
     /// The last continuation lines sent, per room (task T352).
     continued_sent: BTreeMap<String, Vec<(u64, String, String)>>,
+    /// The calendar week the window shows, in weeks from this one, once it has asked for one (task T370b).
+    calendar_weeks: Option<i64>,
     /// The last reactions sent, per room (task T341b).
     reactions_sent: BTreeMap<String, crewcraft_ui_model::RoomReactions>,
     /// Pin metadata is sent even when the room's message snapshot stays unchanged (T343).
@@ -792,6 +839,23 @@ impl Run {
                 Some(Input::Command(Command::PostFiles { room, text, files })) => self.post_files(room, text, files),
                 Some(Input::Command(Command::Save { file, size, name, to })) => self.save(file, size, &name, to),
                 Some(Input::Command(Command::Continue { archive })) => self.continue_archive(archive),
+                Some(Input::Command(Command::ListMeetings { weeks })) => {
+                    self.calendar_weeks = Some(weeks);
+                    self.refresh_meetings();
+                }
+                Some(Input::Command(Command::SaveMeeting { room, meeting, version, start_ms, duration, title, agenda })) => {
+                    self.save_meeting(MeetingSave { room, meeting, version, start_ms, duration, title, agenda }, false);
+                }
+                Some(Input::Command(Command::CancelMeeting { room, meeting, version })) => self.cancel_meeting(&room, meeting, version),
+                Some(Input::Command(Command::JoinMeeting { room, meeting })) => {
+                    let result = self.session.as_mut().map(|session| session.meeting_join(meeting));
+                    self.entered_call(room, result);
+                    self.refresh_meetings();
+                }
+                Some(Input::Command(Command::StartMeetingNow { room, title, duration, agenda })) => {
+                    let save = MeetingSave { room, meeting: 0, version: 0, start_ms: wall_ms(), duration, title, agenda };
+                    self.save_meeting(save, true);
+                }
                 Some(Input::SignOut) => {
                     self.retry = None;
                     let was_signed_in = self.session.is_some();
@@ -1101,6 +1165,72 @@ impl Run {
     }
 
     /// Continue an archive room (task T352). The room it continues in is followed; the window opens it.
+    /// Read the calendar's week again, when the window shows one (task T370b).
+    fn refresh_meetings(&mut self) {
+        let Some(weeks) = self.calendar_weeks else { return };
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        if !session.meetings() {
+            return self.emit(Event::Failed(Problem::MeetingsNotOffered));
+        }
+        let now_ms = wall_ms();
+        // The app reads no time zone yet: the week and its times are UTC (docs/MEETINGS.md, slice T370b).
+        let Some((from_ms, to_ms)) = crewcraft_client_core::calendar::work_week_at(now_ms, 0, weeks) else {
+            return self.emit(Event::Failed(Problem::InvalidRequest));
+        };
+        match session.meeting_list(from_ms, to_ms) {
+            Ok(page) => self.emit(Event::Meetings { from_ms, to_ms, now_ms, meetings: page.meetings, more: page.more }),
+            Err(error) => {
+                self.request_failed(error);
+            }
+        }
+    }
+
+    /// Schedule or edit a meeting (task T370b), and with `join`, join it once it is scheduled ("start now").
+    fn save_meeting(&mut self, save: MeetingSave, join: bool) {
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        if !session.meetings() {
+            return self.emit(Event::Failed(Problem::MeetingsNotOffered));
+        }
+        let (room, edited) = (save.room.clone(), save.meeting);
+        match session.meeting_save(save) {
+            Ok(meeting) => {
+                let id = meeting.id;
+                self.emit(Event::MeetingSaved { meeting });
+                if join {
+                    let result = self.session.as_mut().map(|session| session.meeting_join(id));
+                    self.entered_call(room, result);
+                }
+                self.refresh_meetings();
+            }
+            Err(error) => self.meeting_refused(edited, error),
+        }
+    }
+
+    fn cancel_meeting(&mut self, room: &str, meeting: u64, version: u64) {
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        if let Err(error) = session.meeting_cancel(room, meeting, version) {
+            self.meeting_refused(meeting, error);
+        }
+        // Cancelled or not, the week shows the meeting as it is now.
+        self.refresh_meetings();
+    }
+
+    /// Report a refused meeting change (task T370b). A stale version is a conflict: the window keeps the person's
+    /// edits and asks them to reload; nothing is sent again.
+    fn meeting_refused(&mut self, meeting: u64, error: LabError) {
+        let (conflict, reason) = match error {
+            LabError::Chat(ChatError::Rejected(code)) => (code == E_CONFLICT, meeting_refusal(code).to_owned()),
+            error => (false, self.request_failed(error).to_string()),
+        };
+        self.emit(Event::MeetingRefused { meeting, conflict, reason });
+    }
+
     fn continue_archive(&mut self, archive: String) {
         let Some(session) = self.session.as_mut() else {
             return self.emit(Event::Failed(Problem::NotSignedIn));
