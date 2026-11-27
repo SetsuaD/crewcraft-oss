@@ -17,9 +17,24 @@ pub enum GuestUpdate {
     /// Availability for this session. False clears the lobby and waiting counts.
     Available(bool),
     /// The fresh count for one room. Notify only for a new observed increase.
-    Waiting { room: String, waiting: u32, notify: bool },
-    ClearRoom { room: String },
+    Waiting {
+        room: String,
+        waiting: u32,
+        notify: bool,
+    },
+    ClearRoom {
+        room: String,
+    },
     /// A confirmed roster. Only creating a meeting can return a code, whose Debug output is redacted.
-    Snapshot { room: String, lobby: GuestLobby, code: Option<GuestCode> },
-    Refused { meeting: Option<u64>, reason: String, conflict: bool, access_lost: bool },
+    Snapshot {
+        room: String,
+        lobby: GuestLobby,
+        code: Option<GuestCode>,
+    },
+    Refused {
+        meeting: Option<u64>,
+        reason: String,
+        conflict: bool,
+        access_lost: bool,
+    },
 }

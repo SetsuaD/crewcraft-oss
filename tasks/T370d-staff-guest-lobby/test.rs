@@ -74,8 +74,7 @@ fn enrolled(path: &Path) -> (StoredDeviceAuth, String) {
         expected_device_id: Some(1),
     };
     assert_eq!(accounts.activate(activation, CREATED_AT).unwrap(), 1);
-    let auth =
-        StoredDeviceAuth::bind(Arc::new(Mutex::new(accounts)), Arc::new(Mutex::new(Throttle::new())), &leaf.certificate, NOW).unwrap();
+    let auth = StoredDeviceAuth::bind(Arc::new(Mutex::new(accounts)), Arc::new(Mutex::new(Throttle::new())), &leaf.certificate, NOW).unwrap();
     let code = Totp::with_defaults(secret.to_vec()).unwrap().generate(NOW / 1_000);
     (auth, code)
 }

@@ -123,10 +123,7 @@ fn only_guest_meetings_offer_lobby_controls_and_direct_entry_requires_confirmati
     click(&mut h, "Allow direct entry");
     assert_action(&mut h, GuestCommand::SetLobby { meeting: MEETING, revision: 2, lobby: false, confirm_direct: true });
 
-    update(
-        &mut h,
-        GuestUpdate::Refused { meeting: Some(MEETING), reason: "The lobby changed.".into(), conflict: true, access_lost: false },
-    );
+    update(&mut h, GuestUpdate::Refused { meeting: Some(MEETING), reason: "The lobby changed.".into(), conflict: true, access_lost: false });
     h.get_by_label("The lobby changed. Reload it before making another decision.");
     assert!(h.state_mut().take_actions().is_empty(), "the failed change is never repeated automatically");
     click(&mut h, "Admit Alex");
@@ -145,10 +142,7 @@ fn only_guest_meetings_offer_lobby_controls_and_direct_entry_requires_confirmati
     click(&mut h, "Close link and remove guests");
     assert_action(&mut h, GuestCommand::CloseLink { meeting: MEETING, revision: 4 });
 
-    update(
-        &mut h,
-        GuestUpdate::Refused { meeting: Some(MEETING), reason: "The lobby is unavailable.".into(), conflict: false, access_lost: true },
-    );
+    update(&mut h, GuestUpdate::Refused { meeting: Some(MEETING), reason: "The lobby is unavailable.".into(), conflict: false, access_lost: true });
     assert!(h.query_by_label("Lobby").is_none());
     assert_action(&mut h, GuestCommand::ClosePanel);
 }
@@ -172,10 +166,7 @@ fn creation_uses_the_expiring_guest_form_and_its_code_is_not_retained_on_reopen(
     assert!(draft.lobby && !draft.confirm_direct && draft.expires_ms > NOW);
 
     let lobby = GuestLobby { entries: Vec::new(), ..snapshot(1, true) };
-    update(
-        &mut h,
-        GuestUpdate::Snapshot { room: draft.room.clone(), lobby: lobby.clone(), code: Some(GuestCode("ABCD".repeat(6))) },
-    );
+    update(&mut h, GuestUpdate::Snapshot { room: draft.room.clone(), lobby: lobby.clone(), code: Some(GuestCode("ABCD".repeat(6))) });
     h.get_by_label("Copy guest code");
     click(&mut h, "Hide guest code");
     assert!(h.query_by_label("Copy guest code").is_none());
@@ -185,10 +176,7 @@ fn creation_uses_the_expiring_guest_form_and_its_code_is_not_retained_on_reopen(
     assert_action(&mut h, GuestCommand::Open { room: ROOM.into(), meeting: MEETING });
     update(&mut h, GuestUpdate::Snapshot { room: ROOM.into(), lobby: lobby.clone(), code: None });
     assert!(h.query_by_label("Copy guest code").is_none());
-    update(
-        &mut h,
-        GuestUpdate::Snapshot { room: ROOM.into(), lobby, code: Some(GuestCode("ABCD".repeat(6))) },
-    );
+    update(&mut h, GuestUpdate::Snapshot { room: ROOM.into(), lobby, code: Some(GuestCode("ABCD".repeat(6))) });
     assert!(h.query_by_label("Copy guest code").is_none());
 }
 

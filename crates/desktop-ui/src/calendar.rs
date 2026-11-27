@@ -255,9 +255,7 @@ impl Window {
                         if ui.button("Schedule a meeting").clicked() {
                             self.new_meeting_form(None);
                         }
-                        if self.guest_lobby.available
-                            && ui.add_enabled(!self.guest_lobby.creating, Button::new("Schedule guest meeting")).clicked()
-                        {
+                        if self.guest_lobby.available && ui.add_enabled(!self.guest_lobby.creating, Button::new("Schedule guest meeting")).clicked() {
                             self.new_meeting_form(Some(GuestDraft { host_name: String::new(), expiry_days: 1 }));
                         }
                     }

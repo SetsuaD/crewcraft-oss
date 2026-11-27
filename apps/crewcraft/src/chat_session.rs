@@ -985,13 +985,7 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         self.receive_for(now_ms, local_minute, deadline, None)
     }
 
-    fn receive_for(
-        &mut self,
-        now_ms: u64,
-        local_minute: u16,
-        deadline: Instant,
-        guest_request: Option<u32>,
-    ) -> Result<Vec<ClientEvent>, ChatError> {
+    fn receive_for(&mut self, now_ms: u64, local_minute: u16, deadline: Instant, guest_request: Option<u32>) -> Result<Vec<ClientEvent>, ChatError> {
         let frame = self.read_frame(frame::MAX_FRAME, deadline)?;
         let events = self.session.receive(frame.as_bytes(), now_ms, local_minute).map_err(|error| {
             self.closed = true;

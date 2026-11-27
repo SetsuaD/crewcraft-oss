@@ -56,9 +56,11 @@ impl Panel {
     }
 
     fn update(&mut self, lobby: GuestLobby) -> Option<String> {
-        if self.snapshot.as_ref().is_some_and(|old| {
-            lobby.revision < old.revision || (self.phase == Phase::Changing && lobby.revision == old.revision)
-        }) {
+        if self
+            .snapshot
+            .as_ref()
+            .is_some_and(|old| lobby.revision < old.revision || (self.phase == Phase::Changing && lobby.revision == old.revision))
+        {
             return None;
         }
         if self.confirm.as_ref().is_some_and(|(revision, _)| *revision != lobby.revision) {
@@ -162,12 +164,8 @@ impl Panel {
                     if snapshot.lobby {
                         self.confirm = Some((snapshot.revision, Confirm::DirectEntry));
                     } else {
-                        command = Some(GuestCommand::SetLobby {
-                            meeting: self.meeting,
-                            revision: snapshot.revision,
-                            lobby: true,
-                            confirm_direct: false,
-                        });
+                        command =
+                            Some(GuestCommand::SetLobby { meeting: self.meeting, revision: snapshot.revision, lobby: true, confirm_direct: false });
                     }
                 }
                 if ui.add_enabled(ready, Button::new("Close guest link")).clicked() {
@@ -191,12 +189,7 @@ impl Panel {
                     ui.label(&entry.name);
                     ui.label(label);
                     let enabled = ready && self.confirm.is_none();
-                    let decide = |decision| GuestCommand::Decide {
-                        meeting: self.meeting,
-                        guest: entry.guest,
-                        revision: snapshot.revision,
-                        decision,
-                    };
+                    let decide = |decision| GuestCommand::Decide { meeting: self.meeting, guest: entry.guest, revision: snapshot.revision, decision };
                     match entry.state {
                         GuestState::Waiting => {
                             if ui.add_enabled(enabled, Button::new(format!("Admit {}", entry.name))).clicked() {
@@ -226,9 +219,8 @@ impl Panel {
 
 impl Window {
     pub(crate) fn reset_guest_lobby(&mut self) {
-        if self.guest_lobby.waiting.iter().any(|(room, waiting)| {
-            self.announcement.as_deref() == Some(waiting_announcement(room, *waiting).as_str())
-        }) {
+        if self.guest_lobby.waiting.iter().any(|(room, waiting)| self.announcement.as_deref() == Some(waiting_announcement(room, *waiting).as_str()))
+        {
             self.announcement = None;
         }
         let notice = self.guest_lobby.panel.as_mut().and_then(|panel| panel.notice.take());
