@@ -27,8 +27,8 @@ use crewcraft_proto::request::{
 };
 #[cfg(unix)]
 use crewcraft_server::control::{ControlClient, ControlSocket};
-use crewcraft_server::identity_config;
 use crewcraft_server::guest_lab;
+use crewcraft_server::identity_config;
 use crewcraft_server::lab_admin::{self, DisplayFailed, IssuedCode, ProtectedDisplay};
 use crewcraft_server::lab_installation::LabInstallation;
 use crewcraft_server::lab_runtime::LabRuntime;

@@ -85,11 +85,7 @@ fn decode_proof(authorization: Option<&[u8]>) -> Option<GuestProof> {
     }
     let (meeting, rest) = raw.split_first_chunk::<8>()?;
     let (guest, bearer) = rest.split_first_chunk::<8>()?;
-    Some(GuestProof {
-        meeting: u64::from_be_bytes(*meeting),
-        guest: u64::from_be_bytes(*guest),
-        bearer: GuestBearer(bearer.try_into().ok()?),
-    })
+    Some(GuestProof { meeting: u64::from_be_bytes(*meeting), guest: u64::from_be_bytes(*guest), bearer: GuestBearer(bearer.try_into().ok()?) })
 }
 
 fn parse_head(bytes: &[u8], authority: &str, origin: &str) -> Result<Option<(Head, usize)>, Problem> {

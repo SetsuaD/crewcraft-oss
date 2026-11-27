@@ -91,12 +91,7 @@ impl GuestLab {
     }
 
     /// Run until shutdown with separate TLS and HTTP I/O deadlines and a budget before either.
-    pub fn serve(
-        self,
-        shutdown: &AtomicBool,
-        rooms: Arc<Mutex<DurableServer>>,
-        now_ms: impl Fn() -> u64 + Send + Sync + 'static,
-    ) -> io::Result<()> {
+    pub fn serve(self, shutdown: &AtomicBool, rooms: Arc<Mutex<DurableServer>>, now_ms: impl Fn() -> u64 + Send + Sync + 'static) -> io::Result<()> {
         let Self { listener, authority, config } = self;
         let origin = format!("https://{authority}");
         let budget = Mutex::new(ConnectionBudget { expires: Instant::now(), total: 0, per_source: BTreeMap::new() });
