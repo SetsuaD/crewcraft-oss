@@ -28,7 +28,7 @@ fn window(size: [f32; 2]) -> Harness<'static, Window> {
     h
 }
 
-fn meeting(id: u64, version: u64, title: &str, state: MeetingState) -> Meeting {
+fn listed(id: u64, version: u64, title: &str, state: MeetingState) -> Meeting {
     Meeting {
         id,
         room: ROOM.into(),
@@ -96,7 +96,7 @@ fn a_scheduled_meeting_shows_up_in_the_week() {
 
     // The server saved it; the form closes and the week the worker reads next holds it.
     let saved =
-        Meeting { start_ms: *start_ms, duration: *duration, agenda: agenda.clone(), ..meeting(7, 1, "Weekly review", MeetingState::Scheduled) };
+        Meeting { start_ms: *start_ms, duration: *duration, agenda: agenda.clone(), ..listed(7, 1, "Weekly review", MeetingState::Scheduled) };
     h.state_mut().apply(Update::MeetingSaved { meeting: saved.clone() });
     h.state_mut().apply(week(vec![saved]));
     h.run();
@@ -119,7 +119,7 @@ fn a_form_that_cannot_be_saved_says_why_and_sends_nothing() {
 
 #[test]
 fn a_stale_edit_shows_the_conflict_and_keeps_the_typed_text_until_reload() {
-    let mut h = calendar(vec![meeting(7, 1, "Weekly review", MeetingState::Scheduled)]);
+    let mut h = calendar(vec![listed(7, 1, "Weekly review", MeetingState::Scheduled)]);
     h.get_by_label("Edit Weekly review").click();
     h.run();
     assert_eq!(field(&h, "Title"), "Weekly review");
@@ -147,7 +147,7 @@ fn a_stale_edit_shows_the_conflict_and_keeps_the_typed_text_until_reload() {
     h.get_by_label("Reload").click();
     h.run();
     assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::ListMeetings { weeks: 0 })]);
-    h.state_mut().apply(week(vec![meeting(7, 2, "Weekly sync", MeetingState::Scheduled)]));
+    h.state_mut().apply(week(vec![listed(7, 2, "Weekly sync", MeetingState::Scheduled)]));
     h.run();
     assert_eq!(field(&h, "Title"), "Weekly sync");
     assert!(h.query_by_label_contains("nothing was saved").is_none(), "the conflict is settled");
@@ -159,7 +159,7 @@ fn a_stale_edit_shows_the_conflict_and_keeps_the_typed_text_until_reload() {
 
 #[test]
 fn cancel_asks_first_and_the_cancelled_meeting_is_marked() {
-    let mut h = calendar(vec![meeting(7, 1, "Weekly review", MeetingState::Scheduled)]);
+    let mut h = calendar(vec![listed(7, 1, "Weekly review", MeetingState::Scheduled)]);
     h.get_by_label("Cancel Weekly review").click();
     h.run();
     assert!(h.state_mut().take_actions().is_empty(), "nothing is cancelled before the confirmation");
@@ -171,7 +171,7 @@ fn cancel_asks_first_and_the_cancelled_meeting_is_marked() {
     h.get_by_label("Yes, cancel the meeting").click();
     h.run();
     assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::CancelMeeting { room: ROOM.into(), meeting: 7, version: 1 })]);
-    h.state_mut().apply(week(vec![meeting(7, 2, "Weekly review", MeetingState::Cancelled)]));
+    h.state_mut().apply(week(vec![listed(7, 2, "Weekly review", MeetingState::Cancelled)]));
     h.run();
     h.get_by_label("Weekly review (cancelled)");
     assert!(h.query_by_label("Join Weekly review").is_none() && h.query_by_label("Edit Weekly review").is_none(), "a cancelled meeting is done");
@@ -179,7 +179,7 @@ fn cancel_asks_first_and_the_cancelled_meeting_is_marked() {
 
 #[test]
 fn join_sends_the_join_command_and_start_now_schedules_and_joins() {
-    let mut h = calendar(vec![meeting(7, 1, "Weekly review", MeetingState::InProgress)]);
+    let mut h = calendar(vec![listed(7, 1, "Weekly review", MeetingState::InProgress)]);
     h.get_by_label("In progress");
     assert!(h.query_by_label("Edit Weekly review").is_none(), "a meeting under way can no longer be edited");
     h.get_by_label("Join Weekly review").click();
@@ -205,7 +205,7 @@ fn a_phone_reaches_the_calendar_from_its_rooms() {
     h.get_by_label("Calendar").click();
     h.run();
     assert_eq!(h.state_mut().take_actions(), vec![Action::Room(Command::ListMeetings { weeks: 0 })]);
-    h.state_mut().apply(week(vec![meeting(7, 1, "Weekly review", MeetingState::Scheduled)]));
+    h.state_mut().apply(week(vec![listed(7, 1, "Weekly review", MeetingState::Scheduled)]));
     h.run();
     h.get_by_label("Join Weekly review");
     h.get_by_label("Next week").click();
