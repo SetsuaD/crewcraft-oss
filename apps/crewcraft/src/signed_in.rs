@@ -18,8 +18,8 @@ use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
 use crewcraft_proto::request::{
-    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_CONTINUE, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED,
-    FEATURE_REACTIONS, FEATURE_READ_STATE, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, Request, SavedMessage, SearchHit,
+    FEATURE_ACTIVITY, FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_CONTINUE, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS,
+    FEATURE_PINS_SAVED, FEATURE_REACTIONS, FEATURE_READ_STATE, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, Request, SavedMessage, SearchHit,
 };
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
 use sha2::{Digest, Sha256};
@@ -146,7 +146,8 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
             | FEATURE_READ_STATE
             | FEATURE_GAP_REPLAY
             | FEATURE_CONTINUE
-            | crewcraft_proto::request::FEATURE_ROOM_SETTINGS,
+            | crewcraft_proto::request::FEATURE_ROOM_SETTINGS
+            | FEATURE_ACTIVITY,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -174,7 +175,8 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
             | FEATURE_READ_STATE
             | FEATURE_GAP_REPLAY
             | FEATURE_CONTINUE
-            | crewcraft_proto::request::FEATURE_ROOM_SETTINGS,
+            | crewcraft_proto::request::FEATURE_ROOM_SETTINGS
+            | FEATURE_ACTIVITY,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -217,7 +219,8 @@ pub(crate) fn finish_external(
             | FEATURE_READ_STATE
             | FEATURE_GAP_REPLAY
             | FEATURE_CONTINUE
-            | crewcraft_proto::request::FEATURE_ROOM_SETTINGS,
+            | crewcraft_proto::request::FEATURE_ROOM_SETTINGS
+            | FEATURE_ACTIVITY,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -391,6 +394,18 @@ impl SignedInSession {
 
     pub fn read_states(&self) -> bool {
         self.chat.read_states()
+    }
+
+    pub fn activities(&self) -> bool {
+        self.chat.activities()
+    }
+
+    pub fn activity(&mut self, filter: crewcraft_proto::activity::ActivityFilter) -> Result<crewcraft_proto::activity::ActivitySnapshot, LabError> {
+        self.chat.activity(filter, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    pub fn mark_activity_seen(&mut self, through: u64) -> Result<u64, LabError> {
+        self.chat.mark_activity_seen(through, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
     }
 
     /// Mark a chosen message unread; zero asks the server for the newest live message written by somebody else.

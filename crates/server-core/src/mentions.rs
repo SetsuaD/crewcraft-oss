@@ -1,5 +1,25 @@
 //! @mentions in message text, for notifications. Task T104.
 
+/// Resolve existing mention tokens to current canonical members. Exact valid aliases retain their old meaning;
+/// otherwise an email local part must identify exactly one member (T347).
+pub(crate) fn resolve_tokens(tokens: impl IntoIterator<Item = String>, members: &[String]) -> Vec<String> {
+    let mut resolved = Vec::new();
+    for token in tokens {
+        let exact = members.iter().find(|member| **member == token);
+        let member = exact.or_else(|| {
+            let mut matches = members.iter().filter(|member| member.split_once('@').is_some_and(|(local, _)| local.eq_ignore_ascii_case(&token)));
+            let first = matches.next()?;
+            matches.next().is_none().then_some(first)
+        });
+        if let Some(member) = member
+            && !resolved.contains(member)
+        {
+            resolved.push(member.clone());
+        }
+    }
+    resolved
+}
+
 /// The names mentioned in `text`, lowercased, without duplicates, in first-seen order.
 ///
 /// - A mention is `@` followed by a run of 1 to 32 name characters: ASCII letters, digits, `_`, `.`, `-`. The run ends

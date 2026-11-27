@@ -187,7 +187,10 @@ mod tests {
         let message = server.post(&room, "owner", "body", 0).map_err(CurrentError::Storage)?;
         server.previews.insert(
             room.clone(),
-            BTreeMap::from([(message, CurrentMessage { author: "owner".into(), html: "x".repeat(MAX_HTML + 1), edited: false })]),
+            BTreeMap::from([(
+                message,
+                CurrentMessage { author: "owner".into(), html: "x".repeat(MAX_HTML + 1), edited: false, mention_tokens: Vec::new() },
+            )]),
         );
         assert_eq!(server.current(&room, "stranger", 1), Err(CurrentError::NoSuchRoom));
         assert_eq!(server.current("absent", "stranger", 1), Err(CurrentError::NoSuchRoom));

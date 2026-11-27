@@ -1,0 +1,46 @@
+{
+  "id": "T347-activity-feed",
+  "title": "Derive personal activity from live rooms and share seen state across devices",
+  "crate": "crewcraft-server",
+  "files": [
+    "docs/ACTIVITY.md",
+    "crates/proto/src/activity.rs",
+    "crates/proto/src/lib.rs",
+    "crates/proto/src/request.rs",
+    "crates/server-core/src/activity.rs",
+    "crates/server-core/src/calls.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/server-core/src/current.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/lib.rs",
+    "crates/server-core/src/mentions.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/client-core/src/client.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t347_activity_window.rs",
+    "crates/ui-model/src/lib.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs",
+    "apps/crewcraft-server/tests/t347_activity_feed.rs",
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t347_activity_feed.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t347_activity_feed",
+  "depends_on": [
+    "T340a-threads",
+    "T341a-reactions",
+    "T343-pins-saved",
+    "T360a1-call-records"
+  ],
+  "spec": "See docs/ACTIVITY.md. The negotiated Activity feed derives bounded personal references from accepted journal operations. It shows mentions of the account, replies in threads to that account's messages, reactions by others, and ended calls that person missed after joining the room. A reply mentioning the recipient is one item with both reasons. Query the current membership and current message before returning an item. Archives and retired memberships contribute no items. Deleted subjects and withdrawn reactions disappear, and current bookmarks drive the Saved filter. The badge and the Unread filter are derived from a personal seen watermark stored on advancement. ListActivity takes a filter and returns one bounded matched snapshot. MarkActivitySeen acknowledges the captured head without clearing newer items. The seen position is monotone and survives restart and another enrolled device. Activity is separate from room read state. Structured quotes need a separate stored source relation before they become an input to the feed.",
+  "status": "done",
+  "context": [
+    "docs/ACTIVITY.md",
+    "docs/REQUIREMENTS.md"
+  ]
+}

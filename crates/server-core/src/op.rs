@@ -16,6 +16,7 @@
 //! - tag 31 `MarkUnread` (task T344): `str slug | str user | u64 target`; the concrete live target selected at acceptance
 //! - tag 32 `RoomSetting` (task T346): `str slug | str user | u8 setting (1 pinned, 2 muted, 3 hidden) | u8 on (0 or
 //!   1)`; a person's own room setting, recorded only when it changed
+//! - tag 41 `MarkActivitySeen` (T347): `str user | u64 through`; private activity watermark only
 //! - tag 20 `ImportRoom` (task T350a): `str key | str name`
 //! - tag 21 `ImportMessage`: `str slug | str key | str author | u64 sent_ms | str text | u8 deleted (0 or 1) | u64 parent
 //!   (0 for none)`
@@ -56,6 +57,10 @@ pub const MAX_STR: usize = 1 << 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
+    MarkActivitySeen {
+        user: String,
+        through: u64,
+    },
     /// A room pin change, including stale unpin no-ops (task T343).
     Pin {
         slug: String,
@@ -242,6 +247,11 @@ pub enum Op {
 pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
     let mut out = Vec::new();
     match op {
+        Op::MarkActivitySeen { user, through } => {
+            out.push(MARK_ACTIVITY_SEEN);
+            encode_str(&mut out, user)?;
+            out.extend_from_slice(&through.to_be_bytes());
+        }
         Op::CreateRoom { owner, name } => {
             out.push(1);
             encode_str(&mut out, owner)?;
@@ -557,6 +567,14 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::RoomSetting { slug, user, setting, on })
         }
+        MARK_ACTIVITY_SEEN => {
+            let user = decode_str(bytes, &mut pos)?;
+            let through = decode_u64(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::MarkActivitySeen { user, through })
+        }
         MARK_UNREAD => {
             let slug = decode_str(bytes, &mut pos)?;
             let user = decode_str(bytes, &mut pos)?;
@@ -812,6 +830,7 @@ const PIN: u8 = 29;
 const SAVE_MESSAGE: u8 = 30;
 const MARK_UNREAD: u8 = 31;
 const ROOM_SETTING: u8 = 32;
+const MARK_ACTIVITY_SEEN: u8 = 41;
 /// The tag of `Op::Meeting` (task T370a).
 const MEETING: u8 = 40;
 
@@ -978,6 +997,20 @@ mod continuation_tests {
 #[cfg(test)]
 mod read_state_tests {
     use super::*;
+
+    #[test]
+    fn private_activity_seen_records_refuse_truncation_and_trailing_bytes() -> Result<(), CodecError> {
+        let op = Op::MarkActivitySeen { user: "reader@example.org".into(), through: 18 };
+        let bytes = encode_op(&op)?;
+        assert_eq!(decode_op(&bytes)?, op);
+        for end in 0..bytes.len() {
+            assert!(decode_op(&bytes[..end]).is_err());
+        }
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert_eq!(decode_op(&trailing), Err(CodecError::TrailingBytes));
+        Ok(())
+    }
 
     #[test]
     fn resolved_unread_records_refuse_truncated_and_trailing_bytes() -> Result<(), CodecError> {

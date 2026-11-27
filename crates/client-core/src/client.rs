@@ -15,6 +15,9 @@ use crate::notify::{Notify, Settings};
 use crate::requests::{Reply, Requests};
 use crate::timeline::Apply;
 
+/// The Activity selection shared with the I/O-free UI command model (T347).
+pub use crewcraft_proto::activity::ActivityFilter;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientEvent {
     /// A response frame, as `Requests::on_reply` matched it (`Done` or `Unknown`).
@@ -31,6 +34,8 @@ pub enum ClientEvent {
     Files { id: u32, files: Vec<ListedFile> },
     /// A page of the person's saved messages in their current state (T343).
     Saved { id: u32, page: SavedPage },
+    /// One bounded, current-membership Activity result matched to a request (T347).
+    Activity { id: u32, snapshot: crewcraft_proto::activity::ActivitySnapshot },
     /// One bounded current-state page; its framed byte count includes the four-byte length prefix (T345).
     Current { id: u32, page: crewcraft_proto::current::CurrentPage, framed_bytes: usize },
     /// The person's own settings for their rooms, answering `ListRoomSettings` request `id` (T346).
@@ -203,6 +208,9 @@ impl Client {
             } else if first == crewcraft_proto::current::CURRENT_TAG {
                 let (id, page) = crewcraft_proto::current::decode_page(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Current { id, page, framed_bytes: payload.len() + 4 });
+            } else if first == crewcraft_proto::activity::ACTIVITY_TAG {
+                let (id, snapshot) = crewcraft_proto::activity::decode_snapshot(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Activity { id, snapshot });
             } else if first == ID_TAG {
                 let (id, value) = decode_id(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Id { id, value });

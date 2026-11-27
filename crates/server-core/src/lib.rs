@@ -9,6 +9,7 @@ pub mod account_journal;
 pub mod account_op;
 pub mod account_store;
 pub mod activation;
+pub mod activity;
 pub mod admin;
 pub mod audit;
 pub mod calls;
