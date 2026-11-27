@@ -32,7 +32,7 @@ standard egui widgets that should work this way, with no test that proves it. "N
 |---|---|---|---|---|
 | Join from an invitation link, set up the authenticator | Fields are named from their labels (tested for the invitation link field: `t611k_enroll_way`) | Expected (Tab between fields, Enter on buttons); not tested | Not verified | Built-in high-contrast theme; the system setting is not followed |
 | Sign in | Named (tested: `t305_desktop_window`, `t611h_signin_button`) | Expected; not tested | Not verified | As above |
-| Choose a room, read messages | Room buttons are named (tested); messages are text rows; no announcement when a new message arrives | Room buttons take focus; after an unread action is confirmed, focus returns to the room button (tested: `t344_mark_unread_window`) | Not verified | As above |
+| Choose a room, read messages | Room buttons are named (tested); messages are text rows; image previews are images named by their file name (tested: `a11y_image_names`); no announcement when a new message arrives | Room buttons take focus; after an unread action is confirmed, focus returns to the room button (tested: `t344_mark_unread_window`) | Not verified | As above |
 | Send a message | The message box is named "Message" (tested) | Enter sends, Shift+Enter adds a line (tested: `t305_desktop_window`) | Not verified | As above |
 | Search, open a result | The search box is named (tested) | Enter searches; opening a result moves the window's focus to the message (tested: `t321_search_focus_window`). Whether that also moves egui's keyboard focus there is not verified | Not verified | As above |
 | Threads, reactions, edit and delete, pins | Controls are named (tested in their window tests) | Expected; not tested | Not verified | As above |
@@ -41,7 +41,7 @@ standard egui widgets that should work this way, with no test that proves it. "N
 ## What the apps do today
 
 - **Names.** Text fields are labelled through `labelled_by`, so their accessible name is their visible label
-  (`crates/desktop-ui/src/lib.rs`). Buttons carry their text as their name. The window tests find controls by these
+  (`crates/desktop-ui/src/lib.rs`). Buttons carry their text as their name. Image previews carry their file name. The window tests find controls by these
   names through the AccessKit tree: `get_by_label` and `query_by_label`, about 280 uses across `crates/desktop-ui/tests`
   and `apps/crewcraft/tests`.
 - **Real focus.** Where the window moves focus on purpose, it uses egui's `request_focus`, not only a highlight.
@@ -62,8 +62,9 @@ Each gap names the standard's rule it falls under. The "Known failures" items of
    a new message, a finished upload, a search result count, an error, "sent".
 2. **Drag-only file attachment** (rule 7, KF "an action that only works by dragging"). The composer says "Drop a file
    onto the window to attach it", and there is no button or file chooser.
-3. **Image previews have no name** (rule 5). The previews under messages (T333) are drawn as `egui::Image` with no
-   alternative text, so a screen reader meets an unnamed image. The file name is available and could be its name.
+3. **Closed: image previews are named** (rule 5). The previews under messages (T333) are image nodes whose name is
+   their file name, read back from the tree in `a11y_image_names`. The name is the file name only: CrewCraft has no
+   way yet for the sender to write a description of the picture.
 4. **System settings are not followed** (rule 6). The app follows the system's light or dark choice, but not its high
    contrast mode, text size or reduced motion setting. High contrast is a theme the person chooses. Text sizes come
    from the theme, and the app sets no zoom.
@@ -85,7 +86,7 @@ Each gap names the standard's rule it falls under. The "Known failures" items of
 ## Next steps, in order
 
 1. A button or file chooser that attaches a file without dragging (gap 2).
-2. Names for image previews, from the file name (gap 3).
+2. Done: names for image previews, from the file name (gap 3).
 3. A live region for new messages in the open room, sent messages, upload results and errors (gap 1).
 4. Esc and F6 behaviour, with kittest keyboard tests for join, sign-in, send and closing a pane (gaps 5 to 7).
 5. Follow the system's high contrast and text size settings (gap 4).
