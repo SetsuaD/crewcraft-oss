@@ -13,7 +13,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crewcraft_client_core::notify::Settings;
-use crewcraft_client_core::room_view::Shown;
+use crewcraft_client_core::room_view::{GuestLobbyState, Shown};
+use crewcraft_proto::guest::{GuestDecision, GuestLobby, GuestMeetingChange, GuestReply};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
@@ -160,7 +161,8 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
             | FEATURE_CONTINUE
             | crewcraft_proto::request::FEATURE_ROOM_SETTINGS
             | FEATURE_ACTIVITY
-            | crewcraft_proto::request::FEATURE_MEETINGS,
+            | crewcraft_proto::request::FEATURE_MEETINGS
+            | crewcraft_proto::request::FEATURE_GUEST_MEETINGS,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -190,7 +192,8 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
             | FEATURE_CONTINUE
             | crewcraft_proto::request::FEATURE_ROOM_SETTINGS
             | FEATURE_ACTIVITY
-            | crewcraft_proto::request::FEATURE_MEETINGS,
+            | crewcraft_proto::request::FEATURE_MEETINGS
+            | crewcraft_proto::request::FEATURE_GUEST_MEETINGS,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -235,7 +238,8 @@ pub(crate) fn finish_external(
             | FEATURE_CONTINUE
             | crewcraft_proto::request::FEATURE_ROOM_SETTINGS
             | FEATURE_ACTIVITY
-            | crewcraft_proto::request::FEATURE_MEETINGS,
+            | crewcraft_proto::request::FEATURE_MEETINGS
+            | crewcraft_proto::request::FEATURE_GUEST_MEETINGS,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -557,6 +561,37 @@ impl SignedInSession {
     /// Whether the server agreed to meetings and the calendar (task T370b).
     pub fn meetings(&self) -> bool {
         self.chat.meetings()
+    }
+
+    pub fn guest_meetings_offered(&self) -> bool {
+        self.chat.guest_meetings_offered()
+    }
+
+    pub fn guest_lobby_state(&mut self, room: &str) -> Option<GuestLobbyState> {
+        self.chat.guest_lobby_state(room)
+    }
+
+    pub(crate) fn forget_guest_lobby_room(&mut self, room: &str) {
+        self.chat.forget_guest_lobby_room(room);
+    }
+
+    pub fn guest_save(&mut self, change: GuestMeetingChange) -> Result<GuestReply, LabError> {
+        if matches!(&change, GuestMeetingChange::Create(draft) if !valid_room(&draft.room)) {
+            return Err(LabError::Usage);
+        }
+        self.chat.guest_save(change, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    pub fn guest_list(&mut self, meeting: u64) -> Result<GuestLobby, LabError> {
+        self.chat.guest_list(meeting, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    pub fn guest_close(&mut self, meeting: u64, revision: u64) -> Result<GuestLobby, LabError> {
+        self.chat.guest_close(meeting, revision, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    pub fn guest_decide(&mut self, meeting: u64, guest: u64, revision: u64, decision: GuestDecision) -> Result<GuestLobby, LabError> {
+        self.chat.guest_decide(meeting, guest, revision, decision, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
     }
 
     /// The meetings in my rooms that overlap the UTC window `from_ms` to `to_ms` (task T370b).

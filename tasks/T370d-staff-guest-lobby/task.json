@@ -1,0 +1,34 @@
+{
+  "id": "T370d-staff-guest-lobby",
+  "title": "Staff guest lobby and accessible waiting notices",
+  "crate": "crewcraft-server",
+  "files": [
+    "apps/crewcraft/src/app.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft-server/tests/t370d_guest_lobby.rs",
+    "crates/client-core/src/guest.rs",
+    "crates/desktop-ui/src/calendar.rs",
+    "crates/desktop-ui/src/guest_lobby.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t370d_guest_lobby_window.rs",
+    "crates/ui-model/src/guest.rs",
+    "crates/ui-model/src/lib.rs",
+    "docs/ACCESSIBILITY.md",
+    "docs/MEETINGS.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t370d_guest_lobby.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t370d_guest_lobby",
+  "depends_on": [
+    "T370b-calendar-app",
+    "T370c-guest-meetings"
+  ],
+  "spec": "Implement the staff lobby in docs/MEETINGS.md T370d. An enrolled staff connection negotiates the guest feature, correlates each confirmed lobby result, and consumes a fresh waiting snapshot even at the same chat cursor. Staff can create a guest meeting and deliberately copy its one-time code, view the roster, admit or decline waiting guests and remove admitted guests. Link closure and disabling the lobby require deliberate confirmation. A stale revision requires a new read and explicit decision. Announce an observed waiting increase without taking focus, keep baseline and reconnect notices quiet, and retain counts in muted rooms. Reset cached roster, count and code on loss of access or disconnect. Older staff servers keep their existing calendar workflow.",
+  "status": "done",
+  "context": [
+    "docs/MEETINGS.md",
+    "docs/ACCESSIBILITY.md",
+    "docs/REQUIREMENTS.md"
+  ]
+}

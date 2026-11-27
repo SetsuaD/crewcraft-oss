@@ -9,15 +9,19 @@
 //! in the form. A conflict (someone saved the meeting first) shows a notice and disables Save until the person chooses
 //! Reload, which shows the meeting as it is now; nothing is ever sent again on its own.
 
-use crewcraft_proto::meeting::{MAX_AGENDA, MAX_DURATION, MAX_TITLE, Meeting, MeetingState};
+use crewcraft_proto::guest::MAX_GUEST_NAME;
+use crewcraft_proto::meeting::{Audience, MAX_AGENDA, MAX_DURATION, MAX_TITLE, Meeting, MeetingState};
 use crewcraft_ui_model::Command;
-use egui::{Key, RichText, ScrollArea, TextEdit, Ui};
+use crewcraft_ui_model::guest::{GuestCommand, GuestMeetingDraft};
+use egui::{Button, ComboBox, Key, RichText, ScrollArea, TextEdit, Ui};
 
 use crate::{Action, Update, Window, utc_time};
 
 /// The length a new meeting starts with, in minutes.
 const DEFAULT_MINUTES: u16 = 30;
 const HOUR_MS: u64 = 60 * 60 * 1000;
+const DAY_MS: u64 = 24 * HOUR_MS;
+const GUEST_EXPIRY_DAYS: [u64; 3] = [1, 7, 14];
 
 /// The Calendar area's state.
 #[derive(Default)]
@@ -29,6 +33,8 @@ pub(crate) struct Calendar {
     form: Option<Form>,
     /// The meeting whose Cancel waits for a confirmation.
     confirm_cancel: Option<u64>,
+    /// Restore keyboard focus when leaving a lobby.
+    pub(crate) focus_lobby: Option<u64>,
 }
 
 /// A week as the worker last read it.
@@ -49,6 +55,7 @@ struct Form {
     start: String,
     minutes: String,
     agenda: String,
+    guest: Option<GuestDraft>,
     /// The server said someone saved the meeting first: Save waits for Reload.
     conflict: bool,
     /// Reload was asked for: the next week the worker sends refills the form.
@@ -57,6 +64,11 @@ struct Form {
     saving: bool,
     error: Option<String>,
     focus: bool,
+}
+
+struct GuestDraft {
+    host_name: String,
+    expiry_days: u64,
 }
 
 impl Form {
@@ -69,6 +81,7 @@ impl Form {
             start: start_text(meeting.start_ms),
             minutes: meeting.duration.to_string(),
             agenda: meeting.agenda.clone(),
+            guest: None,
             conflict: false,
             reloading: false,
             saving: false,
@@ -90,6 +103,7 @@ struct Checked {
 /// What the person did in the agenda or the form this frame.
 enum Pick {
     Join(String, u64),
+    Lobby(String, u64, String),
     Edit(Meeting),
     AskCancel(u64),
     Cancel(String, u64, u64),
@@ -98,6 +112,10 @@ enum Pick {
     StartNow,
     Reload,
     Discard,
+}
+
+fn expiry_label(days: u64) -> String {
+    if days == 1 { "1 day".to_owned() } else { format!("{days} days") }
 }
 
 /// `ms` as the form's start field writes it: `YYYY-MM-DD HH:MM`, UTC.
@@ -154,6 +172,15 @@ impl Window {
     /// Whether the Calendar area is open (T370b).
     pub fn calendar_open(&self) -> bool {
         self.calendar.open
+    }
+
+    pub(crate) fn close_calendar(&mut self) {
+        self.close_guest_lobby();
+        if self.calendar.clear_guest_form() {
+            self.actions.push(Action::Room(Command::GuestLobby(GuestCommand::ClosePanel)));
+        }
+        self.calendar.focus_lobby = None;
+        self.calendar.open = false;
     }
 
     /// A week, a saved meeting or a refusal from the worker.
@@ -214,23 +241,35 @@ impl Window {
         egui::Panel::top("crewcraft-calendar-header").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.heading("Calendar");
-                if ui.button("Previous week").clicked() {
-                    weeks = Some(self.calendar.weeks - 1);
-                }
-                if ui.button("This week").clicked() {
-                    weeks = Some(0);
-                }
-                if ui.button("Next week").clicked() {
-                    weeks = Some(self.calendar.weeks + 1);
-                }
-                if self.calendar.form.is_none() && ui.button("Schedule a meeting").clicked() {
-                    self.new_meeting_form();
+                if self.guest_lobby.panel.is_none() {
+                    if ui.button("Previous week").clicked() {
+                        weeks = Some(self.calendar.weeks - 1);
+                    }
+                    if ui.button("This week").clicked() {
+                        weeks = Some(0);
+                    }
+                    if ui.button("Next week").clicked() {
+                        weeks = Some(self.calendar.weeks + 1);
+                    }
+                    if self.calendar.form.is_none() {
+                        if ui.button("Schedule a meeting").clicked() {
+                            self.new_meeting_form(None);
+                        }
+                        if self.guest_lobby.available
+                            && ui.add_enabled(!self.guest_lobby.creating, Button::new("Schedule guest meeting")).clicked()
+                        {
+                            self.new_meeting_form(Some(GuestDraft { host_name: String::new(), expiry_days: 1 }));
+                        }
+                    }
                 }
                 if ui.button("Close calendar").clicked() {
-                    self.calendar.open = false;
+                    self.close_calendar();
                 }
             });
         });
+        if !self.calendar.open {
+            return;
+        }
         if let Some(weeks) = weeks {
             self.calendar.weeks = weeks;
             self.calendar.confirm_cancel = None;
@@ -238,6 +277,10 @@ impl Window {
         }
         egui::CentralPanel::default_margins().show(ui, |ui| {
             ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                if self.guest_lobby.panel.is_some() {
+                    self.guest_lobby_ui(ui);
+                    return;
+                }
                 let pick = if self.calendar.form.is_some() { self.meeting_form_ui(ui) } else { self.agenda_ui(ui) };
                 if let Some(pick) = pick {
                     self.calendar_pick(pick);
@@ -246,7 +289,7 @@ impl Window {
         });
     }
 
-    fn new_meeting_form(&mut self) {
+    fn new_meeting_form(&mut self, guest: Option<GuestDraft>) {
         let start = self.calendar.week.as_ref().map(|week| start_text((week.now_ms / HOUR_MS + 1) * HOUR_MS)).unwrap_or_default();
         let room = self.rooms.selected().map(str::to_owned).or_else(|| self.rooms.rows().first().map(|row| row.name.clone())).unwrap_or_default();
         self.calendar.form = Some(Form {
@@ -257,6 +300,7 @@ impl Window {
             start,
             minutes: DEFAULT_MINUTES.to_string(),
             agenda: String::new(),
+            guest,
             conflict: false,
             reloading: false,
             saving: false,
@@ -316,6 +360,16 @@ impl Window {
                     if !cancelled && ui.button(format!("Join {}", meeting.title)).clicked() {
                         pick = Some(Pick::Join(meeting.room.clone(), meeting.id));
                     }
+                    if self.guest_lobby.available && !cancelled && meeting.audience == Audience::Guests {
+                        let lobby = ui.button(format!("Lobby {}", meeting.title));
+                        if self.calendar.focus_lobby == Some(meeting.id) {
+                            lobby.request_focus();
+                            self.calendar.focus_lobby = None;
+                        }
+                        if lobby.clicked() {
+                            pick = Some(Pick::Lobby(meeting.room.clone(), meeting.id, meeting.title.clone()));
+                        }
+                    }
                     if meeting.state == MeetingState::Scheduled {
                         if ui.button(format!("Edit {}", meeting.title)).clicked() {
                             pick = Some(Pick::Edit(meeting.clone()));
@@ -333,29 +387,52 @@ impl Window {
     fn meeting_form_ui(&mut self, ui: &mut Ui) -> Option<Pick> {
         let form = self.calendar.form.as_mut()?;
         let mut pick = None;
-        ui.heading(if form.meeting == 0 { "Schedule a meeting" } else { "Edit the meeting" });
+        ui.heading(if form.guest.is_some() {
+            "Schedule guest meeting"
+        } else if form.meeting == 0 {
+            "Schedule a meeting"
+        } else {
+            "Edit the meeting"
+        });
+        let edit = form.guest.is_none() || !form.saving;
         // Enter in any one-line field saves, as Save does (T370b2); the agenda takes several lines.
         let mut fields = Vec::new();
         if form.meeting == 0 {
             let label = ui.label("Room");
-            fields.push(ui.add(TextEdit::singleline(&mut form.room).desired_width(320.0)).labelled_by(label.id));
+            fields.push(ui.add(TextEdit::singleline(&mut form.room).desired_width(320.0).interactive(edit)).labelled_by(label.id));
         } else {
             ui.label(format!("Room: {}", form.room));
         }
         let label = ui.label("Title");
-        let title = ui.add(TextEdit::singleline(&mut form.title).desired_width(320.0)).labelled_by(label.id);
+        let title = ui.add(TextEdit::singleline(&mut form.title).desired_width(320.0).interactive(edit)).labelled_by(label.id);
         if form.focus {
             title.request_focus();
             form.focus = false;
         }
         fields.push(title);
         let label = ui.label("Start (UTC, YYYY-MM-DD HH:MM)");
-        fields.push(ui.add(TextEdit::singleline(&mut form.start).desired_width(320.0)).labelled_by(label.id));
+        fields.push(ui.add(TextEdit::singleline(&mut form.start).desired_width(320.0).interactive(edit)).labelled_by(label.id));
         let label = ui.label("Length in minutes");
-        fields.push(ui.add(TextEdit::singleline(&mut form.minutes).desired_width(80.0)).labelled_by(label.id));
-        let enter = fields.iter().any(|field| field.lost_focus()) && ui.input(|input| input.key_pressed(Key::Enter));
+        fields.push(ui.add(TextEdit::singleline(&mut form.minutes).desired_width(80.0).interactive(edit)).labelled_by(label.id));
         let label = ui.label("Agenda");
-        ui.add(TextEdit::multiline(&mut form.agenda).desired_rows(4).desired_width(f32::INFINITY)).labelled_by(label.id);
+        ui.add(TextEdit::multiline(&mut form.agenda).desired_rows(4).desired_width(f32::INFINITY).interactive(edit)).labelled_by(label.id);
+        if let Some(guest) = &mut form.guest {
+            let label = ui.label("Host name");
+            fields.push(ui.add(TextEdit::singleline(&mut guest.host_name).desired_width(320.0).interactive(edit)).labelled_by(label.id));
+            let label = ui.label("Link expires after");
+            ui.add_enabled_ui(edit, |ui| {
+                ComboBox::from_id_salt("guest-link-expiry")
+                    .selected_text(expiry_label(guest.expiry_days))
+                    .show_ui(ui, |ui| {
+                        for days in GUEST_EXPIRY_DAYS {
+                            ui.selectable_value(&mut guest.expiry_days, days, expiry_label(days));
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+            });
+        }
+        let enter = fields.iter().any(|field| field.lost_focus()) && ui.input(|input| input.key_pressed(Key::Enter));
         if form.conflict {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
@@ -376,7 +453,7 @@ impl Window {
             if ui.add_enabled(ready, egui::Button::new("Save")).clicked() {
                 pick = Some(Pick::Save);
             }
-            if form.meeting == 0 && ui.add_enabled(ready, egui::Button::new("Start now")).clicked() {
+            if form.meeting == 0 && form.guest.is_none() && ui.add_enabled(ready, egui::Button::new("Start now")).clicked() {
                 pick = Some(Pick::StartNow);
             }
             if ui.button("Discard changes").clicked() {
@@ -390,6 +467,7 @@ impl Window {
         let start_now = matches!(pick, Pick::StartNow);
         match pick {
             Pick::Join(room, meeting) => self.actions.push(Action::Room(Command::JoinMeeting { room, meeting })),
+            Pick::Lobby(room, meeting, title) => self.open_guest_lobby(room, meeting, title),
             Pick::Edit(meeting) => {
                 self.calendar.form = Some(Form::of(&meeting));
                 self.calendar.confirm_cancel = None;
@@ -400,7 +478,12 @@ impl Window {
                 self.calendar.confirm_cancel = None;
                 self.actions.push(Action::Room(Command::CancelMeeting { room, meeting, version }));
             }
-            Pick::Discard => self.calendar.form = None,
+            Pick::Discard => {
+                if self.calendar.clear_guest_form() {
+                    self.actions.push(Action::Room(Command::GuestLobby(GuestCommand::ClosePanel)));
+                }
+                self.calendar.form = None;
+            }
             Pick::Reload => {
                 if let Some(form) = self.calendar.form.as_mut() {
                     form.reloading = true;
@@ -408,10 +491,38 @@ impl Window {
                 self.actions.push(Action::Room(Command::ListMeetings { weeks: self.calendar.weeks }));
             }
             Pick::Save | Pick::StartNow => {
+                let now_ms = self.calendar.week.as_ref().map(|week| week.now_ms);
                 let Some(form) = self.calendar.form.as_mut() else { return };
                 match check(form) {
                     Err(error) => form.error = Some(error),
                     Ok(Checked { room, start_ms, duration, title, agenda }) => {
+                        if let Some(guest) = &form.guest {
+                            let host_name = guest.host_name.trim();
+                            if !(1..=MAX_GUEST_NAME).contains(&host_name.chars().count()) || host_name.chars().any(char::is_control) {
+                                form.error = Some(format!("Enter a host name of 1 to {MAX_GUEST_NAME} characters."));
+                                return;
+                            }
+                            let Some(expires_ms) = now_ms.and_then(|now| now.checked_add(guest.expiry_days * DAY_MS)) else {
+                                form.error = Some("Reload the calendar to calculate the link expiry.".to_owned());
+                                return;
+                            };
+                            let draft = GuestMeetingDraft {
+                                room,
+                                start_ms,
+                                duration,
+                                title,
+                                agenda,
+                                host_name: host_name.to_owned(),
+                                expires_ms,
+                                lobby: true,
+                                confirm_direct: false,
+                            };
+                            form.error = None;
+                            form.saving = true;
+                            self.guest_lobby.creating = true;
+                            self.actions.push(Action::Room(Command::GuestLobby(GuestCommand::Create(draft))));
+                            return;
+                        }
                         form.error = None;
                         form.saving = true;
                         let command = if start_now {
@@ -424,6 +535,29 @@ impl Window {
                 }
             }
         }
+    }
+}
+
+impl Calendar {
+    pub(crate) fn clear_guest_form(&mut self) -> bool {
+        if self.form.as_ref().is_some_and(|form| form.guest.is_some()) {
+            return self.form.take().is_some_and(|form| form.saving);
+        }
+        false
+    }
+
+    pub(crate) fn finish_guest_creation(&mut self, room: &str) -> Option<String> {
+        let form = self.form.as_ref().filter(|form| form.guest.is_some() && form.saving && form.room.trim() == room)?;
+        let title = form.title.trim().to_owned();
+        self.form = None;
+        Some(title)
+    }
+
+    pub(crate) fn refuse_guest_creation(&mut self, reason: &str) -> bool {
+        let Some(form) = self.form.as_mut().filter(|form| form.guest.is_some() && form.saving) else { return false };
+        form.saving = false;
+        form.error = Some(reason.to_owned());
+        true
     }
 }
 
