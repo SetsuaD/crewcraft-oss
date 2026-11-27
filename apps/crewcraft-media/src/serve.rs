@@ -45,11 +45,13 @@ fn handle(server: &mut MediaServer, request: Request, now: Instant) {
             // The asker may have given up waiting; the answer is then dropped.
             let _ = reply.send(server.join(call, &credential, &offer, now, wall_ms()));
         }
-        Request::DropPerson { call, person } => {
+        Request::DropPerson { call, person, applied } => {
             server.drop_person(call, &person);
+            let _ = applied.send(());
         }
-        Request::EndCall { call } => {
+        Request::EndCall { call, applied } => {
             server.end_call(call);
+            let _ = applied.send(());
         }
     }
 }

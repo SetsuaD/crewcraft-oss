@@ -5,7 +5,7 @@
 //! refused, and running the command again replaces the files.
 #![allow(clippy::unwrap_used, clippy::panic)]
 
-use std::io::Write;
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,7 +16,7 @@ use crewcraft_media::config::ControlSettings;
 use crewcraft_media::intake::{self, Intake, Request};
 use crewcraft_media_server::control::{ControlListener, tls_config};
 use crewcraft_proto::frame::{encode, read_frame};
-use crewcraft_proto::media_control::{ControlMessage, MAX_CONTROL_MESSAGE, encode_control};
+use crewcraft_proto::media_control::{ControlMessage, MAX_CONTROL_MESSAGE, decode_control, encode_control};
 use crewcraft_server::media_link::{self, CHAT_LINK_FILES, MEDIA_LINK_FILES};
 use crewcraft_server_core::durable::DurableServer;
 use crewcraft_server_core::room::Role;
@@ -126,7 +126,10 @@ fn the_issued_pair_completes_the_link_and_another_ca_is_refused() {
         std::thread::spawn(move || link.run(&|| chat_stop.load(Ordering::Acquire), &rooms, &now_ms))
     };
     match next_request(&mut requests, Duration::from_secs(10)) {
-        Some(Request::DropPerson { call: dropped, person }) => assert_eq!((dropped, person.as_str()), (call, BO)),
+        Some(Request::DropPerson { call: dropped, person, applied }) => {
+            assert_eq!((dropped, person.as_str()), (call, BO));
+            applied.send(()).unwrap();
+        }
         _ => panic!("the event did not cross the link made of the issued certificates"),
     }
     chat_stop.store(true, Ordering::Release);
@@ -153,6 +156,54 @@ fn the_issued_pair_completes_the_link_and_another_ca_is_refused() {
     media_link::issue_link(&chat, &media, MEDIA, now_ms()).unwrap();
     assert_ne!(read(&media, MEDIA_LINK_FILES[0]), before, "rotation replaced the media server's certificate");
     assert!(!media.join(format!("{}.new", MEDIA_LINK_FILES[0])).exists(), "no half-written file is left");
+
+    stop.store(true, Ordering::Release);
+    listener.join();
+}
+
+#[test]
+fn removal_acks_wait_for_the_media_loop_to_apply_each_event() {
+    let files = Scratch::new("removal-ack");
+    let (chat, media) = (files.path("chat"), files.path("media"));
+    media_link::issue_link(&chat, &media, MEDIA, now_ms()).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (handle, mut requests) = intake::channel();
+    let control = control_settings();
+    let listener = ControlListener::start(control.listen, tls_config(&media, &control).unwrap(), handle, stop.clone()).unwrap();
+    let read = |name: &str| std::fs::read(chat.join(name)).unwrap();
+    let roots = crewcraft_tls::pem::roots(&read(CHAT_LINK_FILES[0])).unwrap();
+    let identity = crewcraft_tls::pem::identity(&read(CHAT_LINK_FILES[1]), &read(CHAT_LINK_FILES[2])).unwrap();
+    let timeout = Duration::from_secs(5);
+    let tcp = TcpStream::connect_timeout(&listener.local_addr(), timeout).unwrap();
+    tcp.set_read_timeout(Some(timeout)).unwrap();
+    tcp.set_write_timeout(Some(timeout)).unwrap();
+    let mut client = crewcraft_tls::connect(tcp, crewcraft_tls::client_config(roots, Some(identity)).unwrap(), MEDIA.try_into().unwrap()).unwrap();
+
+    let call = 42;
+    for event in [ControlMessage::DropPerson { seq: 7, call, person: BO.to_owned() }, ControlMessage::EndCall { seq: 8, call }] {
+        client.write_all(&encode(&encode_control(&event).unwrap()).unwrap()).unwrap();
+        client.flush().unwrap();
+        let (seq, applied) = match (event, next_request(&mut requests, timeout)) {
+            (ControlMessage::DropPerson { seq, call, person }, Some(Request::DropPerson { call: dropped, person: who, applied })) => {
+                assert_eq!((dropped, who), (call, person));
+                (seq, applied)
+            }
+            (ControlMessage::EndCall { seq, call }, Some(Request::EndCall { call: ended, applied })) => {
+                assert_eq!(ended, call);
+                (seq, applied)
+            }
+            (event, _) => panic!("the media loop did not receive {event:?}"),
+        };
+
+        // Keep the confirmation pending after the request reaches intake. Any wire byte before it is premature.
+        client.sock.set_read_timeout(Some(Duration::from_millis(250))).unwrap();
+        let pending = client.read(&mut [0]);
+        assert!(matches!(&pending, Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)), "ack {seq}: {pending:?}");
+        client.sock.set_read_timeout(Some(timeout)).unwrap();
+        applied.send(()).unwrap();
+        let frame = read_frame(&mut client, MAX_CONTROL_MESSAGE).unwrap().unwrap();
+        assert_eq!(decode_control(frame.payload()).unwrap(), ControlMessage::Ack { seq });
+    }
 
     stop.store(true, Ordering::Release);
     listener.join();

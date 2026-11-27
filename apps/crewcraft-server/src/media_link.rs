@@ -5,8 +5,9 @@
 //! Owns: reading `media.toml` ([`parse`], [`load`]), the media key (made at the first start, owner-only, with its
 //! public half beside it for the media server's `chat-server-key`), and [`MediaLink::run`]: every tick it sweeps the
 //! calls (so a stopped heartbeat drops someone without waiting for traffic), takes the core's `MediaEvent`s and sends
-//! them over mutual TLS, each until the media server acknowledges it; a broken connection is made again and the
-//! unacknowledged events sent again. Called by: `main.rs` (`serve`) and `lab_runtime` (the thread beside the listener).
+//! them over mutual TLS. A reconnect within this process resends unacknowledged events before dispatching guest
+//! offers. A chat server restart still reconstructs removed guests from durable state for open calls.
+//! Called by: `main.rs` (`serve`) and `lab_runtime` (the thread beside the listener).
 //!
 //! ```toml
 //! [media]
@@ -32,7 +33,7 @@ use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::Path;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -65,6 +66,8 @@ const TICK: Duration = Duration::from_millis(50);
 const RETRY: Duration = Duration::from_secs(1);
 /// How long connecting, sending one event or waiting for its acknowledgement may take.
 const PATIENCE: Duration = Duration::from_secs(5);
+/// How long an offer can wait for its answer, including a guest waiting behind pending drops.
+const JOIN_WAIT: Duration = PATIENCE.saturating_mul(3);
 
 /// `media.toml`, checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +190,7 @@ struct JoinRequest {
     admission: JoinAdmission,
     offer: String,
     reply: Sender<Result<String, RelayRefusal>>,
+    deadline: Instant,
 }
 
 enum JoinAdmission {
@@ -200,19 +204,33 @@ struct AuthorizedJoin {
     guest: Option<GuestProof>,
 }
 
-impl JoinAdmission {
-    fn authorize(self, rooms: &Mutex<DurableServer>, now_ms: &dyn Fn() -> u64) -> Result<AuthorizedJoin, RelayRefusal> {
-        match self {
-            Self::Staff { call, credential } => Ok(AuthorizedJoin { call, credential, guest: None }),
-            Self::Guest { peer, proof } => {
-                let mut rooms = rooms.lock().map_err(|_| RelayRefusal::Unavailable)?;
-                let media = rooms.guest_entrance(now_ms).media(peer, &proof).map_err(|error| match error {
-                    GuestError::MediaUnavailable | GuestError::Durable(_) => RelayRefusal::Unavailable,
-                    _ => RelayRefusal::Refused(REFUSED_CREDENTIAL),
-                })?;
-                Ok(AuthorizedJoin { call: media.call, credential: media.credential, guest: Some(proof) })
+struct PendingMedia {
+    waiting: VecDeque<(u64, MediaEvent)>,
+    next_seq: u64,
+    overflowed: bool,
+}
+
+impl PendingMedia {
+    fn next(&mut self) -> u64 {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        seq
+    }
+
+    fn collect(&mut self, rooms: &mut DurableServer, now: u64) -> bool {
+        let swept_guests = rooms.sweep_guest_links(now).is_ok();
+        let swept_calls = rooms.sweep_calls(now).is_ok();
+        let events = rooms.take_media_events();
+        // The room store and the link each bound their queues. A full room-store batch may already have lost a drop.
+        self.overflowed |= events.len() >= MAX_MEDIA_EVENTS || self.waiting.len() + events.len() > MAX_MEDIA_EVENTS;
+        for event in events {
+            if self.waiting.len() >= MAX_MEDIA_EVENTS {
+                self.waiting.pop_front();
             }
+            let seq = self.next();
+            self.waiting.push_back((seq, event));
         }
+        swept_guests && swept_calls
     }
 }
 
@@ -240,10 +258,9 @@ impl MediaRelayHandle {
 
     fn submit(&self, admission: JoinAdmission, offer: &str) -> Result<String, RelayRefusal> {
         let (reply, answer) = mpsc::channel();
-        let request = JoinRequest { admission, offer: offer.to_owned(), reply };
+        let request = JoinRequest { admission, offer: offer.to_owned(), reply, deadline: Instant::now() + JOIN_WAIT };
         self.joins.send(request).map_err(|_| RelayRefusal::Unavailable)?;
-        // Connecting and the exchange each take at most PATIENCE; the link may be busy with one event first.
-        answer.recv_timeout(PATIENCE * 3).unwrap_or(Err(RelayRefusal::Unavailable))
+        answer.recv_timeout(JOIN_WAIT).unwrap_or(Err(RelayRefusal::Unavailable))
     }
 }
 
@@ -268,32 +285,63 @@ impl MediaLink {
         decode_control(frame.payload()).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))
     }
 
-    /// Relay `join` as message `seq` and send back the answer. A join is never sent twice (its credential admits once):
-    /// a broken connection is `Unavailable`, and the person sends a new offer with a new credential.
-    fn relay_join(&self, control: &mut Option<Control>, seq: u64, join: JoinRequest, rooms: &Mutex<DurableServer>, now_ms: &dyn Fn() -> u64) {
-        if control.is_none() {
-            *control = self.connect().ok();
+    /// A queued guest waits for the link and the media loop's acknowledgements before it is authorized.
+    /// Once sent, a join is never retried: its credential admits once.
+    fn relay_join(
+        control: &mut Option<Control>,
+        pending: &mut PendingMedia,
+        join: JoinRequest,
+        rooms: &Mutex<DurableServer>,
+        now_ms: &dyn Fn() -> u64,
+    ) -> Option<JoinRequest> {
+        let is_guest = matches!(&join.admission, JoinAdmission::Guest { .. });
+        if is_guest && (Instant::now() >= join.deadline || pending.overflowed) {
+            let _ = join.reply.send(Err(RelayRefusal::Unavailable));
+            return None;
         }
-        let JoinRequest { admission, offer, reply } = join;
         let Some(connected) = control.as_mut() else {
-            let _ = reply.send(Err(RelayRefusal::Unavailable));
-            return;
+            if is_guest {
+                return Some(join);
+            }
+            let _ = join.reply.send(Err(RelayRefusal::Unavailable));
+            return None;
         };
-        if matches!(&admission, JoinAdmission::Guest { .. })
-            && connected.conn.is_handshaking()
-            && connected.conn.complete_io(&mut connected.sock).is_err()
-        {
+        if is_guest && connected.conn.is_handshaking() && connected.conn.complete_io(&mut connected.sock).is_err() {
             *control = None;
-            let _ = reply.send(Err(RelayRefusal::Unavailable));
-            return;
+            return Some(join);
         }
-        let AuthorizedJoin { call, credential, guest } = match admission.authorize(rooms, now_ms) {
-            Ok(admitted) => admitted,
-            Err(refusal) => {
-                let _ = reply.send(Err(refusal));
-                return;
+        let JoinRequest { admission, offer, reply, deadline } = join;
+        let AuthorizedJoin { call, credential, guest } = match admission {
+            JoinAdmission::Staff { call, credential } => AuthorizedJoin { call, credential, guest: None },
+            JoinAdmission::Guest { peer, proof } => {
+                // A drop may have committed while the link waited for this offer, connected, or waited for an ACK.
+                // Sample again under the same room lock as authorization. The socket runs without that lock.
+                let Ok(mut rooms) = rooms.lock() else {
+                    let _ = reply.send(Err(RelayRefusal::Unavailable));
+                    return None;
+                };
+                let now = now_ms();
+                if !pending.collect(&mut rooms, now) || pending.overflowed || Instant::now() >= deadline {
+                    let _ = reply.send(Err(RelayRefusal::Unavailable));
+                    return None;
+                }
+                if !pending.waiting.is_empty() {
+                    return Some(JoinRequest { admission: JoinAdmission::Guest { peer, proof }, offer, reply, deadline });
+                }
+                match rooms.guest_entrance(|| now).media(peer, &proof) {
+                    Ok(media) => AuthorizedJoin { call: media.call, credential: media.credential, guest: Some(proof) },
+                    Err(error) => {
+                        let refusal = match error {
+                            GuestError::MediaUnavailable | GuestError::Durable(_) => RelayRefusal::Unavailable,
+                            _ => RelayRefusal::Refused(REFUSED_CREDENTIAL),
+                        };
+                        let _ = reply.send(Err(refusal));
+                        return None;
+                    }
+                }
             }
         };
+        let seq = pending.next();
         let message = ControlMessage::Join { seq, call, credential, offer };
         let answer = match Self::exchange(connected, &message) {
             Ok(ControlMessage::JoinAnswer { seq: answered, answer }) if answered == seq => Ok(answer),
@@ -309,7 +357,7 @@ impl MediaLink {
                 // room lock during the network exchange.
                 let Ok(mut rooms) = rooms.lock() else {
                     let _ = reply.send(Err(RelayRefusal::Unavailable));
-                    return;
+                    return None;
                 };
                 let now = now_ms();
                 let answer = match rooms.sweep_calls(now) {
@@ -324,6 +372,7 @@ impl MediaLink {
                 let _ = reply.send(answer);
             }
         }
+        None
     }
 
     fn connect(&self) -> io::Result<Control> {
@@ -350,49 +399,59 @@ impl MediaLink {
     /// participants' offers as they come (task T360b6).
     pub fn run(&self, stopped: &dyn Fn() -> bool, rooms: &Mutex<DurableServer>, now_ms: &dyn Fn() -> u64) {
         let Ok(joins) = self.joins.lock() else { return };
-        let mut waiting: VecDeque<(u64, MediaEvent)> = VecDeque::new();
-        let mut next_seq: u64 = 1;
+        let mut pending = PendingMedia { waiting: VecDeque::new(), next_seq: 1, overflowed: false };
+        let mut next_join: Option<JoinRequest> = None;
+        let mut deferred_guests = VecDeque::new();
         let mut control: Option<Control> = None;
         let mut retry_at = Instant::now();
         while !stopped() {
             {
                 let Ok(mut rooms) = rooms.lock() else { return };
                 // A failed sweep is the journal failing; the listener's own requests report that.
-                let now = now_ms();
-                let _ = rooms.sweep_guest_links(now);
-                let _ = rooms.sweep_calls(now);
-                for event in rooms.take_media_events() {
-                    if waiting.len() >= MAX_MEDIA_EVENTS {
-                        waiting.pop_front();
-                    }
-                    waiting.push_back((next_seq, event));
-                    next_seq += 1;
-                }
+                pending.collect(&mut rooms, now_ms());
             }
-            if !waiting.is_empty() && control.is_none() && Instant::now() >= retry_at {
+            let join = next_join.take().or_else(|| deferred_guests.pop_front());
+            let staff_offer = join.as_ref().is_some_and(|join| matches!(&join.admission, JoinAdmission::Staff { .. }));
+            let needs_ordered_link = !pending.waiting.is_empty() || (join.is_some() && !staff_offer);
+            if control.is_none() && needs_ordered_link && Instant::now() >= retry_at {
                 match self.connect() {
                     Ok(connected) => control = Some(connected),
                     Err(_) => retry_at = Instant::now() + RETRY,
                 }
             }
             if let Some(connected) = control.as_mut() {
-                while let Some((seq, event)) = waiting.front() {
+                while let Some((seq, event)) = pending.waiting.front() {
+                    if stopped() {
+                        return;
+                    }
                     if Self::send(connected, *seq, event).is_err() {
                         control = None;
                         retry_at = Instant::now() + RETRY;
                         break;
                     }
-                    waiting.pop_front();
+                    pending.waiting.pop_front();
                 }
             }
-            // Wait for an offer until the next tick: offers go out at once, not on the tick.
-            match joins.recv_timeout(TICK) {
-                Ok(join) => {
-                    self.relay_join(&mut control, next_seq, join, rooms, now_ms);
-                    next_seq += 1;
-                }
-                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {}
+            if staff_offer && control.is_none() {
+                // Preserve the existing staff attempt after an event delivery fails.
+                control = self.connect().ok();
             }
+            if let Some(join) = join {
+                let was_connected = control.is_some();
+                let deferred = Self::relay_join(&mut control, &mut pending, join, rooms, now_ms);
+                if control.is_none() && was_connected {
+                    retry_at = Instant::now() + RETRY;
+                }
+                if let Some(guest) = deferred {
+                    if deferred_guests.len() == JOIN_QUEUE {
+                        let _ = guest.reply.send(Err(RelayRefusal::Unavailable));
+                    } else {
+                        deferred_guests.push_back(guest);
+                    }
+                }
+            }
+            // Accept fresh offers even when an earlier guest is waiting for acknowledgements.
+            next_join = joins.recv_timeout(TICK).ok();
         }
     }
 }

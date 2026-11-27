@@ -160,6 +160,13 @@ sent twice: its credential admits once. client-core reports the credential (`Cli
 (`ClientEvent::Answer`). The app's call stage and audio devices are not wired yet (they wait on the audio input and
 output decision).
 
+**Guest offers and removal acknowledgements.** The chat relay keeps the guest proof until dispatch and verifies
+current admission before it issues a media credential. It checks the live link and call again before it returns
+an answer. The media peer acknowledges a removal once its serving loop has applied it. If the control connection
+breaks, the chat relay retries outstanding removals and waits for acknowledgements before forwarding a guest offer.
+A complete control-link outage can delay removal of an existing media session. The reconnect guarantee applies to
+the running chat relay with the updated media peer.
+
 ## Audio (T360e) and video (T360f): decisions first
 
 These need native code or young crates; each is decided when its task starts and recorded in NON-RUST-DEPENDENCIES.md.

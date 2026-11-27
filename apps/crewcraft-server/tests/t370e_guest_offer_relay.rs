@@ -1,23 +1,23 @@
 //! T370e: an admitted visitor's offer through the real media link and a loopback mTLS control stub. The test
-//! generates a disposable link CA and server state. It uses socket and channel barriers for both revocation races.
+//! generates a disposable link CA and server state. Socket and channel barriers cover revocation races and reconnect.
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crewcraft_media_auth::{Issuer, Verifier};
 use crewcraft_pki::{Authority, LINK_LIFETIME_SECS, ServerIdentity};
 use crewcraft_proto::frame::{encode, read_frame};
-use crewcraft_proto::guest::{GuestDecision, GuestMeetingChange, GuestMeetingDraft, GuestReply, GuestState};
+use crewcraft_proto::guest::{GuestCode, GuestDecision, GuestMeetingChange, GuestMeetingDraft, GuestReply, GuestState};
 use crewcraft_proto::media_control::{ControlMessage, MAX_CONTROL_MESSAGE, REFUSED_CREDENTIAL, decode_control, encode_control};
-use crewcraft_server::device_session::RelayRefusal;
+use crewcraft_server::device_session::{MediaRelay, RelayRefusal};
 use crewcraft_server::media_link::{MediaLink, MediaRelayHandle};
 use crewcraft_server_core::calls::HEARTBEAT_TIMEOUT_MS;
 use crewcraft_server_core::durable::DurableServer;
@@ -58,11 +58,12 @@ struct RelayFixture {
     task: Option<JoinHandle<()>>,
     tls: Arc<ServerConfig>,
     address: SocketAddr,
-    listener: Option<TcpListener>,
+    listener: TcpListener,
     public_key: [u8; 32],
     now: u64,
     clock: Arc<AtomicU64>,
     expires_at: u64,
+    code: GuestCode,
     proof: GuestProof,
     call: u64,
     room: String,
@@ -71,6 +72,13 @@ struct RelayFixture {
 
 fn identity(cert: ServerIdentity) -> crewcraft_tls::Identity {
     (cert.chain.into_iter().map(CertificateDer::from).collect(), PrivatePkcs8KeyDer::from(cert.key_pkcs8).into())
+}
+
+fn admit(rooms: &mut DurableServer, code: &GuestCode, now: u64, name: &str) -> GuestProof {
+    let proof = rooms.guest_entrance(|| now).knock(PEER, &code.0, name).unwrap().proof;
+    let waiting = rooms.guest_lobby(HOST, proof.meeting, now).unwrap();
+    rooms.guest_lobby_decide(HOST, proof.meeting, proof.guest, waiting.revision, GuestDecision::Admit, now).unwrap();
+    proof
 }
 
 impl RelayFixture {
@@ -111,9 +119,7 @@ impl RelayFixture {
         else {
             panic!("expected a new guest meeting");
         };
-        let proof = rooms.guest_entrance(|| now).knock(PEER, &code.0, "Fixture visitor").unwrap().proof;
-        let waiting = rooms.guest_lobby(HOST, lobby.meeting, now).unwrap();
-        rooms.guest_lobby_decide(HOST, lobby.meeting, proof.guest, waiting.revision, GuestDecision::Admit, now).unwrap();
+        let proof = admit(&mut rooms, &code, now, "Fixture visitor");
         let (_, call) = rooms.join_meeting(HOST, lobby.meeting, now).unwrap();
         let rooms = Arc::new(Mutex::new(rooms));
         let stopped = Arc::new(AtomicBool::new(false));
@@ -131,11 +137,12 @@ impl RelayFixture {
             task: Some(task),
             tls,
             address,
-            listener: Some(listener),
+            listener,
             public_key,
             now,
             clock,
             expires_at,
+            code,
             proof,
             call,
             room,
@@ -143,18 +150,28 @@ impl RelayFixture {
         }
     }
 
-    fn offer(&self) -> Receiver<Result<String, RelayRefusal>> {
+    fn offer(&self, proof: &GuestProof) -> Receiver<Result<String, RelayRefusal>> {
+        let proof = proof.clone();
+        self.start_offer(move |relay| relay.join_guest(PEER, &proof, OFFER))
+    }
+
+    fn start_offer(
+        &self,
+        offer: impl FnOnce(MediaRelayHandle) -> Result<String, RelayRefusal> + Send + 'static,
+    ) -> Receiver<Result<String, RelayRefusal>> {
         let (send, receive) = mpsc::channel();
+        let (starting, started) = mpsc::sync_channel(0);
         let relay = self.relay.clone();
-        let proof = self.proof.clone();
         thread::spawn(move || {
-            let _ = send.send(relay.join_guest(PEER, &proof, OFFER));
+            let _ = starting.send(());
+            let _ = send.send(offer(relay));
         });
+        started.recv_timeout(WAIT).unwrap();
         receive
     }
 
-    fn accept_tcp(&mut self) -> TcpStream {
-        let listener = self.listener.take().unwrap();
+    fn accept_tcp(&self) -> TcpStream {
+        let listener = self.listener.try_clone().unwrap();
         let (send, receive) = mpsc::channel();
         let task = thread::spawn(move || {
             let _ = send.send(listener.accept().map(|(tcp, _)| tcp));
@@ -198,25 +215,25 @@ impl RelayFixture {
         self.clock.store(self.now + HEARTBEAT_TIMEOUT_MS + 1, Ordering::Release);
     }
 
-    fn expect_join(&self, control: &mut impl Read) -> u64 {
+    fn expect_join(&self, control: &mut impl Read, proof: &GuestProof) -> u64 {
         let ControlMessage::Join { seq, call, credential, offer } = receive_control(control) else {
             panic!("expected a guest join");
         };
         let grant = Verifier::new(self.public_key, MEDIA).verify(&credential, self.now).unwrap();
         assert_eq!(call, self.call);
-        assert_eq!((grant.call, grant.room.as_str(), grant.device), (call, self.room.as_str(), self.proof.guest));
-        assert_eq!(grant.person, format!("guest:{}", self.proof.guest));
+        assert_eq!((grant.call, grant.room.as_str(), grant.device), (call, self.room.as_str(), proof.guest));
+        assert_eq!(grant.person, format!("guest:{}", proof.guest));
         assert_eq!(offer, OFFER);
         seq
     }
 
-    fn expect_drop(&self, control: &mut (impl Read + Write)) {
+    fn expect_drop(&self, control: &mut impl Read) -> u64 {
         let ControlMessage::DropPerson { seq, call, person } = receive_control(control) else {
             panic!("expected a revocation control message");
         };
         assert_eq!(call, self.call);
         assert_eq!(person, format!("guest:{}", self.proof.guest));
-        send_control(control, &ControlMessage::Ack { seq });
+        seq
     }
 }
 
@@ -241,49 +258,133 @@ fn send_control(stream: &mut impl Write, message: &ControlMessage) {
 
 #[test]
 fn admitted_guest_gets_the_answer_but_removal_during_exchange_withholds_it() {
-    let mut fixture = RelayFixture::new();
-    let admitted = fixture.offer();
+    let fixture = RelayFixture::new();
+    let admitted = fixture.offer(&fixture.proof);
     let tcp = fixture.accept_tcp();
     let mut control = fixture.accept_tls(tcp);
-    let seq = fixture.expect_join(&mut control);
+    let seq = fixture.expect_join(&mut control, &fixture.proof);
     send_control(&mut control, &ControlMessage::JoinAnswer { seq, answer: ANSWER.into() });
     assert_eq!(admitted.recv_timeout(WAIT).unwrap(), Ok(ANSWER.into()));
 
-    let in_flight = fixture.offer();
-    let seq = fixture.expect_join(&mut control);
+    let in_flight = fixture.offer(&fixture.proof);
+    let seq = fixture.expect_join(&mut control, &fixture.proof);
     // The relay has dispatched this offer. Commit removal before the media peer answers it.
     fixture.remove();
     send_control(&mut control, &ControlMessage::JoinAnswer { seq, answer: ANSWER.into() });
     assert_eq!(in_flight.recv_timeout(WAIT).unwrap(), Err(REFUSED));
-    fixture.expect_drop(&mut control);
+    let seq = fixture.expect_drop(&mut control);
+    send_control(&mut control, &ControlMessage::Ack { seq });
 }
 
 #[test]
 fn removal_during_the_control_handshake_never_dispatches_a_guest_join() {
-    let mut fixture = RelayFixture::new();
-    let queued = fixture.offer();
+    let fixture = RelayFixture::new();
+    let queued = fixture.offer(&fixture.proof);
     let tcp = fixture.accept_tcp();
     // The relay has started TLS, but the media peer has not answered its ClientHello.
     tcp.set_read_timeout(Some(WAIT)).unwrap();
     assert_eq!(tcp.peek(&mut [0]).unwrap(), 1);
     fixture.remove();
     let mut control = fixture.accept_tls(tcp);
-    assert_eq!(queued.recv_timeout(WAIT).unwrap(), Err(REFUSED));
     // The first frame must be the removal event itself. A premature join would arrive before it.
-    fixture.expect_drop(&mut control);
+    let seq = fixture.expect_drop(&mut control);
+    send_control(&mut control, &ControlMessage::Ack { seq });
+    assert_eq!(queued.recv_timeout(WAIT).unwrap(), Err(REFUSED));
 }
 
 #[test]
 fn closure_link_expiry_and_call_expiry_during_exchange_each_withhold_the_answer() {
     let invalidate: [fn(&RelayFixture); 3] = [RelayFixture::close_link, RelayFixture::expire_link, RelayFixture::expire_host];
     for invalidate in invalidate {
-        let mut fixture = RelayFixture::new();
-        let pending = fixture.offer();
+        let fixture = RelayFixture::new();
+        let pending = fixture.offer(&fixture.proof);
         let tcp = fixture.accept_tcp();
         let mut control = fixture.accept_tls(tcp);
-        let seq = fixture.expect_join(&mut control);
+        let seq = fixture.expect_join(&mut control, &fixture.proof);
         invalidate(&fixture);
         send_control(&mut control, &ControlMessage::JoinAnswer { seq, answer: ANSWER.into() });
         assert_eq!(pending.recv_timeout(WAIT).unwrap(), Err(REFUSED));
+    }
+}
+
+#[test]
+fn reconnect_replays_the_unacknowledged_drop_before_forwarding_the_next_guest() {
+    let fixture = RelayFixture::new();
+    let next_proof = admit(&mut fixture.rooms.lock().unwrap(), &fixture.code, fixture.now, "Second visitor");
+    let first_guest = fixture.offer(&fixture.proof);
+    let mut first_control = fixture.accept_tls(fixture.accept_tcp());
+    let seq = fixture.expect_join(&mut first_control, &fixture.proof);
+    send_control(&mut first_control, &ControlMessage::JoinAnswer { seq, answer: ANSWER.into() });
+    assert_eq!(first_guest.recv_timeout(WAIT).unwrap(), Ok(ANSWER.into()));
+
+    fixture.remove();
+    let unacknowledged = fixture.expect_drop(&mut first_control);
+    let next_guest = fixture.offer(&next_proof);
+    drop(first_control);
+
+    let mut reconnected = fixture.accept_tls(fixture.accept_tcp());
+    let seq = fixture.expect_drop(&mut reconnected);
+    assert_eq!(seq, unacknowledged);
+    // Withhold the acknowledgement while checking that the link has sent no subsequent frame.
+    reconnected.sock.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+    assert!(
+        matches!(reconnected.read(&mut [0]), Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)),
+        "a second control frame arrived before acknowledgement of the replayed drop"
+    );
+    reconnected.sock.set_read_timeout(Some(WAIT)).unwrap();
+    send_control(&mut reconnected, &ControlMessage::Ack { seq });
+
+    let seq = fixture.expect_join(&mut reconnected, &next_proof);
+    send_control(&mut reconnected, &ControlMessage::JoinAnswer { seq, answer: ANSWER.into() });
+    assert_eq!(next_guest.recv_timeout(WAIT).unwrap(), Ok(ANSWER.into()));
+    assert_eq!(fixture.offer(&fixture.proof).recv_timeout(WAIT).unwrap(), Err(REFUSED));
+}
+
+#[test]
+fn staff_offer_can_reconnect_while_guest_revocation_is_still_unacknowledged() {
+    const DEVICE: u64 = 1;
+    const STAFF_OFFER: &str = "fixture staff offer";
+
+    let fixture = RelayFixture::new();
+    let next_proof = admit(&mut fixture.rooms.lock().unwrap(), &fixture.code, fixture.now, "Second visitor");
+    let first_guest = fixture.offer(&fixture.proof);
+    let mut first_control = fixture.accept_tls(fixture.accept_tcp());
+    let seq = fixture.expect_join(&mut first_control, &fixture.proof);
+    send_control(&mut first_control, &ControlMessage::JoinAnswer { seq, answer: ANSWER.into() });
+    assert_eq!(first_guest.recv_timeout(WAIT).unwrap(), Ok(ANSWER.into()));
+
+    fixture.remove();
+    let drop_seq = fixture.expect_drop(&mut first_control);
+    let waiting_guest = fixture.offer(&next_proof);
+    drop(first_control);
+
+    let mut failed_retry = fixture.accept_tls(fixture.accept_tcp());
+    assert_eq!(fixture.expect_drop(&mut failed_retry), drop_seq);
+    let call = fixture.call;
+    let staff_credential = fixture.rooms.lock().unwrap().media_credential(&fixture.room, HOST, call, DEVICE, fixture.now).unwrap().unwrap();
+    let staff = fixture.start_offer(move |relay| relay.join(call, &staff_credential, STAFF_OFFER));
+    drop(failed_retry);
+
+    let removed = format!("guest:{}", fixture.proof.guest);
+    let deadline = Instant::now() + WAIT;
+    loop {
+        assert!(Instant::now() < deadline, "staff signaling stalled behind the unacknowledged drop");
+        let mut control = fixture.accept_tls(fixture.accept_tcp());
+        match receive_control(&mut control) {
+            ControlMessage::DropPerson { seq, call: dropped_call, person } => {
+                // Fail every retry. None may clear the barrier for the waiting guest.
+                assert_eq!((seq, dropped_call, person.as_str()), (drop_seq, call, removed.as_str()));
+            }
+            ControlMessage::Join { seq, call: joined_call, credential, offer } => {
+                let grant = Verifier::new(fixture.public_key, MEDIA).verify(&credential, fixture.now).unwrap();
+                assert_eq!((joined_call, grant.call, grant.person.as_str(), grant.device), (call, call, HOST, DEVICE));
+                assert_eq!(offer, STAFF_OFFER);
+                send_control(&mut control, &ControlMessage::JoinAnswer { seq, answer: ANSWER.into() });
+                assert_eq!(staff.recv_timeout(WAIT).unwrap(), Ok(ANSWER.into()));
+                assert_eq!(waiting_guest.try_recv(), Err(mpsc::TryRecvError::Empty));
+                break;
+            }
+            _ => panic!("expected a drop retry or a staff join"),
+        }
     }
 }
