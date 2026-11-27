@@ -257,6 +257,6 @@ device choice; in-call chat in the side pane. Missed calls in Activity.
 ## Later
 
 - The TCP 443 relay for restricted networks (a TLS-wrapped TURN-style relay answering only to its own server name).
-- Guest meetings with the lobby, and staff-only meetings (REQUIREMENTS 2.5); the calendar.
+- Guest meetings with the lobby, and staff-only meetings (REQUIREMENTS 2.5); the calendar: designed in [MEETINGS.md](MEETINGS.md).
 - Background blur without any outside service; picture-in-picture; a call-quality indicator; raising a hand.
 - Recording and transcription, with consent and, for encrypted calls, a visible per-call opt-in.
