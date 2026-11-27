@@ -8,6 +8,7 @@ use crate::mentions::mentions;
 use crate::render::render;
 use crate::room::{Role, Room, RoomError};
 use crate::unread::ReadMarkers;
+use crewcraft_proto::room_settings::{RoomSetting, RoomSettings};
 
 /// Longest message, in chars after trimming.
 pub const MAX_TEXT_CHARS: usize = 4000;
@@ -100,6 +101,8 @@ pub struct RoomService {
     pin_body: Option<(String, String, bool)>,
     /// An archive room (docs/IMPORT.md, task T350a): it never accepts writes again.
     read_only: bool,
+    /// Each member's own pin, mute and hide settings and their revision (task T346).
+    settings: HashMap<String, (RoomSettings, u64)>,
 }
 
 impl RoomService {
@@ -114,6 +117,7 @@ impl RoomService {
             pinned: None,
             pin_body: None,
             read_only: false,
+            settings: HashMap::new(),
         }
     }
 
@@ -518,6 +522,26 @@ impl RoomService {
         self.read_position(user)?;
         let cursor = target.checked_sub(1).ok_or(ServiceError::NoSuchMessage)?;
         Ok(self.markers.mark_unread(user, ROOM_ID, cursor))
+    }
+
+    /// The member's own settings for this room and their revision, zero before the first change (task T346).
+    /// `Room(NotMember)` for anyone else, so nobody can read another person's settings.
+    pub fn room_settings(&self, user: &str) -> Result<(RoomSettings, u64), ServiceError> {
+        if self.room.role(user).is_none() {
+            return Err(ServiceError::Room(RoomError::NotMember));
+        }
+        Ok(self.settings.get(user).copied().unwrap_or_default())
+    }
+
+    /// Turn one of the member's own settings on or off (task T346); returns whether it changed. The revision moves only
+    /// on a change. Personal settings change no room event and are accepted in archive rooms too.
+    pub fn set_room_setting(&mut self, user: &str, setting: RoomSetting, on: bool) -> Result<bool, ServiceError> {
+        let (settings, revision) = self.room_settings(user)?;
+        if settings.get(setting) == on {
+            return Ok(false);
+        }
+        self.settings.insert(user.to_owned(), (settings.with(setting, on), revision.saturating_add(1)));
+        Ok(true)
     }
 
     /// How many `Posted` events still held, not deleted, after the member's read marker, were posted by someone else.

@@ -131,7 +131,8 @@ impl Connection {
     /// 3. if it was a `Sync` and the response is `Ok`: append, framed, one push per event the room still holds after
     ///    the requested cursor (`RoomService::sync`), oldest first, using `to_push`. If the log no longer holds them
     ///    (`Since::Gap`), no timeline pushes follow: the client sees from the response's head that it must resync.
-    ///    Negotiated pin and personal read snapshots still follow a successful sync, including a gap or equal head;
+    ///    Negotiated pin, personal read and personal room-settings snapshots still follow a successful sync, including a
+    ///    gap or equal head;
     /// 4. if it was a `ListRooms` and the response is `Ok`: append, framed, the room-list frame for this user
     ///    (`dispatch::listed_rooms`, which the response's cursor counts), with the request's id;
     /// 5. if it was a `Search` and the response is `Ok`: append, framed, the hits frame for this user
@@ -180,11 +181,13 @@ impl Connection {
             let reads = self.features & crewcraft_proto::request::FEATURE_READ_STATE != 0;
             let gap_replay = self.features & crewcraft_proto::request::FEATURE_GAP_REPLAY != 0;
             let continues = self.features & crewcraft_proto::request::FEATURE_CONTINUE != 0;
+            let room_settings = self.features & crewcraft_proto::request::FEATURE_ROOM_SETTINGS != 0;
             let needs_pins_saved = matches!(request, Request::Pin { .. } | Request::SaveMessage { .. } | Request::ListSaved { .. });
             let (response, follow) = if (needs_pins_saved && !pins_saved)
                 || (matches!(request, Request::MarkUnread { .. }) && !reads)
                 || (matches!(request, Request::Current { .. }) && !gap_replay)
                 || (matches!(request, Request::Continue { .. }) && !continues)
+                || (matches!(request, Request::SetRoomSetting { .. } | Request::ListRoomSettings) && !room_settings)
             {
                 (refusal_of(crate::dispatch::E_NOT_ALLOWED), None)
             } else {
@@ -313,6 +316,24 @@ impl Connection {
                 && let Some(state) = server.read_state(room, &self.user)
             {
                 let frame = encode_push(&state).map_err(ConnError::Request)?;
+                out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
+            }
+            // The person's own room settings follow every successful sync, before any gap (task T346).
+            if let Request::Sync { room, .. } = &request
+                && room_settings
+                && matches!(response, Response::Ok { .. })
+                && let Ok(service) = server.server().room(room)
+                && let Ok((settings, revision)) = service.room_settings(&self.user)
+            {
+                let push = Push::RoomSettings { room: room.clone(), cursor: service.head(), revision, settings };
+                out.extend_from_slice(&encode(&encode_push(&push).map_err(ConnError::Request)?).map_err(ConnError::Frame)?);
+            }
+            // After a successful ListRoomSettings, the settings frame its answer counted (task T346).
+            if let Request::ListRoomSettings = request
+                && matches!(response, Response::Ok { .. })
+            {
+                let rows = crate::dispatch::listed_room_settings(server.server(), &self.user);
+                let frame = crewcraft_proto::room_settings::encode_list(id, &rows).map_err(ConnError::Request)?;
                 out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
             }
             // After a successful Search, the hits frame (task T320b), as the response counted them.

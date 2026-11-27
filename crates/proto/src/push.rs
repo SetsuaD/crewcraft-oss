@@ -44,6 +44,9 @@
 //!   room that continues the archive room `archive` (docs/REQUIREMENTS.md "Continuing a conversation"), by `author`,
 //!   who continued it. An event of its own that advances the cursor; a client that did not agree to
 //!   `request::FEATURE_CONTINUE` is sent `Other` in its place.
+//! - tag 83 `RoomSettings` (task T346): `u64 revision | u8 flags`. With `request::FEATURE_ROOM_SETTINGS`, the asking
+//!   person's own pin, mute and hide settings for the room, after every successful Sync and before any `Gap`. Its
+//!   cursor is the room head and advances no timeline. Flags are `room_settings::RoomSettings::flags`.
 //!
 //! `room`, `author` and each mention are 1 to `message::MAX_NAME` bytes; `html` is 0 to `MAX_HTML` bytes; at most
 //! `MAX_MENTIONS` mentions.
@@ -75,6 +78,8 @@ pub const READ_STATE: u8 = 80;
 pub const GAP: u8 = 81;
 /// The tag of `Push::Continued` (task T352).
 pub const CONTINUED: u8 = 84;
+/// The asking person's own settings for the room, after a sync (task T346).
+pub const ROOM_SETTINGS: u8 = 83;
 /// The most participants a `CallState` lists.
 pub const MAX_PARTICIPANTS: usize = 255;
 /// The tag of `Push::Reacted` (task T341a).
@@ -105,6 +110,13 @@ pub struct AttachedFile {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Push {
+    /// The asking person's own settings for the room at room head `cursor`; higher revisions are newer (task T346).
+    RoomSettings {
+        room: String,
+        cursor: u64,
+        revision: u64,
+        settings: crate::room_settings::RoomSettings,
+    },
     Gap {
         room: String,
         cursor: u64,
@@ -296,6 +308,13 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
             out.extend_from_slice(&cursor.to_be_bytes());
             out.extend_from_slice(&after.to_be_bytes());
             out.extend_from_slice(&oldest.to_be_bytes());
+        }
+        Push::RoomSettings { room, cursor, revision, settings } => {
+            out.push(ROOM_SETTINGS);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&revision.to_be_bytes());
+            out.push(settings.flags());
         }
         Push::ReadState { room, cursor, position, revision, unread } => {
             out.push(READ_STATE);
@@ -493,6 +512,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         && tag != READ_STATE
         && tag != GAP
         && tag != CONTINUED
+        && tag != ROOM_SETTINGS
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -506,6 +526,11 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
             let oldest = read_u64(bytes, &mut pos)?;
             check_gap(cursor, after, oldest)?;
             Push::Gap { room, cursor, after, oldest }
+        }
+        ROOM_SETTINGS => {
+            let revision = read_u64(bytes, &mut pos)?;
+            let settings = crate::room_settings::RoomSettings::from_flags(read_u8(bytes, &mut pos)?)?;
+            Push::RoomSettings { room, cursor, revision, settings }
         }
         READ_STATE => {
             let position = read_u64(bytes, &mut pos)?;
@@ -682,6 +707,32 @@ fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, CodecError> {
 
 fn check_gap(head: u64, after: u64, oldest: u64) -> Result<(), CodecError> {
     if oldest > head || oldest.saturating_sub(after) <= 1 { Err(CodecError::FieldLength) } else { Ok(()) }
+}
+
+#[cfg(test)]
+mod room_settings_tests {
+    use super::*;
+    use crate::room_settings::RoomSettings;
+
+    #[test]
+    fn room_settings_snapshots_round_trip_and_refuse_unknown_flags_cuts_and_extra_bytes() -> Result<(), CodecError> {
+        let settings = RoomSettings { pinned: true, muted: false, hidden: true };
+        let snapshot = Push::RoomSettings { room: "room".into(), cursor: 4, revision: u64::MAX, settings };
+        let bytes = encode_push(&snapshot)?;
+        assert_eq!(decode_push(&bytes)?, snapshot);
+        for end in 0..bytes.len() {
+            assert!(decode_push(&bytes[..end]).is_err());
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert_eq!(decode_push(&trailing), Err(CodecError::TrailingBytes));
+        let mut unknown = bytes;
+        let last = unknown.len() - 1;
+        unknown[last] = 8;
+        assert_eq!(decode_push(&unknown), Err(CodecError::FieldLength));
+        assert!(encode_push(&Push::RoomSettings { room: String::new(), cursor: 0, revision: 0, settings }).is_err());
+        Ok(())
+    }
 }
 
 #[cfg(test)]

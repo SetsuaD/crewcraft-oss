@@ -1,0 +1,44 @@
+{
+  "id": "T346-room-settings",
+  "title": "Pin, mute and hide rooms for myself, on all my devices",
+  "crate": "crewcraft-server",
+  "files": [
+    "crates/proto/src/lib.rs",
+    "crates/proto/src/room_settings.rs",
+    "crates/proto/src/request.rs",
+    "crates/proto/src/push.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/server.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/inbox.rs",
+    "crates/client-core/src/room_view.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/ui-model/src/lib.rs",
+    "crates/ui-model/src/room_list.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t346_room_settings_window.rs",
+    "apps/crewcraft-server/tests/t346_room_settings.rs"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t346_room_settings.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t346_room_settings",
+  "depends_on": [
+    "T233-list-rooms",
+    "T320b-search-wire",
+    "T344-mark-unread",
+    "T345-gap-replay"
+  ],
+  "spec": "FEATURE_ROOM_SETTINGS (4096) announces two requests and one push for each person's own room settings (REQUIREMENTS 2.2 Personal room settings): pin a room to the top of my list, mute it, hide it. SetRoomSetting (request 41) carries a room, a setting (1 pinned, 2 muted, 3 hidden) and on/off; only a member of the room may change their own setting, anyone else gets E_NO_SUCH_ROOM, and Ok.cursor is that person's settings revision for the room, which moves only when a setting actually changes. ListRoomSettings (request 42) is answered with a count and one settings frame (follow tag 141) listing the person's flags and revision for every room ListRooms lists, strictly ordered by room. Push RoomSettings (83) follows every successful negotiated Sync, before any T345 Gap push, so equal-head syncs, history gaps and the fresh Sync after gap recovery all carry it; its cursor is the room head and it advances no timeline. Clients keep the highest revision. Journal op RoomSetting (32, a separate number space) records each effective change, so settings survive restart. Settings belong to one person: another member of the same room sees no change. Archive rooms accept personal settings. A hidden room is still a membership: ListRooms still lists it, message search still finds it, and a new message in it does not unhide it. Muting is the person's own signalling choice: a muted room never produces a client notification and its unread count stays on its row but is left out of the app's unread total; a hidden room is likewise left out of the total. The worker reads the settings at sign-in and reports them before SignedIn, so the first room list is already ordered, and reports later changes from any of the person's devices through its normal poll. The room list shows pinned rooms first, names muted, pinned and hidden states in the row text, leaves hidden rooms out unless the room search matches them (then under a Hidden heading), and closes the conversation of a room that becomes hidden. The open room's header offers Pin to top / Unpin from top, Mute / Unmute and Hide from list / Show in list; the list changes only after the server's confirmed state comes back. Real enrolled sessions on distinct device keys prove sharing, isolation from another person, membership checks, search and restart.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md"
+  ]
+}

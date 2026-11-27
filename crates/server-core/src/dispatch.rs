@@ -79,6 +79,9 @@ pub fn error_code(error: ServerError) -> u16 {
 ///   go out as separate frames, not in this response.
 /// - `MarkRead`: `Server::mark_read`; `Ok { cursor }` is the room's head, whether or not the marker moved.
 /// - `MarkUnread` (task T344): resolve a live target for this member; `Ok.cursor` is their final read position.
+/// - `SetRoomSetting` (task T346): one of the member's own settings for the room; `Ok.cursor` is their settings
+///   revision for it afterwards. Anyone else gets `E_NO_SUCH_ROOM`.
+/// - `ListRoomSettings` (task T346): `Ok { cursor }` counts `listed_room_settings`; the rows follow in one frame.
 /// - `Ping`: `Ok { cursor: 0 }`; it needs no room and never fails.
 /// - `ListRooms`: `Ok { cursor }` is how many rooms `listed_rooms` gives for `user`. The names themselves go out as
 ///   one room-list frame after this response (`request::encode_rooms`), as `Sync`'s events do. It never fails.
@@ -131,6 +134,20 @@ pub fn listed_rooms(server: &Server, user: &str) -> Vec<String> {
     server.rooms_of(user).into_iter().map(|room| room.slug).filter(|slug| !slug.is_empty() && slug.len() <= MAX_NAME).take(MAX_ROOMS).collect()
 }
 
+/// The asking person's own settings for every room `listed_rooms` lists, strictly ordered by room (task T346).
+pub fn listed_room_settings(server: &Server, user: &str) -> Vec<crewcraft_proto::room_settings::ListedRoomSettings> {
+    let mut rooms = listed_rooms(server, user);
+    rooms.sort();
+    rooms.dedup();
+    rooms
+        .into_iter()
+        .filter_map(|room| {
+            let (settings, revision) = server.room(&room).ok()?.room_settings(user).ok()?;
+            Some(crewcraft_proto::room_settings::ListedRoomSettings { room, revision, settings })
+        })
+        .collect()
+}
+
 fn refusal(code: u16) -> Response {
     Response::Error { code, detail: String::new() }
 }
@@ -139,6 +156,7 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
     let result = match request {
         Request::Ping => return Ok(Response::Ok { cursor: 0 }),
         Request::ListRooms => return Ok(Response::Ok { cursor: listed_rooms(backend.server(), user).len() as u64 }),
+        Request::ListRoomSettings => return Ok(Response::Ok { cursor: listed_room_settings(backend.server(), user).len() as u64 }),
         Request::Search { query } => return Ok(Response::Ok { cursor: backend.found(user, query).len() as u64 }),
         // Current requires a full durable projection and correlated follow frames, supplied by the connection.
         Request::Current { room } => {
@@ -188,6 +206,10 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
             .change(|s| s.mark_read(room, user, *cursor), |s| s.mark_read(room, user, *cursor))
             .and_then(|_| backend.server().room(room).map(|service| service.head()).map_err(|_| DurableError::Server(ServerError::NoSuchRoom))),
         Request::MarkUnread { room, target } => backend.change(|s| s.mark_unread(room, user, *target), |s| s.mark_unread(room, user, *target)),
+        Request::SetRoomSetting { room, setting, on } => backend.change(
+            |s| s.set_room_setting(room, user, *setting, *on).map(|(revision, _)| revision),
+            |s| s.set_room_setting(room, user, *setting, *on),
+        ),
     };
     match result {
         Ok(cursor) => Ok(Response::Ok { cursor }),

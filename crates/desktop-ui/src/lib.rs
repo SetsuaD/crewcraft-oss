@@ -212,6 +212,11 @@ pub enum Update {
         room: String,
         reactions: crewcraft_ui_model::RoomReactions,
     },
+    /// The person's own settings for a room: pinned to the top, muted, hidden (T346).
+    RoomSettings {
+        room: String,
+        settings: crewcraft_client_core::room_view::RoomSettings,
+    },
     /// Current pin metadata, including a body outside the held room history page (T343).
     Pin {
         room: String,
@@ -264,6 +269,7 @@ impl fmt::Debug for Update {
             Self::Continued { archive, room } => f.debug_struct("Continued").field("archive", archive).field("room", room).finish(),
             Self::Continuations { room, lines } => f.debug_struct("Continuations").field("room", room).field("lines", &lines.len()).finish(),
             Self::Reactions { room, reactions } => f.debug_struct("Reactions").field("room", room).field("messages", &reactions.len()).finish(),
+            Self::RoomSettings { room, settings } => f.debug_struct("RoomSettings").field("room", room).field("settings", settings).finish(),
             Self::Pin { room, pinned } => f.debug_struct("Pin").field("room", room).field("target", &pinned.as_ref().map(|pin| pin.target)).finish(),
             Self::SavedMessages { messages } => f.debug_struct("SavedMessages").field("messages", &messages.len()).finish(),
             Self::InvitationLink(_) => f.write_str("InvitationLink(..)"),
@@ -358,6 +364,8 @@ pub struct Window {
     selected_message: Option<u64>,
     /// Return real keyboard focus to the room after a confirmed unread action closes its conversation (T344).
     focus_room: Option<String>,
+    /// The person's own room settings as the worker last reported them, kept across a new room list (T346).
+    room_settings: HashMap<String, crewcraft_client_core::room_view::RoomSettings>,
     /// Asking "Delete this message?" for this selected message (T316).
     confirm_delete: bool,
     /// The composer is replacing the text of this message, `(room, cursor)` (T316).
@@ -562,6 +570,9 @@ impl Window {
                 self.rooms = RoomList::new();
                 for room in &rooms {
                     self.rooms.add(room);
+                    if let Some(settings) = self.room_settings.get(room) {
+                        self.rooms.set_settings(room, *settings);
+                    }
                 }
                 self.go(Screen::Chat);
                 if let Some(first) = self.rooms.rows().first().map(|row| row.name.clone()) {
@@ -599,6 +610,19 @@ impl Window {
             }
             Update::ReadState { room, unread } => {
                 self.rooms.set_read_state(&room, unread);
+            }
+            Update::RoomSettings { room, settings } => {
+                let was_hidden = self.rooms.settings(&room).hidden;
+                self.room_settings.insert(room.clone(), settings);
+                self.rooms.set_settings(&room, settings);
+                // A room the person hides leaves the list, and its conversation closes with it. A room already hidden
+                // and opened from the room search stays open when its settings are reported again.
+                if settings.hidden && !was_hidden && self.rooms.selected() == Some(room.as_str()) {
+                    self.rooms.clear_selection(&room);
+                    self.selected_message = None;
+                    self.open_thread = None;
+                    self.phone_pane = PhonePane::Chats;
+                }
             }
             Update::MarkedUnread { room } => {
                 if self.rooms.selected() == Some(room.as_str()) {
@@ -699,6 +723,7 @@ impl Window {
                 self.phone_pane = PhonePane::Chats;
                 self.selected_message = None;
                 self.focus_room = None;
+                self.room_settings.clear();
                 self.editing = None;
                 self.results = None;
                 self.message_query.clear();
@@ -961,14 +986,17 @@ impl Window {
             ui.add_space(4.0);
             let mut open = None;
             let rows = visible_rooms(self.rooms.rows(), &self.room_filter);
-            if rows.is_empty() {
+            // A room search also finds the rooms the person hid (T346).
+            let hidden = if self.room_filter.trim().is_empty() { Vec::new() } else { visible_rooms(self.rooms.hidden_rows(), &self.room_filter) };
+            if rows.is_empty() && hidden.is_empty() {
                 ui.weak(if self.room_filter.trim().is_empty() { "No rooms yet." } else { "No room matches." });
             }
             let (archive, rows): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| self.archived.contains(&row.name));
             ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                 for row in rows {
-                    let text = if row.unread > 0 { format!("{}  ({})", row.name, row.unread) } else { row.name.clone() };
-                    let text = if row.unread > 0 { RichText::new(text).strong() } else { RichText::new(text) };
+                    let settings = self.rooms.settings(&row.name);
+                    let text = room_label(&row, settings);
+                    let text = if row.unread > 0 && !settings.muted { RichText::new(text).strong() } else { RichText::new(text) };
                     let response = ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(row.selected, text));
                     if self.focus_room.as_deref() == Some(row.name.as_str()) {
                         response.request_focus();
@@ -989,6 +1017,17 @@ impl Window {
                             self.focus_room = None;
                         }
                         if response.clicked() {
+                            open = Some(row.name);
+                        }
+                    }
+                }
+                // Hidden rooms the room search found, under their own heading (T346).
+                if !hidden.is_empty() {
+                    ui.add_space(10.0);
+                    ui.strong("Hidden");
+                    for row in hidden {
+                        let text = room_label(&row, self.rooms.settings(&row.name));
+                        if ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(row.selected, text)).clicked() {
                             open = Some(row.name);
                         }
                     }
@@ -1015,6 +1054,7 @@ impl Window {
             });
             self.pin_bar(ui, &room);
             self.read_controls(ui, &room);
+            self.room_settings_controls(ui, &room);
             self.gap_ui(ui, &room);
         });
         egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
@@ -1137,6 +1177,7 @@ impl Window {
                     });
                     self.pin_bar(ui, &room);
                     self.read_controls(ui, &room);
+                    self.room_settings_controls(ui, &room);
                     self.gap_ui(ui, &room);
                 });
                 egui::Panel::bottom("crewcraft-composer").show(ui, |ui| self.composer_ui(ui, &room));
@@ -1233,7 +1274,7 @@ impl Window {
                         let mut open = None;
                         let (archive, rows): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| self.archived.contains(&row.name));
                         for row in rows {
-                            let text = if row.unread > 0 { format!("{}  ({})", row.name, row.unread) } else { row.name.clone() };
+                            let text = room_label(&row, self.rooms.settings(&row.name));
                             let response = ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, text));
                             if self.focus_room.as_deref() == Some(row.name.as_str()) {
                                 response.request_focus();
@@ -1356,6 +1397,25 @@ impl Window {
 
     pub fn selected_room(&self) -> Option<&str> {
         self.rooms.selected()
+    }
+
+    /// The room's own menu of personal settings (T346): each button says what it will do, so the state never rests on
+    /// colour alone. The list changes when the server confirms, through `Update::RoomSettings`.
+    fn room_settings_controls(&mut self, ui: &mut Ui, room: &str) {
+        use crewcraft_client_core::room_view::RoomSetting;
+        let settings = self.rooms.settings(room);
+        ui.horizontal_wrapped(|ui| {
+            for (setting, on_label, off_label) in [
+                (RoomSetting::Pinned, "Pin to top", "Unpin from top"),
+                (RoomSetting::Muted, "Mute", "Unmute"),
+                (RoomSetting::Hidden, "Hide from list", "Show in list"),
+            ] {
+                let on = settings.get(setting);
+                if ui.button(if on { off_label } else { on_label }).clicked() {
+                    self.actions.push(Action::Room(Command::SetRoomSetting { room: room.to_owned(), setting, on: !on }));
+                }
+            }
+        });
     }
 
     fn read_controls(&mut self, ui: &mut Ui, room: &str) {
@@ -1943,6 +2003,21 @@ pub fn side(row: &FeedRow, me: &str) -> Side {
         FeedRow::Message { author, .. } if !me.trim().is_empty() && author.trim().eq_ignore_ascii_case(me.trim()) => Side::Mine,
         FeedRow::Message { .. } => Side::Theirs,
     }
+}
+
+/// A room row's text: its name, its unread count, and which of the person's own settings are on (T346), so pinned,
+/// muted and hidden read as words and never rest on colour alone. A room with none set reads as before.
+pub fn room_label(row: &crewcraft_ui_model::RoomRow, settings: crewcraft_client_core::room_view::RoomSettings) -> String {
+    let mut text = if row.unread > 0 { format!("{}  ({})", row.name, row.unread) } else { row.name.clone() };
+    let marks: Vec<&str> = [(settings.pinned, "pinned"), (settings.muted, "muted"), (settings.hidden, "hidden")]
+        .into_iter()
+        .filter_map(|(on, mark)| on.then_some(mark))
+        .collect();
+    if !marks.is_empty() {
+        text.push_str("  ");
+        text.push_str(&marks.join(", "));
+    }
+    text
 }
 
 /// The rooms the list pane shows for the search box's text: those whose name contains it, ignoring case.

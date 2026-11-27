@@ -33,6 +33,8 @@ pub enum ClientEvent {
     Saved { id: u32, page: SavedPage },
     /// One bounded current-state page; its framed byte count includes the four-byte length prefix (T345).
     Current { id: u32, page: crewcraft_proto::current::CurrentPage, framed_bytes: usize },
+    /// The person's own settings for their rooms, answering `ListRoomSettings` request `id` (T346).
+    RoomSettings { id: u32, rows: Vec<crewcraft_proto::room_settings::ListedRoomSettings> },
     /// Explicit missing event history, sent after this Sync's other metadata (T345).
     Gap { room: String, head: u64, after: u64, oldest: u64 },
     /// The upload or file id that follows the `Ok` answering an upload request `id` (task T330e).
@@ -124,6 +126,7 @@ impl Client {
                 || first == crewcraft_proto::push::READ_STATE
                 || first == crewcraft_proto::push::GAP
                 || first == crewcraft_proto::push::CONTINUED
+                || first == crewcraft_proto::push::ROOM_SETTINGS
             {
                 let push = decode_push(&payload).map_err(ClientError::Malformed)?;
                 if let Push::Gap { room, cursor, after, oldest } = push {
@@ -144,6 +147,7 @@ impl Client {
                     Push::ReadState { room, .. } => room.clone(),
                     Push::Gap { room, .. } => room.clone(),
                     Push::Continued { room, .. } => room.clone(),
+                    Push::RoomSettings { room, .. } => room.clone(),
                 };
                 match self.inbox.on_push(push, now_ms, local_minute) {
                     Some((apply, notify)) => events.push(ClientEvent::Pushed { room, apply, notify }),
@@ -161,6 +165,9 @@ impl Client {
             } else if first == SAVED_TAG {
                 let (id, page) = decode_saved(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Saved { id, page });
+            } else if first == crewcraft_proto::room_settings::ROOM_SETTINGS_TAG {
+                let (id, rows) = crewcraft_proto::room_settings::decode_list(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::RoomSettings { id, rows });
             } else if first == crewcraft_proto::current::CURRENT_TAG {
                 let (id, page) = crewcraft_proto::current::decode_page(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Current { id, page, framed_bytes: payload.len() + 4 });

@@ -25,6 +25,8 @@ pub enum Command {
     Read { room: String },
     /// Mark unread from a message, or from the newest other author's message for target zero (T344).
     MarkUnread { room: String, target: u64 },
+    /// Turn one of the person's own settings for a room (pin to top, mute, hide) on or off (T346).
+    SetRoomSetting { room: String, setting: crewcraft_client_core::room_view::RoomSetting, on: bool },
     /// Post `text` to `room`. `text` is already trimmed and within `MAX_DRAFT_CHARS`.
     Post { room: String, text: String },
     /// Replace the text of one of the person's own messages, `target` being its cursor (task T316). `text` is trimmed

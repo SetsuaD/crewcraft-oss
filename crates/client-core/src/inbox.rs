@@ -1,7 +1,7 @@
 //! Every room the client follows: each server push goes to its room's view, and a new message from someone else may
 //! notify. Composed from `room_view` (T123), `notify` (T126) and the `proto::push` types (T131). Task T132.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crewcraft_proto::push::Push;
 
@@ -14,12 +14,14 @@ pub struct Inbox {
     settings: Settings,
     views: BTreeMap<String, RoomView>,
     direct: BTreeMap<String, bool>,
+    /// Rooms the person muted (T346): a new message there never notifies.
+    muted: BTreeSet<String>,
 }
 
 impl Inbox {
     /// An inbox for `me`, following no rooms, deciding notifications with `settings`.
     pub fn new(me: &str, settings: Settings) -> Self {
-        Self { me: me.to_owned(), settings, views: BTreeMap::new(), direct: BTreeMap::new() }
+        Self { me: me.to_owned(), settings, views: BTreeMap::new(), direct: BTreeMap::new(), muted: BTreeSet::new() }
     }
 
     /// Start following `room` with an empty view; `direct` marks a direct conversation. False (and nothing changes) if
@@ -53,6 +55,13 @@ impl Inbox {
     pub fn on_push(&mut self, push: Push, now_ms: u64, local_minute: u16) -> Option<(Apply, Notify)> {
         if let Push::Gap { room, cursor, after, oldest } = push {
             self.views.get_mut(&room)?.note_gap(cursor, after, oldest);
+            return Some((Apply::Duplicate, Notify::None));
+        }
+        if let Push::RoomSettings { room, cursor, revision, settings } = push {
+            let view = self.views.get_mut(&room)?;
+            if view.set_room_settings(crate::room_view::RoomSettingsState { head: cursor, revision, settings }) {
+                self.set_muted(&room, settings.muted);
+            }
             return Some((Apply::Duplicate, Notify::None));
         }
         if let Push::ReadState { room, cursor, position, revision, unread } = push {
@@ -146,7 +155,8 @@ impl Inbox {
             | Push::CallKeys { .. }
             | Push::CallSealed { .. }
             | Push::Pinned { .. }
-            | Push::ReadState { .. } => return None,
+            | Push::ReadState { .. }
+            | Push::RoomSettings { .. } => return None,
             Push::Gap { .. } | Push::Continued { .. } => return None,
         };
 
@@ -154,7 +164,7 @@ impl Inbox {
 
         let apply = self.views.get_mut(room)?.event(cursor, change);
 
-        let notify = if is_posted && apply == Apply::Applied {
+        let notify = if is_posted && apply == Apply::Applied && !self.muted.contains(room) {
             let mentioned = mentions.map(|m| m.iter().any(|name| name.eq_ignore_ascii_case(&self.me))).unwrap_or(false);
             let incoming = Incoming { room, author: author.unwrap_or(""), mentioned, direct: is_direct };
             self.settings.decide(&incoming, now_ms, local_minute)
@@ -163,6 +173,15 @@ impl Inbox {
         };
 
         Some((apply, notify))
+    }
+
+    /// Mute or unmute a room's notifications, as the person's own setting says (T346).
+    pub fn set_muted(&mut self, room: &str, muted: bool) {
+        if muted {
+            self.muted.insert(room.to_owned());
+        } else {
+            self.muted.remove(room);
+        }
     }
 
     /// A followed room's view.
@@ -183,5 +202,36 @@ impl Inbox {
     /// The followed rooms, sorted.
     pub fn rooms(&self) -> Vec<String> {
         self.views.keys().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod room_settings_tests {
+    use super::*;
+    use crewcraft_proto::room_settings::RoomSettings;
+
+    fn posted(cursor: u64) -> Push {
+        Push::Posted { room: "room".into(), cursor, author: "bo@example.org".into(), html: "<p>hi</p>".into(), mentions: Vec::new() }
+    }
+
+    fn settings(revision: u64, muted: bool) -> Push {
+        Push::RoomSettings { room: "room".into(), cursor: 1, revision, settings: RoomSettings { muted, ..RoomSettings::default() } }
+    }
+
+    #[test]
+    fn a_muted_room_never_notifies_its_member_and_a_stale_snapshot_cannot_unmute_it() {
+        let mut muting = Inbox::new("ana@example.org", Settings::new("ana@example.org"));
+        let mut other = Inbox::new("cy@example.org", Settings::new("cy@example.org"));
+        muting.follow("room", false);
+        other.follow("room", false);
+        assert_eq!(muting.on_push(posted(1), 0, 0).map(|(_, notify)| notify), Some(Notify::Sound));
+        muting.on_push(settings(2, true), 0, 0);
+        assert_eq!(muting.on_push(posted(2), 0, 0).map(|(_, notify)| notify), Some(Notify::None));
+        assert_eq!(other.on_push(posted(1), 0, 0).map(|(_, notify)| notify), Some(Notify::Sound));
+        assert_eq!(other.on_push(posted(2), 0, 0).map(|(_, notify)| notify), Some(Notify::Sound));
+        muting.on_push(settings(1, false), 0, 0);
+        assert_eq!(muting.on_push(posted(3), 0, 0).map(|(_, notify)| notify), Some(Notify::None));
+        muting.on_push(settings(3, false), 0, 0);
+        assert_eq!(muting.on_push(posted(4), 0, 0).map(|(_, notify)| notify), Some(Notify::Sound));
     }
 }
