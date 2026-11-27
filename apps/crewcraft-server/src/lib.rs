@@ -7,6 +7,7 @@ pub mod control;
 pub mod device_session;
 pub mod export_teams;
 pub mod external_signin;
+pub mod guest_lab;
 pub mod identity_config;
 pub mod import_bundle;
 pub mod import_teams;

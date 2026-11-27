@@ -22,6 +22,7 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 #[cfg(unix)]
 use crate::control::ControlSocket;
 use crate::external_signin::ExternalSignIn;
+use crate::guest_lab::GuestLab;
 use crate::lab_bootstrap::bootstrap_handler_with;
 use crate::lab_installation::LabInstallation;
 use crate::lab_server::{BootstrapStream, LabOptions, LabServer};
@@ -43,6 +44,7 @@ pub struct LabRuntime {
     external: Option<Arc<ExternalSignIn>>,
     /// The media server's control connection, when `media.toml` configures one (task T360b3).
     media: Option<MediaLink>,
+    guest_lab: Option<GuestLab>,
 }
 
 impl LabRuntime {
@@ -61,6 +63,12 @@ impl LabRuntime {
         self.server.set_relay(Arc::new(link.relay()));
         self.media = Some(link);
         Ok(self)
+    }
+
+    /// Add a separate loopback guest listener over the live room store.
+    pub fn with_guest_lab(mut self, guest_lab: GuestLab) -> Self {
+        self.guest_lab = Some(guest_lab);
+        self
     }
 
     /// Bind with the installation's original trust anchor and a freshly signed localhost server certificate.
@@ -95,7 +103,7 @@ impl LabRuntime {
         let accounts = Arc::new(Mutex::new(accounts));
         let admission: Arc<dyn Admission> = Arc::new(InstalledAdmission { accounts: accounts.clone(), now_ms: now_ms.clone() });
         let server = bind(options, identity, roots, admission, rooms)?;
-        Ok(Self { server, accounts, issuer, now_ms, ownership, external: None, media: None })
+        Ok(Self { server, accounts, issuer, now_ms, ownership, external: None, media: None, guest_lab: None })
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -146,7 +154,7 @@ impl LabRuntime {
         B: Fn([u8; 32], &mut BootstrapStream) + Send + Sync + 'static,
         S: FnOnce(&dyn Fn() -> bool, &Mutex<AccountStore>, &Mutex<DurableServer>, &dyn Fn() -> u64) + Send,
     {
-        let Self { server, accounts, issuer, now_ms, ownership, external, media } = self;
+        let Self { server, accounts, issuer, now_ms, ownership, external, media, guest_lab } = self;
         let bootstrap = make_bootstrap(accounts.clone(), issuer)?;
         let throttle = Arc::new(Mutex::new(Throttle::new()));
         let rooms = server.rooms();
@@ -166,6 +174,26 @@ impl LabRuntime {
                     let (rooms, now_ms, finished) = (&rooms, &now_ms, &finished);
                     let stopped = move || shutdown.load(Ordering::Acquire) || finished.load(Ordering::Acquire);
                     Some(thread::Builder::new().name("media".into()).spawn_scoped(scope, move || link.run(&stopped, rooms, &**now_ms))?)
+                }
+                None => None,
+            };
+            let guest_side = match guest_lab {
+                Some(guest) => {
+                    let (rooms, clock, finished) = (rooms.clone(), now_ms.clone(), &finished);
+                    let launched = thread::Builder::new().name("guest-lab".into()).spawn_scoped(scope, move || {
+                        let result = guest.serve(finished, rooms, move || clock());
+                        if result.is_err() {
+                            eprintln!("crewcraft-server: guest lab listener stopped");
+                        }
+                        result
+                    });
+                    match launched {
+                        Ok(thread) => Some(thread),
+                        Err(error) => {
+                            finished.store(true, Ordering::Release);
+                            return Err(error);
+                        }
+                    }
                 }
                 None => None,
             };
@@ -189,7 +217,8 @@ impl LabRuntime {
             if let Some(side) = media_side {
                 let _ = side.join();
             }
-            result
+            let guest_result = guest_side.map_or(Ok(()), |side| side.join().unwrap_or_else(|_| Err(io::Error::other("guest lab listener stopped"))));
+            result.and(guest_result)
         });
         drop(ownership);
         result

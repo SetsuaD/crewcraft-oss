@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>CrewCraft guest lobby</title>
+  <script src="/guest/lobby.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>CrewCraft guest lobby</h1>
+    <form id="join-form" autocomplete="off">
+      <p>
+        <label for="invite">Invite code</label><br>
+        <input id="invite" type="text" autocapitalize="characters" spellcheck="false" required>
+        <button id="lookup" type="button">Check invite</button>
+      </p>
+      <p>
+        <label for="display-name">Your display name</label><br>
+        <input id="display-name" type="text" maxlength="256" required>
+      </p>
+      <button id="knock" type="submit">Join lobby</button>
+    </form>
+    <noscript><p>Enable JavaScript to use the lobby.</p></noscript>
+    <section id="meeting" aria-labelledby="meeting-title" hidden>
+      <h2 id="meeting-title"></h2>
+      <p id="meeting-host"></p>
+    </section>
+    <p id="notice" role="status"></p>
+    <button id="leave" type="button" hidden>Leave lobby</button>
+  </main>
+</body>
+</html>

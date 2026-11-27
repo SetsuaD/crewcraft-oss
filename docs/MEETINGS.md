@@ -160,6 +160,11 @@ and chains to a lab trust root. An absent section starts no guest socket.
 A lab address must be loopback. The staff port keeps its existing certificate and sign-in checks.
 The lobby shares only the typed guest entrance and the room journal with the staff service.
 
+In a synthetic data directory, set `listen` and `host` under `[guest-lab]` in `guest-lab.toml`.
+Use a loopback address and `localhost` or the literal listener address as the host. Put the
+dedicated certificate in `guest-lab.pem` and its private key in the owner-only
+`guest-lab-key.pem`. Startup reports the bound lab address before serving.
+
 The listener serves a fixed page at `GET /guest/` and a static script at `GET /guest/lobby.js`.
 The page accepts an invite code in a field without a form name and clears it after a successful
 knock. Its script handles submission. No code or proof appears in a path, query, cookie, browser
