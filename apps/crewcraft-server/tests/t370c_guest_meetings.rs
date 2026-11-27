@@ -55,7 +55,7 @@ const OUTSIDE: &str = "other@example.org";
 const MEDIA: &str = "media.example.org";
 const MEDIA_ADDRESS: &str = "203.0.113.10:3478";
 const BASE_FEATURES: u32 = FEATURE_MEETINGS | FEATURE_CALLS;
-const FEATURES: u32 = BASE_FEATURES | FEATURE_GUEST_MEETINGS;
+const FEATURES: u32 = BASE_FEATURES | FEATURE_GUEST_MEETINGS | FEATURE_MEDIA;
 
 struct Scratch(PathBuf);
 
@@ -153,13 +153,36 @@ impl Staff {
             for event in self.client.receive(frame.as_bytes(), NOW, 0).unwrap() {
                 match event {
                     ClientEvent::Reply(Reply::Done { request: Request::Ping, .. }) => {
-                        return (answer.unwrap(), events, lobby_pushes);
+                        let (_, response) = answer.unwrap();
+                        return (response, events, lobby_pushes);
                     }
-                    ClientEvent::Reply(Reply::Done { response, .. }) => answer = Some(response),
+                    ClientEvent::Reply(Reply::Done { id, response, .. }) => answer = Some((id, response)),
+                    media @ ClientEvent::Media { id, .. } => {
+                        assert_eq!(answer.as_ref().map(|(request_id, _)| *request_id), Some(id));
+                        events.push(media);
+                    }
                     other => events.push(other),
                 }
             }
         }
+    }
+
+    fn join_with_media(&mut self, meeting: u64, room: &str, verifier: &mut Verifier) -> u64 {
+        let (answer, events, _) = self.ask(Request::MeetingJoin { meeting });
+        let call = cursor(answer);
+        let [ClientEvent::Media { address, credential, .. }] = events.as_slice() else {
+            panic!("expected one media grant after the meeting join acknowledgement");
+        };
+        assert_eq!(address, MEDIA_ADDRESS);
+        let grant = verifier.verify(credential, NOW).unwrap();
+        assert_eq!((grant.call, grant.room.as_str(), grant.person.as_str(), grant.device), (call, room, OWNER, 1));
+        call
+    }
+
+    fn refuse_join(&mut self, meeting: u64, code: u16) {
+        let (answer, events, _) = self.ask(Request::MeetingJoin { meeting });
+        refuse(answer, code);
+        assert!(events.is_empty(), "a refused meeting join must not send a media grant");
     }
 
     fn guest(&mut self, request: Request) -> GuestReply {
@@ -292,7 +315,7 @@ fn enrolled_staff_manage_guests_media_and_a_durable_lobby() {
         assert_eq!(rooms.guest_lobby_state(&room, ROOM_GUEST), None);
     }
     refuse(old.ask(Request::GuestLobbyList { meeting: id }).0, E_NOT_ALLOWED);
-    refuse(old.ask(Request::MeetingJoin { meeting: id }).0, E_NO_SUCH_MEETING);
+    old.refuse_join(id, E_NO_SUCH_MEETING);
     let (answer, events, _) = old.ask(Request::MeetingList { from_ms: NOW, to_ms: NOW + 3_600_000 });
     assert_eq!(answer, Response::Ok { cursor: 1 });
     assert!(
@@ -318,13 +341,14 @@ fn enrolled_staff_manage_guests_media_and_a_durable_lobby() {
     assert_eq!(owner.client.inbox().view(&room).unwrap().guest_lobby_state().unwrap().waiting, 2);
     assert!(old.ask(Request::Sync { room: room.clone(), cursor: 0 }).2.is_empty());
 
-    let ordinary = cursor(owner.ask(Request::MeetingJoin { meeting: staff }).0);
-    refuse(owner.ask(Request::MeetingJoin { meeting: id }).0, E_NOT_ALLOWED);
+    let mut verifier = Verifier::new(key, MEDIA);
+    let ordinary = owner.join_with_media(staff, &room, &mut verifier);
+    owner.refuse_join(id, E_NOT_ALLOWED);
     cursor(owner.ask(Request::CallLeave { room: room.clone(), call: ordinary }).0);
     rooms.lock().unwrap().take_media_events();
-    let call = cursor(owner.ask(Request::MeetingJoin { meeting: id }).0);
+    let call = owner.join_with_media(id, &room, &mut verifier);
     assert_ne!(ordinary, call);
-    refuse(owner.ask(Request::MeetingJoin { meeting: staff }).0, E_NOT_ALLOWED);
+    owner.refuse_join(staff, E_NOT_ALLOWED);
     {
         let mut legacy = Connection::with_features(OWNER, BASE_FEATURES | FEATURE_MEDIA).with_device(Some(3));
         let frame = encode(&encode_request(1, &Request::CallJoin { room: room.clone(), call }).unwrap()).unwrap();
@@ -397,7 +421,7 @@ fn enrolled_staff_manage_guests_media_and_a_durable_lobby() {
     assert_eq!(rooms.lock().unwrap().take_media_events(), vec![MediaEvent::DropPerson { call, person: direct_person.clone() }]);
     assert_eq!(media.drop_person(call, &direct_person), 1);
     assert!(rooms.lock().unwrap().open_call(&room).is_some());
-    assert_eq!(cursor(owner.ask(Request::MeetingJoin { meeting: id }).0), call);
+    assert_eq!(owner.join_with_media(id, &room, &mut verifier), call);
     assert!(rooms.lock().unwrap().guest_entrance(|| NOW).media(peer(5), &direct_guest).is_err());
     let (_, events, pushes) = owner.ask(Request::Sync { room: room.clone(), cursor: head });
     assert!(matches!(&pushes[..], [Push::GuestLobbyState { waiting: 0, .. }]));
