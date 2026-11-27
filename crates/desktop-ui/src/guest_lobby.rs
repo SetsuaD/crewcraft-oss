@@ -29,6 +29,10 @@ pub(crate) struct Panel {
     confirm: Option<(u64, Confirm)>,
     notice: Option<String>,
     focus: bool,
+    /// Give keyboard focus to the confirmation's Keep button when it is next drawn: it just opened.
+    focus_keep: bool,
+    /// Give keyboard focus back to the control that asked for a confirmation that was just dismissed.
+    focus_ask: Option<Ask>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -45,6 +49,32 @@ enum Confirm {
     Remove { guest: u64, name: String },
 }
 
+/// The control that asked for a confirmation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ask {
+    Toggle,
+    CloseLink,
+    Remove(u64),
+}
+
+impl Confirm {
+    fn asked_by(&self) -> Ask {
+        match self {
+            Self::DirectEntry => Ask::Toggle,
+            Self::CloseLink => Ask::CloseLink,
+            Self::Remove { guest, .. } => Ask::Remove(*guest),
+        }
+    }
+}
+
+/// Focus `response` if it is the control `focus_ask` names, once.
+fn focus_if(focus_ask: &mut Option<Ask>, control: Ask, response: &egui::Response) {
+    if *focus_ask == Some(control) {
+        response.request_focus();
+        *focus_ask = None;
+    }
+}
+
 enum Pick {
     Back,
     Send(GuestCommand),
@@ -52,7 +82,31 @@ enum Pick {
 
 impl Panel {
     fn open(room: String, meeting: u64, title: String) -> Self {
-        Self { room, meeting, title, snapshot: None, code: None, phase: Phase::Loading, confirm: None, notice: None, focus: true }
+        Self {
+            room,
+            meeting,
+            title,
+            snapshot: None,
+            code: None,
+            phase: Phase::Loading,
+            confirm: None,
+            notice: None,
+            focus: true,
+            focus_keep: false,
+            focus_ask: None,
+        }
+    }
+
+    /// Esc: dismiss the confirmation, with focus back on the control that asked for it, or else leave the lobby
+    /// (`true`).
+    fn escape(&mut self) -> bool {
+        match self.confirm.take() {
+            Some((_, confirm)) => {
+                self.focus_ask = Some(confirm.asked_by());
+                false
+            }
+            None => true,
+        }
     }
 
     fn update(&mut self, lobby: GuestLobby) -> Option<String> {
@@ -128,6 +182,7 @@ impl Panel {
         let ready = self.phase == Phase::Ready && !snapshot.closed;
         let mut command = None;
         if let Some((revision, confirm)) = &self.confirm {
+            let ask = confirm.asked_by();
             let (text, accept, cancel, action) = match confirm {
                 Confirm::DirectEntry => (
                     "New guests will enter directly. Anyone already waiting still needs a decision.".to_owned(),
@@ -153,23 +208,35 @@ impl Panel {
                 if ui.add_enabled(ready, Button::new(accept)).clicked() {
                     command = Some(action);
                 }
-                if ui.button(cancel).clicked() {
+                // The confirmation opens with focus on the safe answer, and focus goes back to what asked for it.
+                let keep = ui.button(cancel);
+                if std::mem::take(&mut self.focus_keep) {
+                    keep.request_focus();
+                }
+                if keep.clicked() {
                     self.confirm = None;
+                    self.focus_ask = Some(ask);
                 }
             });
         } else if !snapshot.closed {
             ui.horizontal_wrapped(|ui| {
                 let toggle = if snapshot.lobby { "Turn off lobby" } else { "Turn on lobby" };
-                if ui.add_enabled(ready, Button::new(toggle)).clicked() {
+                let toggle = ui.add_enabled(ready, Button::new(toggle));
+                focus_if(&mut self.focus_ask, Ask::Toggle, &toggle);
+                if toggle.clicked() {
                     if snapshot.lobby {
                         self.confirm = Some((snapshot.revision, Confirm::DirectEntry));
+                        self.focus_keep = true;
                     } else {
                         command =
                             Some(GuestCommand::SetLobby { meeting: self.meeting, revision: snapshot.revision, lobby: true, confirm_direct: false });
                     }
                 }
-                if ui.add_enabled(ready, Button::new("Close guest link")).clicked() {
+                let close = ui.add_enabled(ready, Button::new("Close guest link"));
+                focus_if(&mut self.focus_ask, Ask::CloseLink, &close);
+                if close.clicked() {
                     self.confirm = Some((snapshot.revision, Confirm::CloseLink));
+                    self.focus_keep = true;
                 }
             });
         }
@@ -200,8 +267,11 @@ impl Panel {
                             }
                         }
                         GuestState::Admitted => {
-                            if ui.add_enabled(enabled, Button::new(format!("Remove {}", entry.name))).clicked() {
+                            let remove = ui.add_enabled(enabled, Button::new(format!("Remove {}", entry.name)));
+                            focus_if(&mut self.focus_ask, Ask::Remove(entry.guest), &remove);
+                            if remove.clicked() {
                                 self.confirm = Some((snapshot.revision, Confirm::Remove { guest: entry.guest, name: entry.name.clone() }));
+                                self.focus_keep = true;
                             }
                         }
                         GuestState::Declined | GuestState::Removed => {}
@@ -240,6 +310,13 @@ impl Window {
             self.clear_lobby_notice(panel.notice);
             self.calendar.focus_lobby = Some(panel.meeting);
             self.actions.push(Action::Room(Command::GuestLobby(GuestCommand::ClosePanel)));
+        }
+    }
+
+    /// Esc in the lobby (from the Calendar area): dismiss its confirmation, or else leave it.
+    pub(crate) fn guest_lobby_escape(&mut self) {
+        if self.guest_lobby.panel.as_mut().is_some_and(|panel| panel.escape()) {
+            self.close_guest_lobby();
         }
     }
 

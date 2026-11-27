@@ -1,0 +1,24 @@
+{
+  "id": "T406-keyboard-route",
+  "title": "Onboarding, messaging and closing panels by keyboard only",
+  "crate": "crewcraft-desktop-ui",
+  "files": [
+    "crates/desktop-ui/src/calendar.rs",
+    "crates/desktop-ui/src/guest_lobby.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t406_keyboard_route.rs",
+    "docs/ACCESSIBILITY.md"
+  ],
+  "test_path": "crates/desktop-ui/tests/t406_keyboard_route.rs",
+  "test_cmd": "cargo test -p crewcraft-desktop-ui --test t406_keyboard_route",
+  "depends_on": [
+    "T305-desktop-window",
+    "T370b2-meeting-lines",
+    "T370d-staff-guest-lobby"
+  ],
+  "spec": "Rule 1 of the Craft accessibility standard, tested with Tab, Shift+Tab, Enter, Esc and typed text only. Join from an invitation link, set up the authenticator, sign in, open a room and send a message: Tab reaches each field and button in reading order, Enter on a focused button does what a click does, and Enter in a form's one-line field submits it when it is ready and otherwise keeps focus in that field. A new screen starts with nothing focused (no text field is focused for the person, so a phone shows no keyboard on its own), and the authenticator entry is named. In Calendar, Esc closes the innermost thing open: a lobby confirmation or the lobby, the meeting form, the Cancel confirmation, then the area. A confirmation opens with focus on its safe answer. When a form, confirmation, lobby or the Calendar closes, by Esc or by its own button, focus returns to the control that opened it.",
+  "status": "done",
+  "context": [
+    "docs/ACCESSIBILITY.md"
+  ]
+}
