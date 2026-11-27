@@ -34,9 +34,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crewcraft_client_core::room_view::{GapNotice, PinnedMessage, ReadState, Shown};
+use crewcraft_client_core::guest::GuestReply;
+use crewcraft_client_core::room_view::{GapNotice, GuestLobbyState, PinnedMessage, ReadState, Shown};
 use crewcraft_proto::activity::{ActivityFilter, ActivitySnapshot};
 use crewcraft_ui_model::Command;
+use crewcraft_ui_model::guest::{GuestCommand, GuestMeetingChange, GuestUpdate};
 use rand_core::{OsRng, RngCore};
 use rustls::client::ResolvesClientCert;
 
@@ -78,7 +80,8 @@ impl Default for WorkerConfig {
     }
 }
 
-/// What the worker tells the window. No variant carries a password, code, token or key.
+/// What the worker tells the window. Sign-in credentials stay on the worker. The guest creation reply can carry
+/// the new link code for display and deliberate copy. Its Debug implementation redacts the code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// Mutual TLS with the server succeeded: during a sign-in, or when the server answers again after a lost
@@ -199,6 +202,7 @@ pub enum Event {
         conflict: bool,
         reason: String,
     },
+    GuestLobby(GuestUpdate),
     /// The files in the person's rooms, newest message first (task T331b).
     Files {
         files: Vec<crewcraft_proto::request::ListedFile>,
@@ -454,6 +458,12 @@ fn meeting_refusal(code: u16) -> &'static str {
     }
 }
 
+/// Reconnect and permission recovery start with a quiet baseline. Later counts
+/// can request attention once at a newer lobby revision, unless the room is muted.
+fn guest_waiting_increased(previous: Option<GuestLobbyState>, latest: GuestLobbyState, muted: bool) -> bool {
+    !muted && previous.is_some_and(|before| latest.revision > before.revision && latest.waiting > before.waiting)
+}
+
 /// The time now, Unix milliseconds (0 if the clock is before 1970).
 fn wall_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
@@ -618,6 +628,8 @@ impl Worker {
             continued_sent: BTreeMap::new(),
             calendar_weeks: None,
             meeting_changes_seen: 0,
+            guest_lobbies_seen: BTreeMap::new(),
+            open_guest_lobby: None,
             in_call: None,
             next_heartbeat: Instant::now(),
             crypto: None,
@@ -726,6 +738,9 @@ struct Run {
     calendar_weeks: Option<i64>,
     /// The session's meeting line count when the calendar was last read (task T370b2).
     meeting_changes_seen: u64,
+    guest_lobbies_seen: BTreeMap<String, GuestLobbyState>,
+    /// The room and meeting of the staff lobby currently open in the window.
+    open_guest_lobby: Option<(String, u64)>,
     /// The last reactions sent, per room (task T341b).
     reactions_sent: BTreeMap<String, crewcraft_ui_model::RoomReactions>,
     /// Pin metadata is sent even when the room's message snapshot stays unchanged (T343).
@@ -859,6 +874,7 @@ impl Run {
                     let save = MeetingSave { room, meeting: 0, version: 0, start_ms: wall_ms(), duration, title, agenda };
                     self.save_meeting(save, true);
                 }
+                Some(Input::Command(Command::GuestLobby(action))) => self.guest_action(action),
                 Some(Input::SignOut) => {
                     self.retry = None;
                     let was_signed_in = self.session.is_some();
@@ -886,6 +902,8 @@ impl Run {
     fn end_session(&mut self) {
         let had_session = self.session.is_some();
         self.session = None;
+        self.guest_lobbies_seen.clear();
+        self.open_guest_lobby = None;
         self.activity_filter = None;
         self.activity_badge_sent = None;
         self.activity_sent = None;
@@ -893,6 +911,7 @@ impl Run {
         self.shared.set_socket(None);
         if had_session {
             self.emit(Event::ActivityReset);
+            self.emit(Event::GuestLobby(GuestUpdate::Available(false)));
         }
     }
 
@@ -966,6 +985,8 @@ impl Run {
         self.recovery_epochs.clear();
         self.saved_sent = None;
         self.saved_requested = false;
+        self.guest_lobbies_seen.clear();
+        self.open_guest_lobby = None;
         if let Some(ticket) = session.resume_ticket() {
             self.keeper.save(&ticket);
             self.ticket = Some(ticket);
@@ -994,6 +1015,7 @@ impl Run {
                 Vec::new()
             }
         };
+        let guests_offered = session.guest_meetings_offered();
         self.session = Some(session);
         self.me = email.to_owned();
         if let Some(rooms) = listed {
@@ -1007,6 +1029,9 @@ impl Run {
         }
         let rooms = self.followed.iter().cloned().collect();
         self.emit(Event::SignedIn { email: self.me.clone(), rooms });
+        if guests_offered {
+            self.emit(Event::GuestLobby(GuestUpdate::Available(true)));
+        }
         self.poll(true);
     }
 
@@ -1232,6 +1257,156 @@ impl Run {
             error => (false, self.request_failed(error).to_string()),
         };
         self.emit(Event::MeetingRefused { meeting, conflict, reason });
+    }
+
+    fn guest_action(&mut self, action: GuestCommand) {
+        if action == GuestCommand::ClosePanel {
+            self.select_guest_lobby(None);
+            return;
+        }
+        let meeting = match &action {
+            GuestCommand::Open { meeting, .. }
+            | GuestCommand::SetLobby { meeting, .. }
+            | GuestCommand::Decide { meeting, .. }
+            | GuestCommand::CloseLink { meeting, .. } => Some(*meeting),
+            GuestCommand::ClosePanel | GuestCommand::Create(_) => None,
+        };
+        let Some(session) = self.session.as_mut().filter(|session| session.guest_meetings_offered()) else {
+            self.emit(Event::GuestLobby(GuestUpdate::Refused {
+                meeting,
+                reason: "The guest lobby is unavailable on this connection.".to_owned(),
+                conflict: false,
+                access_lost: true,
+                panel_unavailable: false,
+            }));
+            return;
+        };
+        match action {
+            GuestCommand::Open { room, meeting } => {
+                self.select_guest_lobby(Some((room, meeting)));
+                self.refresh_guest_lobby();
+            }
+            GuestCommand::Create(draft) => {
+                let room = draft.room.clone();
+                match session.guest_save(GuestMeetingChange::Create(draft)) {
+                    Ok(GuestReply::Created { lobby, code }) => {
+                        self.select_guest_lobby(Some((room.clone(), lobby.meeting)));
+                        self.emit(Event::GuestLobby(GuestUpdate::Snapshot { room, lobby, code: Some(code) }));
+                        self.refresh_meetings();
+                    }
+                    Ok(GuestReply::Lobby(_)) => self.guest_refused(None, LabError::Chat(ChatError::UnexpectedResponse), false),
+                    Err(error) => self.guest_refused(None, error, false),
+                }
+            }
+            GuestCommand::SetLobby { meeting, revision, lobby, confirm_direct } => {
+                let result = session.guest_save(GuestMeetingChange::SetLobby { meeting, revision, lobby, confirm_direct });
+                let result = result.and_then(|reply| match reply {
+                    GuestReply::Lobby(lobby) => Ok(lobby),
+                    GuestReply::Created { .. } => Err(LabError::Chat(ChatError::UnexpectedResponse)),
+                });
+                self.publish_guest_result(meeting, result, false);
+            }
+            GuestCommand::Decide { meeting, guest, revision, decision } => {
+                let result = session.guest_decide(meeting, guest, revision, decision);
+                self.publish_guest_result(meeting, result, false);
+            }
+            GuestCommand::CloseLink { meeting, revision } => {
+                let result = session.guest_close(meeting, revision);
+                self.publish_guest_result(meeting, result, false);
+            }
+            GuestCommand::ClosePanel => {}
+        }
+    }
+
+    fn select_guest_lobby(&mut self, next: Option<(String, u64)>) {
+        if let Some((room, _)) = std::mem::replace(&mut self.open_guest_lobby, next)
+            && !self.followed.contains(&room)
+            && self.open_guest_lobby.as_ref().is_none_or(|(current, _)| current != &room)
+        {
+            self.guest_lobbies_seen.remove(&room);
+            self.room_settings_sent.remove(&room);
+            if let Some(session) = self.session.as_mut() {
+                session.forget_guest_lobby_room(&room);
+            }
+        }
+    }
+
+    fn refresh_guest_lobby(&mut self) {
+        let Some((_, meeting)) = &self.open_guest_lobby else { return };
+        let meeting = *meeting;
+        if let Some(session) = self.session.as_mut() {
+            let result = session.guest_list(meeting);
+            self.publish_guest_result(meeting, result, true);
+        }
+    }
+
+    fn publish_guest_result(&mut self, meeting: u64, result: Result<crewcraft_ui_model::guest::GuestLobby, LabError>, listing: bool) {
+        match result {
+            Ok(lobby) => {
+                if let Some((room, open)) = &self.open_guest_lobby
+                    && *open == meeting
+                {
+                    self.emit(Event::GuestLobby(GuestUpdate::Snapshot { room: room.clone(), lobby, code: None }));
+                }
+            }
+            Err(error) => self.guest_refused(Some(meeting), error, listing),
+        }
+    }
+
+    fn guest_refused(&mut self, meeting: Option<u64>, error: LabError, listing: bool) {
+        let (reason, conflict, access_lost, panel_unavailable) = match error {
+            LabError::Chat(ChatError::Rejected(code)) => {
+                let reason = match code {
+                    E_CONFLICT => "The lobby changed. Reload it before trying again.",
+                    19 => "This guest link has closed.",
+                    4 => "Check the meeting details and the guest link expiry.",
+                    3 => "You cannot make that change to this lobby.",
+                    14 | 18 => "That guest or meeting is unavailable.",
+                    _ => "The guest lobby could not be opened or changed.",
+                };
+                (reason.to_owned(), code == E_CONFLICT || code == 19, code == 1 || listing && code == 3, matches!(code, 14 | 18))
+            }
+            error => (self.request_failed(error).to_string(), false, false, false),
+        };
+        if (conflict || access_lost || panel_unavailable)
+            && let Some((room, open)) = &self.open_guest_lobby
+            && Some(*open) == meeting
+        {
+            if access_lost {
+                self.guest_lobbies_seen.remove(room);
+            }
+            self.select_guest_lobby(None);
+        }
+        self.emit(Event::GuestLobby(GuestUpdate::Refused { meeting, reason, conflict, access_lost, panel_unavailable }));
+    }
+
+    fn clear_guest_room(&mut self, room: &str) {
+        let was_open = self.open_guest_lobby.as_ref().is_some_and(|(open, _)| open == room);
+        if was_open {
+            self.select_guest_lobby(None);
+        }
+        if self.guest_lobbies_seen.remove(room).is_some() || was_open {
+            self.emit(Event::GuestLobby(GuestUpdate::ClearRoom { room: room.to_owned() }));
+        }
+    }
+
+    fn publish_guest_waiting(&mut self, room: &str) {
+        let Some(state) = self.session.as_mut().and_then(|session| session.guest_lobby_state(room)) else { return };
+        if state.revision == 0 {
+            self.clear_guest_room(room);
+            return;
+        }
+        let previous = self.guest_lobbies_seen.get(room).copied();
+        if previous.is_some_and(|previous| previous.revision >= state.revision) {
+            return;
+        }
+        self.guest_lobbies_seen.insert(room.to_owned(), state);
+        let muted = self.room_settings_sent.get(room).is_some_and(|settings| settings.muted);
+        let notify = guest_waiting_increased(previous, state, muted);
+        self.emit(Event::GuestLobby(GuestUpdate::Waiting { room: room.to_owned(), waiting: state.waiting, notify }));
+        if self.open_guest_lobby.as_ref().is_some_and(|(open, _)| open == room) {
+            self.refresh_guest_lobby();
+        }
     }
 
     fn continue_archive(&mut self, archive: String) {
@@ -1691,7 +1866,7 @@ impl Run {
         if self.saved_requested {
             self.refresh_saved(force);
         }
-        if self.followed.is_empty() {
+        if self.followed.is_empty() && self.open_guest_lobby.is_none() {
             if let Some(session) = self.session.as_mut()
                 && let Err(error) = session.ping()
             {
@@ -1707,7 +1882,25 @@ impl Run {
             }
             self.sync_room(&room, force);
         }
+        self.poll_open_guest_lobby();
         self.next_poll = Instant::now() + self.config.poll_interval;
+    }
+
+    fn poll_open_guest_lobby(&mut self) {
+        // Calendar can show rooms beyond the chat sidebar's follow limit. Keep one such lobby fresh while it is open.
+        let Some((room, _)) = self.open_guest_lobby.clone().filter(|(room, _)| !self.followed.contains(room)) else { return };
+        let Some(session) = self.session.as_mut() else { return };
+        match session.sync(&room) {
+            Ok(_) | Err(LabError::Chat(ChatError::HistoryGap { .. })) => {
+                self.publish_room_settings(&room, false);
+                self.publish_guest_waiting(&room);
+            }
+            Err(error) => {
+                if let Problem::Refused(_) = self.request_failed(error) {
+                    self.clear_guest_room(&room);
+                }
+            }
+        }
     }
 
     /// Sync one room. The open room's snapshot is sent when it changed (or always with `force`); every followed
@@ -1741,6 +1934,7 @@ impl Run {
                 recovered_lines.unwrap_or_default()
             }
             Err(LabError::Chat(ChatError::HistoryGap { reached, head })) if reached < head => {
+                self.publish_guest_waiting(room);
                 let pinned = self.session.as_mut().and_then(|session| session.pinned(room));
                 if force || self.pins_sent.get(room) != Some(&pinned) {
                     self.pins_sent.insert(room.to_owned(), pinned.clone());
@@ -1753,6 +1947,7 @@ impl Run {
             Err(error) => {
                 // A room the server refuses (for example one the person is not in) is not polled again.
                 if let Problem::Refused(_) = self.request_failed(error) {
+                    self.clear_guest_room(room);
                     self.followed.remove(room);
                     if self.open.as_deref() == Some(room) {
                         self.open = None;
@@ -1761,6 +1956,7 @@ impl Run {
                 return;
             }
         };
+        self.publish_guest_waiting(room);
         let is_open = self.open.as_deref() == Some(room);
         if let Some(session) = self.session.as_mut() {
             let pinned = session.pinned(room);
@@ -1889,4 +2085,24 @@ pub fn downloads_path(name: &str) -> Option<std::path::PathBuf> {
         _ => (safe.clone(), String::new()),
     };
     (1..1000).map(|n| if n == 1 { dir.join(&safe) } else { dir.join(format!("{stem} ({n}){extension}")) }).find(|path| !path.exists())
+}
+
+#[cfg(test)]
+mod guest_notice_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_new_observed_increase_notifies_in_an_unmuted_room() {
+        let snapshot = |revision, waiting| GuestLobbyState { head: 10, revision, waiting };
+        let first = snapshot(4, 1);
+        let more = snapshot(5, 2);
+        assert!(!guest_waiting_increased(None, first, false));
+        assert!(guest_waiting_increased(Some(first), more, false));
+        assert!(!guest_waiting_increased(Some(first), more, true));
+        assert!(!guest_waiting_increased(Some(more), more, false));
+        assert!(!guest_waiting_increased(Some(more), snapshot(4, 3), false));
+        assert!(!guest_waiting_increased(Some(more), snapshot(6, 2), false));
+        assert!(!guest_waiting_increased(Some(more), snapshot(7, 0), false));
+        assert!(!guest_waiting_increased(None, more, false));
+    }
 }

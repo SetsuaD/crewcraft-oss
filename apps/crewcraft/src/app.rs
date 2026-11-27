@@ -545,6 +545,7 @@ pub fn worker_update(event: Event) -> Vec<Update> {
         Event::Meetings { from_ms, to_ms, now_ms, meetings, more } => vec![Update::Meetings { from_ms, to_ms, now_ms, meetings, more }],
         Event::MeetingSaved { meeting } => vec![Update::MeetingSaved { meeting }],
         Event::MeetingRefused { meeting, conflict, reason } => vec![Update::MeetingRefused { meeting, conflict, reason }],
+        Event::GuestLobby(update) => vec![Update::GuestLobby(update)],
         Event::Continuations { room, lines } => vec![Update::Continuations { room, lines }],
         Event::Calls { room, open, lines } => vec![Update::Calls { room, open, lines }],
         Event::Files { files } => vec![Update::Files { files }],

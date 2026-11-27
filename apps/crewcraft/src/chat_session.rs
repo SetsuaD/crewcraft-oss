@@ -4,12 +4,14 @@ use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};
 
 use crewcraft_client_core::client::{Client, ClientEvent};
+use crewcraft_client_core::guest::{GuestRequest, GuestRequestError};
 use crewcraft_client_core::notify::Settings;
 use crewcraft_client_core::requests::Reply as RequestReply;
-use crewcraft_client_core::room_view::{CurrentWindow, RoomView};
+use crewcraft_client_core::room_view::{CurrentWindow, GuestLobbyState, RoomView};
 use crewcraft_client_core::session::{ClientSession, Phase, SessionError};
 use crewcraft_proto::activity::{ActivityFilter, ActivityKind, ActivitySnapshot};
 use crewcraft_proto::frame::{self, ReceivedFrame};
+use crewcraft_proto::guest::{GuestDecision, GuestLobby, GuestMeetingChange, GuestReply};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::meeting::{Meeting, MeetingPage};
 use crewcraft_proto::message::{CodecError, MAX_NAME};
@@ -436,6 +438,98 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         self.features() & crewcraft_proto::request::FEATURE_MEETINGS != 0
     }
 
+    /// Both sides agreed to staff guest-lobby management (T370d).
+    pub fn guest_meetings_offered(&self) -> bool {
+        self.meetings() && self.features() & crewcraft_proto::request::FEATURE_GUEST_MEETINGS != 0
+    }
+
+    /// The lobby count received during the last room sync, including zero when access is lost.
+    pub fn guest_lobby_state(&mut self, room: &str) -> Option<GuestLobbyState> {
+        if self.closed || !self.guest_meetings_offered() {
+            return None;
+        }
+        let view = self.view(room)?;
+        if view.awaiting_guest_lobby_state() { None } else { view.guest_lobby_state().copied() }
+    }
+
+    /// Drop a room the worker only followed temporarily to observe its lobby.
+    pub(crate) fn forget_guest_lobby_room(&mut self, room: &str) {
+        self.session.client_mut().inbox_mut().unfollow(room);
+    }
+
+    /// Create a guest meeting or change a lobby setting. Only creation returns the private invite code.
+    pub fn guest_save(&mut self, change: GuestMeetingChange, deadline: Instant) -> Result<GuestReply, ChatError> {
+        self.guest_exchange(deadline, |session| GuestRequest::save(session, change, 0))
+    }
+
+    pub fn guest_list(&mut self, meeting: u64, deadline: Instant) -> Result<GuestLobby, ChatError> {
+        self.guest_lobby_exchange(deadline, |session| GuestRequest::list(session, meeting, 0))
+    }
+
+    pub fn guest_close(&mut self, meeting: u64, revision: u64, deadline: Instant) -> Result<GuestLobby, ChatError> {
+        self.guest_lobby_exchange(deadline, |session| GuestRequest::close(session, meeting, revision, 0))
+    }
+
+    pub fn guest_decide(
+        &mut self,
+        meeting: u64,
+        guest: u64,
+        revision: u64,
+        decision: GuestDecision,
+        deadline: Instant,
+    ) -> Result<GuestLobby, ChatError> {
+        self.guest_lobby_exchange(deadline, |session| GuestRequest::decide(session, meeting, guest, revision, decision, 0))
+    }
+
+    fn guest_lobby_exchange(
+        &mut self,
+        deadline: Instant,
+        prepare: impl FnOnce(&mut ClientSession) -> Result<(GuestRequest, Vec<u8>), GuestRequestError>,
+    ) -> Result<GuestLobby, ChatError> {
+        match self.guest_exchange(deadline, prepare)? {
+            GuestReply::Lobby(lobby) => Ok(lobby),
+            GuestReply::Created { .. } => {
+                self.closed = true;
+                Err(ChatError::UnexpectedResponse)
+            }
+        }
+    }
+
+    fn guest_exchange(
+        &mut self,
+        deadline: Instant,
+        prepare: impl FnOnce(&mut ClientSession) -> Result<(GuestRequest, Vec<u8>), GuestRequestError>,
+    ) -> Result<GuestReply, ChatError> {
+        if self.closed {
+            return Err(ChatError::Closed);
+        }
+        let (mut pending, bytes) = prepare(&mut self.session).map_err(|error| self.guest_error(error))?;
+        self.write_frame(&bytes, deadline)?;
+        loop {
+            for event in self.receive_for(0, 0, deadline, Some(pending.id()))? {
+                if let Some(reply) = pending.on_event(&event).map_err(|error| self.guest_error(error))? {
+                    return Ok(reply);
+                }
+            }
+        }
+    }
+
+    fn guest_error(&mut self, error: GuestRequestError) -> ChatError {
+        match error {
+            GuestRequestError::WrongPhase => {
+                self.closed = true;
+                ChatError::Closed
+            }
+            GuestRequestError::Unsupported => ChatError::Unsupported,
+            GuestRequestError::Codec(error) => ChatError::Request(error),
+            GuestRequestError::Refused { code, .. } => ChatError::Rejected(code),
+            GuestRequestError::Malformed => {
+                self.closed = true;
+                ChatError::UnexpectedResponse
+            }
+        }
+    }
+
     /// The meetings in the signed-in person's rooms that overlap `from_ms` to `to_ms`, UTC (task T370b): `MeetingList`,
     /// then the meetings frame, whose length must be the one the answer announced. `Unsupported` without the feature.
     pub fn meeting_list(&mut self, from_ms: u64, to_ms: u64, deadline: Instant) -> Result<MeetingPage, ChatError> {
@@ -697,9 +791,9 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
             let reached = self.view(room).ok_or(ChatError::Closed)?.cursor();
             Err(ChatError::HistoryGap { reached, head })
         } else {
-            // Without a terminal pin/read snapshot, Sync can stop at a post before its file, thread or time
+            // Without a terminal metadata snapshot, Sync can stop at a post before its file, thread or time
             // sidebands, or at an equal head before call metadata. Ping drains all of them before success.
-            if !self.pins_saved() && !self.read_states() && !self.room_settings() {
+            if !self.pins_saved() && !self.read_states() && !self.room_settings() && !self.guest_meetings_offered() {
                 self.ping(now_ms, deadline)?;
             }
             Ok(head)
@@ -714,11 +808,24 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
         let inbox = self.session.client_mut().inbox_mut();
         inbox.follow(room, direct);
         let start = inbox.view(room).ok_or(ChatError::Closed)?.cursor();
-        let head = self.request(Request::Sync { room: room.to_owned(), cursor: start }, now_ms, local_minute, deadline)?;
+        let guest_lobby = self.guest_meetings_offered();
+        let head = match self.request(Request::Sync { room: room.to_owned(), cursor: start }, now_ms, local_minute, deadline) {
+            Err(error @ ChatError::Rejected(_)) if guest_lobby => {
+                // A refused room has no lobby access, even if its last sync gave us a positive count.
+                self.clear_guest_lobby_state(room);
+                return Err(error);
+            }
+            result => result?,
+        };
         let pins_saved = self.pins_saved();
         let read_states = self.read_states();
         let gap_replay = self.features() & FEATURE_GAP_REPLAY != 0;
         let room_settings = self.room_settings();
+        let has_metadata = pins_saved || read_states || room_settings || guest_lobby;
+        if guest_lobby {
+            // The matched response is one frame. Its fresh lobby snapshot has yet to arrive, even at an equal head.
+            self.session.client_mut().inbox_mut().view_mut(room).ok_or(ChatError::Closed)?.expect_guest_lobby_state();
+        }
         if room_settings {
             self.session.client_mut().inbox_mut().view_mut(room).ok_or(ChatError::Closed)?.expect_room_settings();
         }
@@ -731,28 +838,30 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
             self.session.client_mut().inbox_mut().view_mut(room).ok_or(ChatError::Closed)?.expect_read_state();
         }
 
+        let has_received_metadata = |view: &RoomView| {
+            (!pins_saved || (!view.awaiting_pin() && view.pin_revision().is_some_and(|revision| revision >= head)))
+                && (!read_states || (!view.awaiting_read_state() && view.read_state().is_some_and(|state| state.head >= head)))
+                && (!room_settings || (!view.awaiting_room_settings() && view.room_settings().is_some_and(|state| state.head >= head)))
+                && (!guest_lobby || (!view.awaiting_guest_lobby_state() && view.guest_lobby_state().is_some_and(|state| state.head >= head)))
+        };
         loop {
             let view = self.view(room).ok_or(ChatError::Closed)?;
             let reached = view.cursor();
-            let pin_received = !view.awaiting_pin() && view.pin_revision().is_some_and(|revision| revision >= head);
-            let read_received = !view.awaiting_read_state() && view.read_state().is_some_and(|state| state.head >= head);
-            let settings_received =
-                !room_settings || (!view.awaiting_room_settings() && view.room_settings().is_some_and(|state| state.head >= head));
-            let metadata_received = (!pins_saved || pin_received) && (!read_states || read_received) && settings_received;
+            let metadata_received = has_received_metadata(view);
             if head < start {
                 self.closed = true;
                 return Err(ChatError::HistoryGap { reached, head });
             }
             if !gap_replay && view.needs_resync() && metadata_received {
-                self.closed = !pins_saved && !read_states && !room_settings;
+                self.closed = !has_metadata;
                 return Err(ChatError::HistoryGap { reached, head });
             }
             if reached >= head && metadata_received {
                 return Ok((head, false));
             }
-            // The pin snapshot ends this sync even when retained history cannot replay its prefix. Keep the
-            // authoritative pin and a usable transport for saved messages while reporting the history gap.
-            if !gap_replay && (pins_saved || read_states || room_settings) && metadata_received && reached < head {
+            // The metadata snapshot ends this sync even when retained history cannot replay its prefix.
+            // Keep the authoritative metadata and a usable transport while reporting the history gap.
+            if !gap_replay && has_metadata && metadata_received && reached < head {
                 return Err(ChatError::HistoryGap { reached, head });
             }
             match self.receive(now_ms, local_minute, deadline) {
@@ -765,12 +874,7 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
                                 self.closed = true;
                                 return Err(ChatError::UnexpectedResponse);
                             }
-                            let view = self.view(room).ok_or(ChatError::Closed)?;
-                            let pins = !pins_saved || (!view.awaiting_pin() && view.pin_revision().is_some_and(|revision| revision >= head));
-                            let reads = !read_states || (!view.awaiting_read_state() && view.read_state().is_some_and(|state| state.head >= head));
-                            let settings =
-                                !room_settings || (!view.awaiting_room_settings() && view.room_settings().is_some_and(|state| state.head >= head));
-                            if !pins || !reads || !settings {
+                            if !has_received_metadata(self.view(room).ok_or(ChatError::Closed)?) {
                                 self.closed = true;
                                 return Err(ChatError::UnexpectedResponse);
                             }
@@ -785,7 +889,12 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
     fn current(&mut self, room: &str, gap_head: u64, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<(), ChatError> {
         let (id, head) = match self.exchange(Request::Current { room: room.to_owned() }, now_ms, local_minute, deadline)? {
             (id, Response::Ok { cursor }) => (id, cursor),
-            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+            (_, Response::Error { code, .. }) => {
+                if self.guest_meetings_offered() {
+                    self.clear_guest_lobby_state(room);
+                }
+                return Err(ChatError::Rejected(code));
+            }
         };
         let reached = self.view(room).ok_or(ChatError::Closed)?.cursor();
         if head < reached || head < gap_head {
@@ -823,6 +932,15 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
 
     pub fn view(&mut self, room: &str) -> Option<&RoomView> {
         self.session.client_mut().inbox().view(room)
+    }
+
+    fn clear_guest_lobby_state(&mut self, room: &str) {
+        if let Some(view) = self.session.client_mut().inbox_mut().view_mut(room) {
+            let cursor = view.cursor();
+            let head = view.guest_lobby_state().map_or(cursor, |state| state.head.max(cursor));
+            view.expect_guest_lobby_state();
+            view.set_guest_lobby_state(GuestLobbyState { head, revision: 0, waiting: 0 });
+        }
     }
 
     fn authenticate(&mut self, opening: &Opening<'_>, deadline: Instant) -> Result<Zeroizing<String>, ChatError> {
@@ -864,12 +982,20 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
     }
 
     fn receive(&mut self, now_ms: u64, local_minute: u16, deadline: Instant) -> Result<Vec<ClientEvent>, ChatError> {
+        self.receive_for(now_ms, local_minute, deadline, None)
+    }
+
+    fn receive_for(&mut self, now_ms: u64, local_minute: u16, deadline: Instant, guest_request: Option<u32>) -> Result<Vec<ClientEvent>, ChatError> {
         let frame = self.read_frame(frame::MAX_FRAME, deadline)?;
         let events = self.session.receive(frame.as_bytes(), now_ms, local_minute).map_err(|error| {
             self.closed = true;
             ChatError::Session(error)
         })?;
-        if events.iter().any(|event| matches!(event, ClientEvent::Current { .. } | ClientEvent::Activity { .. })) {
+        if events.iter().any(|event| match event {
+            ClientEvent::Current { .. } | ClientEvent::Activity { .. } => true,
+            ClientEvent::Guest { id, .. } => guest_request != Some(*id),
+            _ => false,
+        }) {
             self.closed = true;
             return Err(ChatError::UnexpectedResponse);
         }

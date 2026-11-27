@@ -3,7 +3,7 @@
 //! transport, deadlines and feeding `ClientSession::receive` events to the returned request; this module opens no
 //! guest entrance or listener. A transport advertising the feature must also wait for each Sync's fresh lobby state.
 
-use crewcraft_proto::guest::{GuestDecision, GuestMeetingChange, GuestReply};
+pub use crewcraft_proto::guest::{GuestCode, GuestDecision, GuestEntry, GuestLobby, GuestMeetingChange, GuestMeetingDraft, GuestReply, GuestState};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::request::{FEATURE_GUEST_MEETINGS, FEATURE_MEETINGS, Request, Response};
 

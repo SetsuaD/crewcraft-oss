@@ -13,6 +13,7 @@
 
 pub mod appearance;
 mod calendar;
+mod guest_lobby;
 pub mod text;
 
 pub use calendar::parse_start;
@@ -25,6 +26,7 @@ use crewcraft_client_core::room_view::Shown;
 use crewcraft_proto::activity::{ActivityFilter, ActivityItem, ActivityKind, ActivitySnapshot};
 use crewcraft_ui_model::composer::Composer;
 use crewcraft_ui_model::feed::feed_rows;
+use crewcraft_ui_model::guest::GuestUpdate;
 use crewcraft_ui_model::room_list::RoomList;
 use crewcraft_ui_model::{Command, DraftError, FeedRow};
 use egui::{Align, FontData, FontDefinitions, FontFamily, Key, Layout, Modifiers, RichText, ScrollArea, TextEdit, Ui};
@@ -231,6 +233,8 @@ pub enum Update {
         conflict: bool,
         reason: String,
     },
+    /// Guest-lobby availability, counts and confirmed results (T370d).
+    GuestLobby(GuestUpdate),
     /// Who reacted to each message of `room` with what (task T341b): by cursor, each reaction code with the people.
     Reactions {
         room: String,
@@ -309,6 +313,7 @@ impl fmt::Debug for Update {
             Self::MeetingRefused { meeting, conflict, .. } => {
                 f.debug_struct("MeetingRefused").field("meeting", meeting).field("conflict", conflict).finish()
             }
+            Self::GuestLobby(_) => f.write_str("GuestLobby(..)"),
             Self::Reactions { room, reactions } => f.debug_struct("Reactions").field("room", room).field("messages", &reactions.len()).finish(),
             Self::RoomSettings { room, settings } => f.debug_struct("RoomSettings").field("room", room).field("settings", settings).finish(),
             Self::Pin { room, pinned } => f.debug_struct("Pin").field("room", room).field("target", &pinned.as_ref().map(|pin| pin.target)).finish(),
@@ -474,6 +479,7 @@ pub struct Window {
     continued: HashMap<String, std::collections::BTreeMap<u64, (String, String)>>,
     /// The Calendar area (T370b).
     calendar: calendar::Calendar,
+    guest_lobby: guest_lobby::LobbyUi,
 }
 
 /// What a message is drawn with (T340b): who is reading, the theme's colours, which message is selected, the files and
@@ -613,6 +619,7 @@ impl Window {
                 self.go(Screen::SignIn);
             }
             Update::SignedIn { email, rooms } => {
+                self.reset_guest_lobby();
                 // Signed in again while the chat was showing: the worker resumed the session after a lost connection.
                 if self.screen() == Screen::Chat {
                     self.announce("Connected to the server again.".to_owned());
@@ -805,6 +812,7 @@ impl Window {
                 self.activity_marking = None;
                 self.activity_failed = false;
             }
+            Update::GuestLobby(update) => self.apply_guest_lobby(update),
             Update::LastEmail(email) => {
                 if self.email.is_empty() {
                     self.email = email;
@@ -813,6 +821,7 @@ impl Window {
             Update::InvitationLink(_) | Update::WaitingForBrowser => {}
             Update::Failed(text) => self.notice = Some(text),
             Update::SignedOut => {
+                self.reset_guest_lobby();
                 self.announcement = None;
                 self.activity_filter = None;
                 self.activity_snapshot = None;
@@ -864,6 +873,7 @@ impl Window {
         self.prepare_previews(ui.ctx());
         let screen = self.screen();
         if screen == Screen::Chat {
+            self.lobby_attention(ui);
             // The status line: the last problem or hint, and the last change away from focus. Both are live regions,
             // so a screen reader speaks them when they appear or change, wherever focus is.
             if self.notice.is_some() || self.announcement.is_some() {
@@ -1068,7 +1078,7 @@ impl Window {
                 self.close_activity();
                 self.files_view = None;
                 self.saved_view = false;
-                self.calendar.open = false;
+                self.close_calendar();
             }
             // The Calendar area (T370b): the work week's meetings in my rooms.
             if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.calendar.open, "Calendar")).clicked() && !self.calendar.open {
@@ -1081,7 +1091,7 @@ impl Window {
                 self.close_activity();
                 self.files_view = Some(None);
                 self.saved_view = false;
-                self.calendar.open = false;
+                self.close_calendar();
                 self.actions.push(Action::Room(Command::ListFiles));
             }
             if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.saved_view, "Saved")).clicked() && !self.saved_view {
@@ -1119,7 +1129,7 @@ impl Window {
             ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                 for row in rows {
                     let settings = self.rooms.settings(&row.name);
-                    let text = room_label(&row, settings);
+                    let text = self.lobby_room_label(&row.name, room_label(&row, settings));
                     let text = if row.unread > 0 && !settings.muted { RichText::new(text).strong() } else { RichText::new(text) };
                     let response = ui.add_sized([ui.available_width(), 28.0], egui::Button::selectable(row.selected, text));
                     if self.focus_room.as_deref() == Some(row.name.as_str()) {
@@ -1286,7 +1296,7 @@ impl Window {
                         self.close_activity();
                         self.phone_pane = PhonePane::Chats;
                         self.saved_view = false;
-                        self.calendar.open = false;
+                        self.close_calendar();
                     }
                     if columns[2]
                         .add_sized(size, egui::Button::selectable(self.phone_pane == PhonePane::Account && self.activity_filter.is_none(), "Account"))
@@ -1295,7 +1305,7 @@ impl Window {
                         self.close_activity();
                         self.phone_pane = PhonePane::Account;
                         self.saved_view = false;
-                        self.calendar.open = false;
+                        self.close_calendar();
                     }
                 });
             });
@@ -1425,7 +1435,7 @@ impl Window {
                         let mut open = None;
                         let (archive, rows): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| self.archived.contains(&row.name));
                         for row in rows {
-                            let text = room_label(&row, self.rooms.settings(&row.name));
+                            let text = self.lobby_room_label(&row.name, room_label(&row, self.rooms.settings(&row.name)));
                             let response = ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::selectable(row.selected, text));
                             if self.focus_room.as_deref() == Some(row.name.as_str()) {
                                 response.request_focus();
@@ -1539,7 +1549,7 @@ impl Window {
     fn open_saved(&mut self) {
         self.close_activity();
         self.files_view = None;
-        self.calendar.open = false;
+        self.close_calendar();
         self.saved_view = true;
         self.actions.push(Action::Room(Command::ListSaved));
     }
@@ -1554,7 +1564,7 @@ impl Window {
         self.activity_failed = false;
         self.files_view = None;
         self.saved_view = false;
-        self.calendar.open = false;
+        self.close_calendar();
         self.phone_pane = PhonePane::Chats;
         self.actions.push(Action::Room(Command::ListActivity { filter }));
     }
@@ -2248,6 +2258,7 @@ impl Window {
         // The person has moved on: the last announcement no longer describes what they are looking at.
         if deliberate {
             self.announcement = None;
+            self.close_calendar();
         }
         if let Some(command) = self.rooms.select(room) {
             self.focus = None;

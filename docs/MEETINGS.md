@@ -175,12 +175,24 @@ and call binding. Staff operations keep journal family 40 and the existing wire 
    the app follows, and meeting lines show in the room between messages, like call lines.
 3. **T370c, guest meetings and the lobby.** Staff requests, lobby counts, journal replay, in-process guest
    entrance and staff client-core API. Test expiry, waiting and direct admission, decline, media isolation and
-   removal, link closure, staff-only privacy and restart. Browser ingress, live guest media transport, desktop
-   lobby controls and ringing, and export to `audit.log` are later slices.
+   removal, link closure, staff-only privacy and restart. Browser ingress, live guest media transport and export
+   to `audit.log` are later slices.
    The server exposes the typed entrance from `crewcraft_server_core::guests`. Staff clients can manage the
    lobby through `crewcraft_client_core::guest::GuestRequest`. The staff UI still negotiates only the features
    it supports. The T370c test drives enrolled staff sessions and checks media drops against the in-process
    media server.
+4. **T370d, the staff lobby in the app.** Staff can schedule a guest meeting in Calendar and copy its code
+   when it is created. If creation finishes after the form closes, the app confirms the meeting was created.
+   Staff can close its guest link from Calendar and schedule another meeting to get a new code.
+   The Lobby button displays confirmed guest state and actions for the selected meeting.
+   Closing the link and allowing new guests to enter directly require confirmation. A changed revision calls
+   for a fresh read and a fresh decision. Disconnect and loss of room access clear the roster and code.
+
+   Negotiated room Sync consumes a fresh waiting count even if the timeline cursor is unchanged. The first
+   positive lobby revision for a room is a quiet baseline, which can include arrivals since the link was created.
+   Later observed increases in an unmuted room update the accessible status line and request attention from an
+   unfocused desktop window where supported. The count can combine several arrivals into one notice. Browser
+   guest entry and audible ringing are separate work.
 
 ## Open questions for the owner
 

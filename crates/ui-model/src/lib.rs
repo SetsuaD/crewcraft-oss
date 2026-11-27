@@ -10,6 +10,7 @@
 
 pub mod composer;
 pub mod feed;
+pub mod guest;
 pub mod room_list;
 
 /// Longest message the composer submits, in characters (`char`s) after trimming. It matches the server's limit
@@ -81,6 +82,8 @@ pub enum Command {
     JoinMeeting { room: String, meeting: u64 },
     /// Schedule a meeting in `room` that starts now, then join it (task T370b).
     StartMeetingNow { room: String, title: String, duration: u16, agenda: String },
+    /// Manage a guest meeting through the signed-in staff session (T370d).
+    GuestLobby(guest::GuestCommand),
     /// Save file `file` (`size` bytes, named `name`) to `to`, or, with `None`, to a new file in the person's
     /// Downloads folder (task T330e).
     Save { file: [u8; 16], size: u64, name: String, to: Option<std::path::PathBuf> },
