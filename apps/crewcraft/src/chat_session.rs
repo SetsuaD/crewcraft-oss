@@ -11,6 +11,7 @@ use crewcraft_client_core::session::{ClientSession, Phase, SessionError};
 use crewcraft_proto::activity::{ActivityFilter, ActivityKind, ActivitySnapshot};
 use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
+use crewcraft_proto::meeting::{Meeting, MeetingPage};
 use crewcraft_proto::message::{CodecError, MAX_NAME};
 use crewcraft_proto::request::{
     FEATURE_ACTIVITY, FEATURE_CALLS, FEATURE_CONTINUE, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED,
@@ -422,6 +423,71 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
     /// Whether the server agreed to continuing archived conversations (`request::FEATURE_CONTINUE`, task T352).
     pub fn continues(&self) -> bool {
         self.features() & FEATURE_CONTINUE != 0
+    }
+
+    /// Whether the server agreed to meetings and the calendar (`request::FEATURE_MEETINGS`, task T370b).
+    pub fn meetings(&self) -> bool {
+        self.features() & crewcraft_proto::request::FEATURE_MEETINGS != 0
+    }
+
+    /// The meetings in the signed-in person's rooms that overlap `from_ms` to `to_ms`, UTC (task T370b): `MeetingList`,
+    /// then the meetings frame, whose length must be the one the answer announced. `Unsupported` without the feature.
+    pub fn meeting_list(&mut self, from_ms: u64, to_ms: u64, deadline: Instant) -> Result<MeetingPage, ChatError> {
+        if !self.meetings() {
+            return Err(ChatError::Unsupported);
+        }
+        let (id, count) = match self.exchange(Request::MeetingList { from_ms, to_ms }, 0, 0, deadline)? {
+            (id, Response::Ok { cursor }) => (id, cursor),
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        let page = self.meetings_frame(id, deadline)?;
+        if u64::try_from(page.meetings.len()).ok() != Some(count) {
+            self.closed = true;
+            return Err(ChatError::UnexpectedResponse);
+        }
+        Ok(page)
+    }
+
+    /// Schedule (`save.meeting` 0) or edit a meeting (task T370b) and return it as the server saved it: `MeetingSave`,
+    /// then the meetings frame holding that one meeting. A stale version is `Rejected(13)`, a conflict; nothing is
+    /// resent. `Unsupported` without the feature.
+    pub fn meeting_save(&mut self, save: Request, deadline: Instant) -> Result<Meeting, ChatError> {
+        if !self.meetings() || !matches!(save, Request::MeetingSave { .. }) {
+            return Err(ChatError::Unsupported);
+        }
+        let (id, saved) = match self.exchange(save, 0, 0, deadline)? {
+            (id, Response::Ok { cursor }) => (id, cursor),
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        let page = self.meetings_frame(id, deadline)?;
+        match <[Meeting; 1]>::try_from(page.meetings) {
+            Ok([meeting]) if meeting.id == saved => Ok(meeting),
+            _ => {
+                self.closed = true;
+                Err(ChatError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Cancel or join a meeting (`MeetingCancel`, `MeetingJoin`; task T370b): the new version, or the call's id.
+    /// `Unsupported` without the feature.
+    pub fn meeting_request(&mut self, request: Request, deadline: Instant) -> Result<u64, ChatError> {
+        if !self.meetings() || !matches!(request, Request::MeetingCancel { .. } | Request::MeetingJoin { .. }) {
+            return Err(ChatError::Unsupported);
+        }
+        self.request(request, 0, 0, deadline)
+    }
+
+    fn meetings_frame(&mut self, id: u32, deadline: Instant) -> Result<MeetingPage, ChatError> {
+        loop {
+            for event in self.receive(0, 0, deadline)? {
+                if let ClientEvent::Meetings { id: answered, page } = event
+                    && answered == id
+                {
+                    return Ok(page);
+                }
+            }
+        }
     }
 
     /// Continue the archive room `archive` (task T352) and return the room the conversation continues in: `Continue`,

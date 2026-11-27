@@ -1,0 +1,30 @@
+{
+  "id": "T370b-calendar-app",
+  "title": "The calendar in the app: the work week's meetings, schedule and edit, conflicts, cancel, join and start now",
+  "crate": "crewcraft-desktop-ui",
+  "files": [
+    "crates/client-core/src/calendar.rs",
+    "crates/ui-model/src/lib.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/src/calendar.rs",
+    "crates/desktop-ui/tests/t370b_calendar_window.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "docs/MEETINGS.md",
+    "docs/ACCESSIBILITY.md"
+  ],
+  "test_path": "crates/desktop-ui/tests/t370b_calendar_window.rs",
+  "test_cmd": "cargo test -p crewcraft-desktop-ui --test t370b_calendar_window",
+  "depends_on": [
+    "T370a-meetings-server",
+    "T360a2-calls-app"
+  ],
+  "spec": "docs/MEETINGS.md, slice T370b. The app offers FEATURE_MEETINGS; SignedInSession gains meeting_list, meeting_save, meeting_cancel and meeting_join. The app bar has Calendar (the phone has a Calendar button beside Saved): it sends Command::ListMeetings { weeks } and shows that work week's meetings in my rooms, from client-core's calendar::work_week_at with the worker's clock, in UTC (the app reads no time zone yet, and the area says so), with Previous week, This week and Next week. Each meeting shows its title, start, length, room and state; a cancelled one is marked (cancelled) and offers nothing; one in progress or held offers Join only; a scheduled one offers Join, Edit and Cancel. Cancel asks for a confirmation before Command::CancelMeeting. Schedule a meeting opens a form (room, title, start as YYYY-MM-DD HH:MM UTC, length in minutes, agenda) with focus in the title; Save sends Command::SaveMeeting, Start now Command::StartMeetingNow (schedule now, then join). The form checks its fields first and says what is wrong. A refused save keeps everything typed; a conflict (E_CONFLICT) shows a notice, disables Save and sends nothing more until Reload, which asks for the week again and replaces the form with the meeting as it is now. Join sends Command::JoinMeeting, which the worker joins as a call. The worker reads the week again after every change. Window tests drive all of it through the accessibility tree.",
+  "status": "done",
+  "context": [
+    "docs/MEETINGS.md",
+    "docs/ACCESSIBILITY.md"
+  ]
+}

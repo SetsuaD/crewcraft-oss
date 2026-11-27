@@ -12,7 +12,10 @@
 //! moved into the `Action` that needs them, and are cleared from the form when it is submitted.
 
 pub mod appearance;
+mod calendar;
 pub mod text;
+
+pub use calendar::parse_start;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -208,6 +211,26 @@ pub enum Update {
         room: String,
         lines: Vec<(u64, String, String)>,
     },
+    /// The Calendar's week (task T370b): its UTC window, when the app read it, and the meetings in my rooms that overlap
+    /// it, cancelled ones included; `more` when the server had more than it sent.
+    Meetings {
+        from_ms: u64,
+        to_ms: u64,
+        now_ms: u64,
+        meetings: Vec<crewcraft_proto::meeting::Meeting>,
+        more: bool,
+    },
+    /// A meeting was scheduled or edited (task T370b): its form closes.
+    MeetingSaved {
+        meeting: crewcraft_proto::meeting::Meeting,
+    },
+    /// Saving or cancelling meeting `meeting` (0: a new one) was refused, `conflict` when someone saved it first (task
+    /// T370b). The form keeps what was typed.
+    MeetingRefused {
+        meeting: u64,
+        conflict: bool,
+        reason: String,
+    },
     /// Who reacted to each message of `room` with what (task T341b): by cursor, each reaction code with the people.
     Reactions {
         room: String,
@@ -279,6 +302,13 @@ impl fmt::Debug for Update {
             Self::Archive { room, times } => f.debug_struct("Archive").field("room", room).field("times", &times.len()).finish(),
             Self::Continued { archive, room } => f.debug_struct("Continued").field("archive", archive).field("room", room).finish(),
             Self::Continuations { room, lines } => f.debug_struct("Continuations").field("room", room).field("lines", &lines.len()).finish(),
+            Self::Meetings { from_ms, meetings, .. } => {
+                f.debug_struct("Meetings").field("from_ms", from_ms).field("meetings", &meetings.len()).finish()
+            }
+            Self::MeetingSaved { meeting } => f.debug_struct("MeetingSaved").field("meeting", &meeting.id).finish(),
+            Self::MeetingRefused { meeting, conflict, .. } => {
+                f.debug_struct("MeetingRefused").field("meeting", meeting).field("conflict", conflict).finish()
+            }
             Self::Reactions { room, reactions } => f.debug_struct("Reactions").field("room", room).field("messages", &reactions.len()).finish(),
             Self::RoomSettings { room, settings } => f.debug_struct("RoomSettings").field("room", room).field("settings", settings).finish(),
             Self::Pin { room, pinned } => f.debug_struct("Pin").field("room", room).field("target", &pinned.as_ref().map(|pin| pin.target)).finish(),
@@ -442,6 +472,8 @@ pub struct Window {
     sent_times: HashMap<String, std::collections::BTreeMap<u64, u64>>,
     /// The lines that link back to the archives each room continues: by cursor, the archive and the text (T352).
     continued: HashMap<String, std::collections::BTreeMap<u64, (String, String)>>,
+    /// The Calendar area (T370b).
+    calendar: calendar::Calendar,
 }
 
 /// What a message is drawn with (T340b): who is reading, the theme's colours, which message is selected, the files and
@@ -719,6 +751,7 @@ impl Window {
                 self.archived.insert(room.clone());
                 self.sent_times.insert(room, times.into_iter().collect());
             }
+            update @ (Update::Meetings { .. } | Update::MeetingSaved { .. } | Update::MeetingRefused { .. }) => self.apply_calendar(update),
             Update::Continued { room, .. } => {
                 self.rooms.add(&room);
                 self.phone_pane = PhonePane::Conversation;
@@ -811,6 +844,7 @@ impl Window {
                 self.previews.clear();
                 self.call_lines.clear();
                 self.continued.clear();
+                self.calendar = calendar::Calendar::default();
                 self.in_call = None;
                 self.open_thread = None;
                 self.thread_draft.clear();
@@ -1017,8 +1051,8 @@ impl Window {
                 });
             });
         });
-        // The app bar. Chat is the one area so far; Teams, Calendar, Calls, Files and Apps join it as they ship, so the
-        // bar never offers a button that does nothing.
+        // The app bar: Chat, Calendar, Files and Saved; Teams, Calls and Apps join it as they ship, so the bar never offers
+        // a button that does nothing.
         egui::Panel::left("crewcraft-app-bar").resizable(false).exact_size(72.0).show(ui, |ui| {
             ui.add_space(8.0);
             let activity = self.activity_label();
@@ -1029,16 +1063,16 @@ impl Window {
             }
             let total = self.rooms.total_unread();
             let chat = if total > 0 { format!("Chat ({total})") } else { "Chat".to_owned() };
-            if ui
-                .add_sized(
-                    [ui.available_width(), 40.0],
-                    egui::Button::selectable(self.files_view.is_none() && !self.saved_view && self.activity_filter.is_none(), chat),
-                )
-                .clicked()
-            {
+            let in_chat = self.files_view.is_none() && !self.saved_view && self.activity_filter.is_none() && !self.calendar.open;
+            if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(in_chat, chat)).clicked() {
                 self.close_activity();
                 self.files_view = None;
                 self.saved_view = false;
+                self.calendar.open = false;
+            }
+            // The Calendar area (T370b): the work week's meetings in my rooms.
+            if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.calendar.open, "Calendar")).clicked() && !self.calendar.open {
+                self.open_calendar();
             }
             // The Files area (T331b): every file in my rooms.
             if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.files_view.is_some(), "Files")).clicked()
@@ -1047,6 +1081,7 @@ impl Window {
                 self.close_activity();
                 self.files_view = Some(None);
                 self.saved_view = false;
+                self.calendar.open = false;
                 self.actions.push(Action::Room(Command::ListFiles));
             }
             if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.saved_view, "Saved")).clicked() && !self.saved_view {
@@ -1055,6 +1090,10 @@ impl Window {
         });
         if self.activity_filter.is_some() {
             self.activity_ui(ui);
+            return;
+        }
+        if self.calendar.open {
+            self.calendar_ui(ui);
             return;
         }
         if self.saved_view {
@@ -1247,6 +1286,7 @@ impl Window {
                         self.close_activity();
                         self.phone_pane = PhonePane::Chats;
                         self.saved_view = false;
+                        self.calendar.open = false;
                     }
                     if columns[2]
                         .add_sized(size, egui::Button::selectable(self.phone_pane == PhonePane::Account && self.activity_filter.is_none(), "Account"))
@@ -1255,6 +1295,7 @@ impl Window {
                         self.close_activity();
                         self.phone_pane = PhonePane::Account;
                         self.saved_view = false;
+                        self.calendar.open = false;
                     }
                 });
             });
@@ -1265,6 +1306,10 @@ impl Window {
         }
         if self.saved_view {
             self.saved_ui(ui);
+            return;
+        }
+        if self.calendar.open {
+            self.calendar_ui(ui);
             return;
         }
         match self.phone_pane {
@@ -1368,6 +1413,9 @@ impl Window {
                     ui.heading("Your rooms");
                     if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::new("Saved")).clicked() {
                         self.open_saved();
+                    }
+                    if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::new("Calendar")).clicked() {
+                        self.open_calendar();
                     }
                     let rows = self.rooms.rows();
                     if rows.is_empty() {
@@ -1491,6 +1539,7 @@ impl Window {
     fn open_saved(&mut self) {
         self.close_activity();
         self.files_view = None;
+        self.calendar.open = false;
         self.saved_view = true;
         self.actions.push(Action::Room(Command::ListSaved));
     }
@@ -1505,6 +1554,7 @@ impl Window {
         self.activity_failed = false;
         self.files_view = None;
         self.saved_view = false;
+        self.calendar.open = false;
         self.phone_pane = PhonePane::Chats;
         self.actions.push(Action::Room(Command::ListActivity { filter }));
     }

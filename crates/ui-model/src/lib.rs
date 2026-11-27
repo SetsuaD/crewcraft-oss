@@ -69,6 +69,18 @@ pub enum Command {
     /// Continue the archive room `archive` as an active conversation (task T352); the window opens the room it
     /// continues in.
     Continue { archive: String },
+    /// Show the calendar's work week `weeks` after this one (negative: before it), and keep it current after each
+    /// change (task T370b).
+    ListMeetings { weeks: i64 },
+    /// Schedule a meeting in `room` (`meeting` and `version` 0) or save an edit of meeting `meeting` last seen at
+    /// `version` (task T370b). `start_ms` is UTC; `duration` in minutes. A conflict is reported, never resent.
+    SaveMeeting { room: String, meeting: u64, version: u64, start_ms: u64, duration: u16, title: String, agenda: String },
+    /// Cancel meeting `meeting` of `room`, last seen at `version` (task T370b).
+    CancelMeeting { room: String, meeting: u64, version: u64 },
+    /// Join meeting `meeting` of `room`: its room's call (task T370b).
+    JoinMeeting { room: String, meeting: u64 },
+    /// Schedule a meeting in `room` that starts now, then join it (task T370b).
+    StartMeetingNow { room: String, title: String, duration: u16, agenda: String },
     /// Save file `file` (`size` bytes, named `name`) to `to`, or, with `None`, to a new file in the person's
     /// Downloads folder (task T330e).
     Save { file: [u8; 16], size: u64, name: String, to: Option<std::path::PathBuf> },

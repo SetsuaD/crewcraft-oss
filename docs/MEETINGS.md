@@ -164,10 +164,23 @@ and call binding. Staff operations keep journal family 40 and the existing wire 
    `audit.log` and the app are not part of it.
 2. **T370b, the calendar in the app.** The work-week agenda, the schedule and edit form (unsaved edits kept on a failed
    save, the conflict notice with an explicit reload), join buttons, start now.
+<<<<<<< HEAD
 3. **T370c, guest meetings and the lobby.** Staff requests, lobby counts, journal replay, in-process guest
    entrance and staff client-core API. Test expiry, waiting and direct admission, decline, media isolation and
    removal, link closure, staff-only privacy and restart. Browser ingress, live guest media transport, desktop
    lobby controls and ringing, and export to `audit.log` are later slices.
+=======
+   **Built (T370b).** The app bar's Calendar (and a Calendar button on the phone) shows a work week's meetings in my
+   rooms, from `calendar::work_week_at` with the app's clock, with Previous week, This week and Next week
+   (`crates/desktop-ui/src/calendar.rs`; the worker in `apps/crewcraft/src/worker.rs`). Cancelled meetings are marked
+   "(cancelled)" and offer nothing; Edit and Cancel are offered only before a meeting's first call, and Cancel asks
+   first. The form takes the start as `YYYY-MM-DD HH:MM` in UTC and checks every field before sending. A refused save
+   keeps what was typed; a conflict disables Save until Reload, which shows the meeting as it is now. Start now
+   schedules a meeting that starts now and joins it. Not yet: the app reads no time zone, so the week and every time
+   are UTC (the area says so); the agenda refreshes after each change and when asked, not when another person changes
+   a meeting while it is open; meeting system lines are not shown in the room yet.
+3. **T370c, guest meetings and the lobby**, with the guest entrance; then audit entries in `audit.log`.
+>>>>>>> c8439a4 (T370b: the calendar in the app)
 
 ## Open questions for the owner
 
