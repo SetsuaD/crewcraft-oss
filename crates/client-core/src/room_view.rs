@@ -638,13 +638,12 @@ impl RoomView {
         if state.head < self.timeline.cursor() || self.guest_lobby_state.is_some_and(|current| state.head < current.head) {
             return false;
         }
+        let cleared = self.guest_lobby_state.is_some_and(|current| current.revision == 0);
         if state.revision == 0 {
             if state.waiting != 0 || (self.guest_lobby_state.is_some() && !self.awaiting_guest_lobby_state) {
                 return false;
             }
-        } else if state.revision < self.guest_lobby_revision {
-            return false;
-        } else if self.guest_lobby_state.is_some_and(|current| current.revision == 0) && !self.awaiting_guest_lobby_state {
+        } else if state.revision < self.guest_lobby_revision || (cleared && !self.awaiting_guest_lobby_state) {
             return false;
         }
         self.guest_lobby_revision = self.guest_lobby_revision.max(state.revision);
