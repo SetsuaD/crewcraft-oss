@@ -32,7 +32,7 @@ pub const MAX_LISTED_MEETINGS: usize = 200;
 pub enum Audience {
     /// Room members only, no guest link.
     Staff,
-    /// Guests through a link and the lobby (a later slice; the server makes none yet).
+    /// Guests through a link and the lobby (T370c).
     Guests,
 }
 
@@ -54,15 +54,17 @@ pub enum MeetingChange {
     Scheduled,
     Edited,
     Cancelled,
+    Lobby,
 }
 
 impl MeetingChange {
-    /// The byte on the wire: 1, 2, 3.
+    /// The byte on the wire: 1 scheduled, 2 edited, 3 cancelled, 4 lobby.
     pub fn code(self) -> u8 {
         match self {
             Self::Scheduled => 1,
             Self::Edited => 2,
             Self::Cancelled => 3,
+            Self::Lobby => 4,
         }
     }
 
@@ -72,6 +74,7 @@ impl MeetingChange {
             1 => Some(Self::Scheduled),
             2 => Some(Self::Edited),
             3 => Some(Self::Cancelled),
+            4 => Some(Self::Lobby),
             _ => None,
         }
     }

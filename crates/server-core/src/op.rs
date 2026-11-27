@@ -17,6 +17,7 @@
 //! - tag 32 `RoomSetting` (task T346): `str slug | str user | u8 setting (1 pinned, 2 muted, 3 hidden) | u8 on (0 or
 //!   1)`; a person's own room setting, recorded only when it changed
 //! - tag 41 `MarkActivitySeen` (T347): `str user | u64 through`; private activity watermark only
+//! - tag 42 `Guest` (T370c): one atomic guest-link, lobby, closure or exclusive call-binding transition
 //! - tag 20 `ImportRoom` (task T350a): `str key | str name`
 //! - tag 21 `ImportMessage`: `str slug | str key | str author | u64 sent_ms | str text | u8 deleted (0 or 1) | u64 parent
 //!   (0 for none)`
@@ -218,6 +219,8 @@ pub enum Op {
     },
     /// A meeting record (task T370a).
     Meeting(MeetingOp),
+    /// Guest links and lobby transitions, under journal family 42.
+    Guest(crate::guests::GuestOp),
     /// A reply in the thread of the message at `parent` (task T340a). Tag 18: `str slug | str author | u64 parent |
     /// str text | u64 now_ms`.
     Reply {
@@ -434,6 +437,7 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             out.push(u8::from(*on));
         }
         Op::Meeting(record) => encode_meeting(&mut out, record)?,
+        Op::Guest(record) => encode_guest(&mut out, record)?,
         Op::Reply { slug, author, parent, text, now_ms } => {
             out.push(REPLY);
             encode_str(&mut out, slug)?;
@@ -627,6 +631,13 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
                 return Err(CodecError::TrailingBytes);
             }
             Ok(Op::Meeting(op))
+        }
+        GUEST => {
+            let op = decode_guest(bytes, &mut pos)?;
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(Op::Guest(op))
         }
         REPLY => {
             let slug = decode_str(bytes, &mut pos)?;
@@ -833,6 +844,156 @@ const ROOM_SETTING: u8 = 32;
 const MARK_ACTIVITY_SEEN: u8 = 41;
 /// The tag of `Op::Meeting` (task T370a).
 const MEETING: u8 = 40;
+const GUEST: u8 = 42;
+
+fn encode_guest(out: &mut Vec<u8>, record: &crate::guests::GuestOp) -> Result<(), CodecError> {
+    use crate::guests::GuestOp;
+    use crewcraft_proto::guest::GuestDecision;
+    out.push(GUEST);
+    match record {
+        GuestOp::Create { meeting, owner, draft, code, now_ms } => {
+            out.push(1);
+            out.extend_from_slice(&meeting.to_be_bytes());
+            encode_str(out, owner)?;
+            encode_str(out, &draft.room)?;
+            out.extend_from_slice(&draft.start_ms.to_be_bytes());
+            out.extend_from_slice(&draft.duration.to_be_bytes());
+            encode_str(out, &draft.title)?;
+            encode_str(out, &draft.agenda)?;
+            encode_str(out, &draft.host_name)?;
+            out.extend_from_slice(&draft.expires_ms.to_be_bytes());
+            out.extend_from_slice(&[u8::from(draft.lobby), u8::from(draft.confirm_direct)]);
+            out.extend_from_slice(code);
+            out.extend_from_slice(&now_ms.to_be_bytes());
+        }
+        GuestOp::Lobby { meeting, actor, revision, lobby, now_ms } => {
+            out.push(2);
+            out.extend_from_slice(&meeting.to_be_bytes());
+            encode_str(out, actor)?;
+            out.extend_from_slice(&revision.to_be_bytes());
+            out.push(u8::from(*lobby));
+            out.extend_from_slice(&now_ms.to_be_bytes());
+        }
+        GuestOp::Knock { meeting, guest, name, digest, now_ms } => {
+            out.push(3);
+            out.extend_from_slice(&meeting.to_be_bytes());
+            out.extend_from_slice(&guest.to_be_bytes());
+            encode_str(out, name)?;
+            out.extend_from_slice(digest);
+            out.extend_from_slice(&now_ms.to_be_bytes());
+        }
+        GuestOp::Decide { meeting, guest, actor, revision, decision, now_ms } => {
+            out.push(4);
+            out.extend_from_slice(&meeting.to_be_bytes());
+            out.extend_from_slice(&guest.to_be_bytes());
+            encode_str(out, actor)?;
+            out.extend_from_slice(&revision.to_be_bytes());
+            out.push(match decision {
+                GuestDecision::Admit => 1,
+                GuestDecision::Decline => 2,
+                GuestDecision::Remove => 3,
+            });
+            out.extend_from_slice(&now_ms.to_be_bytes());
+        }
+        GuestOp::Close { meeting, actor, revision, now_ms, cancel } => {
+            out.push(5);
+            out.extend_from_slice(&meeting.to_be_bytes());
+            encode_str(out, actor)?;
+            out.extend_from_slice(&revision.to_be_bytes());
+            out.extend_from_slice(&now_ms.to_be_bytes());
+            out.push(u8::from(*cancel));
+        }
+        GuestOp::Bind { meeting, call, actor, now_ms } => {
+            out.push(6);
+            out.extend_from_slice(&meeting.to_be_bytes());
+            out.extend_from_slice(&call.to_be_bytes());
+            encode_str(out, actor)?;
+            out.extend_from_slice(&now_ms.to_be_bytes());
+        }
+    }
+    Ok(())
+}
+
+fn guest_bool(bytes: &[u8], pos: &mut usize) -> Result<bool, CodecError> {
+    match decode_array::<1>(bytes, pos)? {
+        [0] => Ok(false),
+        [1] => Ok(true),
+        [other] => Err(CodecError::BadKind(other)),
+    }
+}
+
+fn decode_guest(bytes: &[u8], pos: &mut usize) -> Result<crate::guests::GuestOp, CodecError> {
+    use crate::guests::GuestOp;
+    use crewcraft_proto::guest::{GuestDecision, GuestMeetingDraft};
+    let [kind] = decode_array::<1>(bytes, pos)?;
+    if !(1..=6).contains(&kind) {
+        return Err(CodecError::BadKind(kind));
+    }
+    let meeting = decode_u64(bytes, pos)?;
+    Ok(match kind {
+        1 => {
+            let owner = decode_str(bytes, pos)?;
+            let room = decode_str(bytes, pos)?;
+            let start_ms = decode_u64(bytes, pos)?;
+            let duration = u16::from_be_bytes(decode_array::<2>(bytes, pos)?);
+            let title = decode_str(bytes, pos)?;
+            let agenda = decode_str(bytes, pos)?;
+            let host_name = decode_str(bytes, pos)?;
+            let expires_ms = decode_u64(bytes, pos)?;
+            let lobby = guest_bool(bytes, pos)?;
+            let confirm_direct = guest_bool(bytes, pos)?;
+            let code = decode_array::<32>(bytes, pos)?;
+            let now_ms = decode_u64(bytes, pos)?;
+            GuestOp::Create {
+                meeting,
+                owner,
+                draft: GuestMeetingDraft { room, start_ms, duration, title, agenda, host_name, expires_ms, lobby, confirm_direct },
+                code,
+                now_ms,
+            }
+        }
+        2 => {
+            let actor = decode_str(bytes, pos)?;
+            let revision = decode_u64(bytes, pos)?;
+            let lobby = guest_bool(bytes, pos)?;
+            let now_ms = decode_u64(bytes, pos)?;
+            GuestOp::Lobby { meeting, actor, revision, lobby, now_ms }
+        }
+        3 => {
+            let guest = decode_u64(bytes, pos)?;
+            let name = decode_str(bytes, pos)?;
+            let digest = decode_array::<32>(bytes, pos)?;
+            let now_ms = decode_u64(bytes, pos)?;
+            GuestOp::Knock { meeting, guest, name, digest, now_ms }
+        }
+        4 => {
+            let guest = decode_u64(bytes, pos)?;
+            let actor = decode_str(bytes, pos)?;
+            let revision = decode_u64(bytes, pos)?;
+            let decision = match decode_array::<1>(bytes, pos)? {
+                [1] => GuestDecision::Admit,
+                [2] => GuestDecision::Decline,
+                [3] => GuestDecision::Remove,
+                [other] => return Err(CodecError::BadKind(other)),
+            };
+            let now_ms = decode_u64(bytes, pos)?;
+            GuestOp::Decide { meeting, guest, actor, revision, decision, now_ms }
+        }
+        5 => {
+            let actor = decode_str(bytes, pos)?;
+            let revision = decode_u64(bytes, pos)?;
+            let now_ms = decode_u64(bytes, pos)?;
+            let cancel = guest_bool(bytes, pos)?;
+            GuestOp::Close { meeting, actor, revision, now_ms, cancel }
+        }
+        _ => {
+            let call = decode_u64(bytes, pos)?;
+            let actor = decode_str(bytes, pos)?;
+            let now_ms = decode_u64(bytes, pos)?;
+            GuestOp::Bind { meeting, call, actor, now_ms }
+        }
+    })
+}
 
 fn encode_meeting(out: &mut Vec<u8>, record: &MeetingOp) -> Result<(), CodecError> {
     out.push(MEETING);

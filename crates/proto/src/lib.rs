@@ -10,6 +10,7 @@ pub mod activity;
 pub mod bootstrap;
 pub mod current;
 pub mod frame;
+pub mod guest;
 pub mod handshake;
 pub mod media_control;
 pub mod meeting;

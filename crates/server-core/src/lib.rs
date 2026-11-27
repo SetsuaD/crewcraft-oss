@@ -23,6 +23,7 @@ pub mod dispatch;
 pub mod durable;
 pub mod enrollment;
 pub mod file_store;
+pub mod guests;
 pub mod html_text;
 pub mod import;
 pub mod import_media;

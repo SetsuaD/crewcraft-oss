@@ -47,9 +47,12 @@
 //! - tag 83 `RoomSettings` (task T346): `u64 revision | u8 flags`. With `request::FEATURE_ROOM_SETTINGS`, the asking
 //!   person's own pin, mute and hide settings for the room, after every successful Sync and before any `Gap`. Its
 //!   cursor is the room head and advances no timeline. Flags are `room_settings::RoomSettings::flags`.
-//! - tag 85 `MeetingLine` (task T370a): `u64 meeting | u8 change (1 scheduled, 2 edited, 3 cancelled) | u64 version |
+//! - tag 85 `MeetingLine` (task T370a): `u64 meeting | u8 change (1 scheduled, 2 edited, 3 cancelled, 4 lobby) | u64 version |
 //!   str author | str text (0 to MAX_HTML)`. A meeting's system line, an event of its own that advances the cursor; a
-//!   client that did not agree to `request::FEATURE_MEETINGS` is sent `Other` in its place.
+//!   client that did not agree to `request::FEATURE_MEETINGS` is sent `Other` in its place. Lobby lines also require
+//!   `request::FEATURE_GUEST_MEETINGS`.
+//! - tag 87 `GuestLobbyState` (T370c): `u64 revision | u32 waiting`, aggregate waiting guests for the room.
+//!   Sent after a successful Sync by a client with the guest meeting feature. Its room-head cursor advances nothing.
 //!
 //! `room`, `author` and each mention are 1 to `message::MAX_NAME` bytes; `html` is 0 to `MAX_HTML` bytes; at most
 //! `MAX_MENTIONS` mentions.
@@ -85,6 +88,8 @@ pub const CONTINUED: u8 = 84;
 pub const ROOM_SETTINGS: u8 = 83;
 /// The tag of `Push::MeetingLine` (task T370a).
 pub const MEETING_LINE: u8 = 85;
+/// The tag of `Push::GuestLobbyState` (T370c).
+pub const GUEST_LOBBY_STATE: u8 = 87;
 /// The most participants a `CallState` lists.
 pub const MAX_PARTICIPANTS: usize = 255;
 /// The tag of `Push::Reacted` (task T341a).
@@ -255,6 +260,13 @@ pub enum Push {
         version: u64,
         author: String,
         text: String,
+    },
+    /// The current waiting count and lobby revision of the room (T370c). Advances no timeline cursor.
+    GuestLobbyState {
+        room: String,
+        cursor: u64,
+        revision: u64,
+        waiting: u32,
     },
 }
 
@@ -477,6 +489,13 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
             write_str(&mut out, author, 1, MAX_NAME)?;
             write_str(&mut out, text, 0, MAX_HTML)?;
         }
+        Push::GuestLobbyState { room, cursor, revision, waiting } => {
+            out.push(GUEST_LOBBY_STATE);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            out.extend_from_slice(&revision.to_be_bytes());
+            out.extend_from_slice(&waiting.to_be_bytes());
+        }
         Push::Sent { room, cursor, sent_ms } => {
             out.push(SENT);
             write_str(&mut out, room, 1, MAX_NAME)?;
@@ -539,6 +558,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         && tag != CONTINUED
         && tag != ROOM_SETTINGS
         && tag != MEETING_LINE
+        && tag != GUEST_LOBBY_STATE
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -637,6 +657,11 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
             let author = read_string(bytes, &mut pos, 1, MAX_NAME)?;
             let text = read_string(bytes, &mut pos, 0, MAX_HTML)?;
             Push::MeetingLine { room, cursor, meeting, change, version, author, text }
+        }
+        GUEST_LOBBY_STATE => {
+            let revision = read_u64(bytes, &mut pos)?;
+            let waiting = crate::request::read_u32(bytes, &mut pos)?;
+            Push::GuestLobbyState { room, cursor, revision, waiting }
         }
         CALL_KEYS => {
             let call = read_u64(bytes, &mut pos)?;

@@ -155,6 +155,15 @@ impl Issuer {
 
     /// A credential for `person`'s `device` to join `call` of `room` on `media_server`, good for `LIFETIME_MS`.
     pub fn issue(&self, call: u64, room: &str, person: &str, device: u64, media_server: &str, now_ms: u64) -> Result<Vec<u8>, Error> {
+        self.issue_until(call, room, person, device, media_server, (now_ms, now_ms.saturating_add(LIFETIME_MS)))
+    }
+
+    /// Issue within an additional authority deadline, preserving the staff credential format and expiry semantics.
+    pub fn issue_until(&self, call: u64, room: &str, person: &str, device: u64, media_server: &str, validity: (u64, u64)) -> Result<Vec<u8>, Error> {
+        let (now_ms, deadline) = validity;
+        if deadline < now_ms {
+            return Err(Error::Unusable);
+        }
         let nonce = random::<16>()?;
         let grant = Grant {
             call,
@@ -162,7 +171,7 @@ impl Issuer {
             person: person.to_owned(),
             device,
             media_server: media_server.to_owned(),
-            not_after_ms: now_ms.saturating_add(LIFETIME_MS),
+            not_after_ms: now_ms.saturating_add(LIFETIME_MS).min(deadline),
             nonce,
         };
         let mut out = body(&grant)?;

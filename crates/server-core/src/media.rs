@@ -12,6 +12,7 @@ use crewcraft_media_auth::Issuer;
 
 use crate::calls::CallError;
 use crate::durable::DurableServer;
+use crate::guests::GuestError;
 
 /// How many events wait for the control connection at most. Past that the oldest are dropped: a media server out of
 /// reach that long is told nothing about them, and everyone it still holds is dropped when their credential's call
@@ -71,6 +72,21 @@ impl DurableServer {
     /// Issue media credentials for `media` from now on (task T360b2).
     pub fn set_media(&mut self, media: MediaIssuer) {
         self.media.issuer = Some(media);
+        self.reconcile_guest_drops();
+    }
+
+    pub(crate) fn guest_media_credential(
+        &self,
+        call: u64,
+        room: &str,
+        person: &str,
+        device: u64,
+        now_ms: u64,
+        expires_ms: u64,
+    ) -> Result<Vec<u8>, GuestError> {
+        let media = self.media.issuer.as_ref().ok_or(GuestError::MediaUnavailable)?;
+        let deadline = expires_ms.checked_sub(1).filter(|deadline| *deadline >= now_ms).ok_or(GuestError::LinkClosed)?;
+        media.issuer.issue_until(call, room, person, device, &media.server_name, (now_ms, deadline)).map_err(|_| GuestError::MediaUnavailable)
     }
 
     /// The address participants reach the media server at, when one is set.

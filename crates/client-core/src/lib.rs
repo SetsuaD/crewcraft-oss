@@ -6,6 +6,7 @@
 pub use crewcraft_proto::PROTOCOL_VERSION;
 pub mod calendar;
 pub mod client;
+pub mod guest;
 pub mod inbox;
 pub mod notify;
 pub mod outbox;

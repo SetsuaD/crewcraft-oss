@@ -55,6 +55,8 @@ pub enum ClientEvent {
     Continued { id: u32, room: String },
     /// The meetings frame answering `MeetingSave` or `MeetingList` request `id` (task T370a).
     Meetings { id: u32, page: crewcraft_proto::meeting::MeetingPage },
+    /// A staff guest-meeting result, correlated with its request by `guest::GuestRequest` (T370c).
+    Guest { id: u32, reply: crewcraft_proto::guest::GuestReply },
     /// A meeting's system line, newly applied to its followed room (after that push's `Pushed`; task T370a). A calendar
     /// showing the meeting asks again.
     MeetingLine {
@@ -94,9 +96,13 @@ impl Client {
     /// The bytes to send for `request`: `Requests::send` at `now_ms`, framed (`frame::encode`). Errors as
     /// `Requests::send` (nothing is sent or remembered).
     pub fn send(&mut self, request: Request, now_ms: u64) -> Result<Vec<u8>, CodecError> {
-        let (_id, payload) = self.requests.send(request, now_ms)?;
+        self.send_tracked(request, now_ms).map(|(_, frame)| frame)
+    }
+
+    pub(crate) fn send_tracked(&mut self, request: Request, now_ms: u64) -> Result<(u32, Vec<u8>), CodecError> {
+        let (id, payload) = self.requests.send(request, now_ms)?;
         match crewcraft_proto::frame::encode(&payload) {
-            Ok(frame) => Ok(frame),
+            Ok(frame) => Ok((id, frame)),
             Err(_) => Err(CodecError::FieldLength),
         }
     }
@@ -146,6 +152,7 @@ impl Client {
                 || first == crewcraft_proto::push::CONTINUED
                 || first == crewcraft_proto::push::ROOM_SETTINGS
                 || first == crewcraft_proto::push::MEETING_LINE
+                || first == crewcraft_proto::push::GUEST_LOBBY_STATE
             {
                 let push = decode_push(&payload).map_err(ClientError::Malformed)?;
                 if let Push::Gap { room, cursor, after, oldest } = push {
@@ -168,6 +175,7 @@ impl Client {
                     Push::Continued { room, .. } => room.clone(),
                     Push::RoomSettings { room, .. } => room.clone(),
                     Push::MeetingLine { room, .. } => room.clone(),
+                    Push::GuestLobbyState { room, .. } => room.clone(),
                 };
                 let line = match &push {
                     Push::MeetingLine { room, cursor, meeting, change, version, author, text } => Some(ClientEvent::MeetingLine {
@@ -226,6 +234,9 @@ impl Client {
             } else if first == crewcraft_proto::meeting::MEETINGS_TAG {
                 let (id, page) = crewcraft_proto::meeting::decode_meetings(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Meetings { id, page });
+            } else if first == crewcraft_proto::guest::GUEST_TAG {
+                let (id, reply) = crewcraft_proto::guest::decode_guest(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Guest { id, reply });
             } else if first == ANSWER_TAG {
                 let (id, answer) = decode_answer(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Answer { id, answer });

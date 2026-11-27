@@ -164,12 +164,6 @@ and call binding. Staff operations keep journal family 40 and the existing wire 
    `audit.log` and the app are not part of it.
 2. **T370b, the calendar in the app.** The work-week agenda, the schedule and edit form (unsaved edits kept on a failed
    save, the conflict notice with an explicit reload), join buttons, start now.
-<<<<<<< HEAD
-3. **T370c, guest meetings and the lobby.** Staff requests, lobby counts, journal replay, in-process guest
-   entrance and staff client-core API. Test expiry, waiting and direct admission, decline, media isolation and
-   removal, link closure, staff-only privacy and restart. Browser ingress, live guest media transport, desktop
-   lobby controls and ringing, and export to `audit.log` are later slices.
-=======
    **Built (T370b).** The app bar's Calendar (and a Calendar button on the phone) shows a work week's meetings in my
    rooms, from `calendar::work_week_at` with the app's clock, with Previous week, This week and Next week
    (`crates/desktop-ui/src/calendar.rs`; the worker in `apps/crewcraft/src/worker.rs`). Cancelled meetings are marked
@@ -179,8 +173,14 @@ and call binding. Staff operations keep journal family 40 and the existing wire 
    schedules a meeting that starts now and joins it. Not yet: the app reads no time zone, so the week and every time
    are UTC (the area says so); since T370b2 the open calendar reads its week again when a meeting line arrives in a room
    the app follows, and meeting lines show in the room between messages, like call lines.
-3. **T370c, guest meetings and the lobby**, with the guest entrance; then audit entries in `audit.log`.
->>>>>>> c8439a4 (T370b: the calendar in the app)
+3. **T370c, guest meetings and the lobby.** Staff requests, lobby counts, journal replay, in-process guest
+   entrance and staff client-core API. Test expiry, waiting and direct admission, decline, media isolation and
+   removal, link closure, staff-only privacy and restart. Browser ingress, live guest media transport, desktop
+   lobby controls and ringing, and export to `audit.log` are later slices.
+   The server exposes the typed entrance from `crewcraft_server_core::guests`. Staff clients can manage the
+   lobby through `crewcraft_client_core::guest::GuestRequest`. The staff UI still negotiates only the features
+   it supports. The T370c test drives enrolled staff sessions and checks media drops against the in-process
+   media server.
 
 ## Open questions for the owner
 

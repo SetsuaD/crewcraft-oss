@@ -46,7 +46,7 @@ pub struct Meeting {
 }
 
 impl Meeting {
-    fn end_ms(&self) -> u64 {
+    pub(crate) fn end_ms(&self) -> u64 {
         self.start_ms.saturating_add(u64::from(self.duration) * MINUTE_MS)
     }
 }
@@ -54,8 +54,8 @@ impl Meeting {
 /// Every meeting, by id.
 #[derive(Debug, Clone, Default)]
 pub struct Meetings {
-    next: u64,
-    meetings: BTreeMap<u64, Meeting>,
+    pub(crate) next: u64,
+    pub(crate) meetings: BTreeMap<u64, Meeting>,
 }
 
 /// A meeting's fields as a client sends them, before trimming and checks.
@@ -85,7 +85,7 @@ pub enum MeetingError {
 }
 
 /// The title and agenda of `draft` after trimming, if every field is within its limits.
-fn checked(draft: &Draft<'_>) -> Result<(String, String), MeetingError> {
+pub(crate) fn checked(draft: &Draft<'_>) -> Result<(String, String), MeetingError> {
     let title = draft.title.trim();
     let agenda = draft.agenda.trim();
     let title_ok = (1..=MAX_TITLE).contains(&title.chars().count()) && !title.chars().any(char::is_control);
@@ -103,7 +103,7 @@ fn when(start_ms: u64) -> Option<String> {
 }
 
 /// The system line for `change` to `meeting`, built from the record alone.
-fn line(meeting: &Meeting, change: MeetingChange) -> String {
+pub(crate) fn line(meeting: &Meeting, change: MeetingChange) -> String {
     let schedule = || {
         let start = when(meeting.start_ms).unwrap_or_default();
         format!("{}, {start}, {}", meeting.title, duration_text(u64::from(meeting.duration) * MINUTE_MS))
@@ -112,6 +112,7 @@ fn line(meeting: &Meeting, change: MeetingChange) -> String {
         MeetingChange::Scheduled => format!("scheduled a meeting: {}", schedule()),
         MeetingChange::Edited => format!("edited the meeting: {}", schedule()),
         MeetingChange::Cancelled => format!("cancelled the meeting: {}", meeting.title),
+        MeetingChange::Lobby => "updated the meeting lobby".to_owned(),
     }
 }
 
@@ -263,6 +264,12 @@ impl DurableServer {
     pub fn cancel_meeting(&mut self, slug: &str, actor: &str, meeting: u64, version: u64, now_ms: u64) -> Result<u64, MeetingError> {
         self.check_alive().map_err(MeetingError::Durable)?;
         let current = self.changeable_by(slug, actor, meeting, version)?.clone();
+        if current.audience == Audience::Guests {
+            return self.cancel_guest_schedule(actor, meeting, now_ms).map_err(|error| match error {
+                crate::guests::GuestError::Durable(error) => MeetingError::Durable(error),
+                _ => MeetingError::NotAllowed,
+            });
+        }
         let cancelled = Meeting { cancelled: true, version: version + 1, ..current };
         self.post_meeting_line(&cancelled, actor, MeetingChange::Cancelled)?;
         let record = MeetingOp::Cancelled { slug: slug.to_owned(), meeting, actor: actor.to_owned(), now_ms, version: cancelled.version };
@@ -277,9 +284,13 @@ impl DurableServer {
     /// meeting cannot be joined. Returns the room and the call's id.
     pub fn join_meeting(&mut self, actor: &str, meeting: u64, now_ms: u64) -> Result<(String, u64), MeetingError> {
         self.check_alive().map_err(MeetingError::Durable)?;
+        self.sweep_guest_links(now_ms).map_err(MeetingError::Durable)?;
         let record = self.visible(actor, meeting).ok_or(MeetingError::NoSuchMeeting)?;
         if record.cancelled {
             return Err(MeetingError::NotAllowed);
+        }
+        if record.audience == Audience::Guests {
+            return self.join_guest_meeting(actor, meeting, now_ms);
         }
         let (room, linked) = (record.room.clone(), record.calls.clone());
         let call = self.call_start(&room, actor, true, now_ms).map_err(|error| match error {
@@ -310,6 +321,10 @@ impl DurableServer {
     /// then id: at most `MAX_LISTED_MEETINGS` and one frame's worth, with `more` when some were left out. A window that
     /// is empty, backwards or wider than `MAX_WINDOW_MS` is `BadField`.
     pub fn meetings_between(&self, user: &str, from_ms: u64, to_ms: u64) -> Result<MeetingPage, MeetingError> {
+        self.meetings_between_with_guests(user, from_ms, to_ms, true)
+    }
+
+    pub fn meetings_between_with_guests(&self, user: &str, from_ms: u64, to_ms: u64, include_guests: bool) -> Result<MeetingPage, MeetingError> {
         if to_ms <= from_ms || to_ms - from_ms > MAX_WINDOW_MS {
             return Err(MeetingError::BadField);
         }
@@ -317,6 +332,7 @@ impl DurableServer {
             .meetings
             .meetings
             .values()
+            .filter(|record| include_guests || record.audience == Audience::Staff)
             .filter(|record| record.start_ms < to_ms && record.end_ms() > from_ms)
             .filter(|record| self.server.room(&record.room).is_ok_and(|room| room.role(user).is_some()))
             .collect();
@@ -361,7 +377,7 @@ impl DurableServer {
     }
 
     /// The meeting, if `user` is a member of its room now.
-    fn visible(&self, user: &str, meeting: u64) -> Option<&Meeting> {
+    pub(crate) fn visible(&self, user: &str, meeting: u64) -> Option<&Meeting> {
         let record = self.meetings.meetings.get(&meeting)?;
         self.server.room(&record.room).ok()?.role(user)?;
         Some(record)
