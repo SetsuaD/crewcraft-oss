@@ -118,6 +118,7 @@ fn serve_connection(tcp: TcpStream, config: Arc<ServerConfig>, handle: &Handle, 
             }
             let message = decode_control(&payload).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
             let reply = match message {
+                // Acknowledge a removal only after the serving loop has applied it.
                 ControlMessage::DropPerson { seq, call, person } => handle.drop_person(call, &person).then_some(ControlMessage::Ack { seq }),
                 ControlMessage::EndCall { seq, call } => handle.end_call(call).then_some(ControlMessage::Ack { seq }),
                 // A participant's offer, relayed by the chat server (task T360b6): the serving loop admits it or says why not.
@@ -130,7 +131,7 @@ fn serve_connection(tcp: TcpStream, config: Arc<ServerConfig>, handle: &Handle, 
                 }
             };
             let Some(reply) = reply else {
-                return Ok(()); // the serving loop stopped: no acknowledgement, the chat server sends it again later
+                return Ok(()); // application was unconfirmed, so the chat server can retry the removal
             };
             let reply = encode_control(&reply).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
             stream.write_all(&encode(&reply).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?)?;

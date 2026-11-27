@@ -8,20 +8,23 @@
 //! `apps/crewcraft-media-server`: it feeds a [`Handle`]. Joins have no network intake yet.
 
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
+use std::time::Duration;
 
 use crate::{JoinError, Joined};
 
-/// How many requests may wait for the loop before a `Handle` call waits too.
+/// How many requests may wait for the loop.
 const CAPACITY: usize = 256;
+/// Leave time for a control peer to close an unacknowledged stream and retry.
+const REMOVAL_WAIT: Duration = Duration::from_secs(4);
 
 /// One request to the serving loop.
 pub enum Request {
     /// Admit a participant to `call` (see [`crate::MediaServer::join`]); the answer goes to `reply`.
     Join { call: u64, credential: Vec<u8>, offer: String, reply: Sender<Result<Joined, JoinError>> },
-    /// Drop every session of `person` in `call` (they left, were removed or lost permission).
-    DropPerson { call: u64, person: String },
-    /// Drop everyone in `call` (it ended).
-    EndCall { call: u64 },
+    /// Drop every session of `person` in `call`, then confirm the removal on `applied`.
+    DropPerson { call: u64, person: String, applied: Sender<()> },
+    /// Drop everyone in `call`, then confirm the removal on `applied`.
+    EndCall { call: u64, applied: Sender<()> },
 }
 
 /// Where the serving loop takes its requests from. `take` must not block: the loop calls it between datagrams.
@@ -63,14 +66,19 @@ impl Handle {
         answer.recv().unwrap_or(Err(JoinError::Stopped))
     }
 
-    /// Ask the loop to drop `person` from `call`. Returns false when the loop is gone.
+    /// Ask the loop to drop `person` from `call`. Returns true after it has applied the removal.
     pub fn drop_person(&self, call: u64, person: &str) -> bool {
-        self.requests.send(Request::DropPerson { call, person: person.to_owned() }).is_ok()
+        self.apply_removal(|applied| Request::DropPerson { call, person: person.to_owned(), applied })
     }
 
-    /// Ask the loop to end `call`. Returns false when the loop is gone.
+    /// Ask the loop to end `call`. Returns true after it has applied the removal.
     pub fn end_call(&self, call: u64) -> bool {
-        self.requests.send(Request::EndCall { call }).is_ok()
+        self.apply_removal(|applied| Request::EndCall { call, applied })
+    }
+
+    fn apply_removal(&self, request: impl FnOnce(Sender<()>) -> Request) -> bool {
+        let (applied, confirmation) = mpsc::channel();
+        self.requests.try_send(request(applied)).is_ok() && confirmation.recv_timeout(REMOVAL_WAIT).is_ok()
     }
 }
 
