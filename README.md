@@ -21,8 +21,10 @@
 </p>
 
 > [!NOTE]
-> **Early development.** Nothing here is usable yet. The server core is being built task by task; the plan is in
-> [ROADMAP.md](ROADMAP.md), and [CONTRIBUTING.md](CONTRIBUTING.md) says how to pick up a task.
+> **Early development, before the first beta.** You can run a server and chat from the desktop app today (see
+> [What works today](#what-works-today)), but there are no published installers yet, call audio is not connected to
+> your speakers and microphone, and things change between commits. The plan is in [ROADMAP.md](ROADMAP.md), and
+> [CONTRIBUTING.md](CONTRIBUTING.md) says how to pick up a task.
 
 <p align="center">
   <a href="#why-crewcraft">Why CrewCraft</a> ·
@@ -54,18 +56,43 @@
 
 ## What works today
 
-Libraries, each proven by the tests in `crates/*/tests`:
+Everything below runs between the server binary and the desktop app, and is proven by the tests named in each task
+under `tasks/`.
 
-- **Sign-in building blocks:** one-time codes (RFC 6238, base32, `otpauth://` URIs), enrollment codes and the bootstrap
-  key they derive, email identities, Argon2id password hashing, PKCE, sessions.
-- **Wire protocol:** framing, handshake, messages, requests and push payloads.
-- **Server core (in memory):** rooms and membership, messages and edits, mentions, unread counts, search, presence,
-  invites, devices and enrollment, uploads, rate limits, retention, an operation journal and an audit chain.
-- **Client core:** timeline, room view, inbox, outbox, notifications and the client session.
+**Joining and signing in**
+- Enroll a device from an invitation link. The app checks the server against the fingerprint in the link, and the
+  device key stays in the system key store.
+- An authenticator code at every sign-in, or sign-in through your organization's OpenID Connect provider.
+- Resume on the same device for up to 12 hours without a new code.
 
-- **Server binary:** a dark TLS server with a `first-run` setup; see "Run a server" below.
-- **Desktop app** (`crewcraft`, egui): enroll this device from an invitation link, set up an authenticator, sign in,
-  see your rooms with unread counts, read and send messages. See "Use the desktop app" below.
+**Chat**
+- Rooms with unread counts kept across your devices, and recovery of the current state after a gap in history.
+- Send, edit and delete your own messages; threaded replies; reactions; pinned messages and a Saved list.
+- Message search that opens the room on the hit.
+- Files: attach them (also from the keyboard), download them, image previews, a Files area for every file in your
+  rooms, and per-person storage quotas.
+- Personal room settings shared across your devices: pin a room to the top, mute it, hide it.
+- An activity feed of mentions, replies, reactions and missed calls.
+
+**Calls and meetings**
+- Start and join a call in a room, with ringing, missed calls and history lines. Media is end-to-end encrypted
+  (SFrame, RFC 9605) and goes through CrewCraft's own media server. Audio is encoded and decoded, but not yet
+  connected to your speakers and microphone.
+- A calendar showing a work week of meetings: schedule, edit, cancel and join, with conflict handling and changes made
+  by others shown as they happen.
+- Guest meetings on the server: an expiring guest link, a lobby, admit, decline and remove. Guests cannot join from a
+  browser yet.
+
+**History and administration**
+- Import history from a Microsoft Teams export as read-only archive rooms, and carry an archived conversation on as an
+  active one.
+- Invite people, create rooms and add members while the server runs, from an owner-only control socket.
+- Release signatures and signed release manifests for updates.
+- Themes: the window takes its look from a contrast-checked theme file.
+- Screen readers: named controls and previews, and announcements of new messages elsewhere, calls and connection
+  changes ([docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md) lists the known gaps).
+
+**Phones:** Android and iOS builds open the app with a phone layout. They are early and not yet in any store.
 
 Installers come with the first beta (`0.1.0-beta.1`, due 2026-12-31; see ROADMAP.md). Until then, build from source.
 
