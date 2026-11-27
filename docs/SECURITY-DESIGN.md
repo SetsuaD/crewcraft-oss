@@ -219,6 +219,20 @@ device certificate there (non-exportable where the OS allows it) so a browser on
 During first-run setup the server also serves its setup wizard on its loopback address without client certificates,
 reachable only from the server machine itself; the wizard closes once the first administrator is enrolled.
 
+### Lab browser guest lobby
+
+The [lab guest lobby](MEETINGS.md#browser-guest-lobby-planned-lab-contract) uses its own HTTPS
+listener and server identity. It starts only when a loopback address and matching origin are
+explicitly configured. It exposes the guest page and the four guest API operations. The staff
+listener still requires a client certificate before sending application data. Guest proof confers
+authority over a single visitor record and never grants a staff session.
+
+The browser uses same-origin JSON requests. The listener checks the configured host on every
+request and the origin on JSON POSTs. It uses the direct socket address for rate limits.
+Credentials remain in request bodies or authorization headers and the page keeps them in
+memory. Response and error bodies have fixed bounds. The lab accepts synthetic state only.
+A public listener needs its own review and deployment decision.
+
 ## 7. Status codes and existence
 
 As REQUIREMENTS.md section 4: a resource in a room you are not in is 404, never 403; guests' failures are one indistinguishable 404.
