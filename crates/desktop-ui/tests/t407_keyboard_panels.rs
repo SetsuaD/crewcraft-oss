@@ -118,6 +118,9 @@ fn meeting(id: u64, room: &str, title: &str, audience: Audience) -> Meeting {
     }
 }
 
+/// Whether a pane of the window is open.
+type IsOpen = fn(&Window) -> bool;
+
 fn activity_open(window: &Window) -> bool {
     window.activity_filter().is_some()
 }
@@ -191,7 +194,7 @@ fn the_thread_pane_closes_with_focus_back_on_what_opened_it() {
 #[test]
 fn files_saved_and_activity_close_on_esc_with_focus_back_on_their_button() {
     let mut h = signed_in(&[ROOM]);
-    let panes: [(&str, fn(&Window) -> bool); 3] = [("Files", Window::files_open), ("Saved", Window::saved_open), ("Activity", activity_open)];
+    let panes: [(&str, IsOpen); 3] = [("Files", Window::files_open), ("Saved", Window::saved_open), ("Activity", activity_open)];
     for (button, open) in panes {
         tab_to(&mut h, button, 30);
         press(&mut h, Key::Enter);
