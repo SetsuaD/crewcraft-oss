@@ -35,6 +35,31 @@ pub(crate) struct Calendar {
     confirm_cancel: Option<u64>,
     /// Restore keyboard focus when leaving a lobby.
     pub(crate) focus_lobby: Option<u64>,
+    /// Give keyboard focus to this control when it is next drawn: the Keep button of a confirmation that just opened,
+    /// or the control that opened a form or confirmation that just closed.
+    focus_to: Option<Return>,
+    /// The control that opened the form, which focus returns to when the form closes.
+    opener: Option<Return>,
+    /// Give keyboard focus to the Calendar button that opens this area: it was closed from inside.
+    pub(crate) focus_button: bool,
+}
+
+/// A control in the Calendar area that keyboard focus moves to (rule 1 of the Craft accessibility standard).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Return {
+    Schedule,
+    ScheduleGuest,
+    Edit(u64),
+    Cancel(u64),
+    Keep(u64),
+}
+
+/// Focus `response` if it is the control `focus_to` names, once.
+fn focus_if(focus_to: &mut Option<Return>, control: Return, response: &egui::Response) {
+    if *focus_to == Some(control) {
+        response.request_focus();
+        *focus_to = None;
+    }
 }
 
 /// A week as the worker last read it.
@@ -180,6 +205,7 @@ impl Window {
             self.actions.push(Action::Room(Command::GuestLobby(GuestCommand::ClosePanel)));
         }
         self.calendar.focus_lobby = None;
+        self.calendar.focus_to = None;
         self.calendar.open = false;
     }
 
@@ -208,7 +234,7 @@ impl Window {
             }
             Update::MeetingSaved { meeting } => {
                 if self.calendar.form.as_ref().is_some_and(|form| form.saving && (form.meeting == meeting.id || form.meeting == 0)) {
-                    self.calendar.form = None;
+                    self.calendar.close_form();
                 }
                 self.announcement = Some(format!("Saved the meeting {}.", meeting.title));
                 if let Some(week) = self.calendar.week.as_mut()
@@ -237,6 +263,22 @@ impl Window {
 
     /// The Calendar area: its header, then the form when one is open, else the week's agenda.
     pub(crate) fn calendar_ui(&mut self, ui: &mut Ui) {
+        // Esc closes the innermost thing open: a lobby confirmation or the lobby, the form, the Cancel confirmation, and
+        // last the area itself. Focus goes back to the control that opened what closed. An open drop-down list takes
+        // its own Esc.
+        if ui.input(|input| input.key_pressed(Key::Escape)) && !egui::Popup::is_any_open(ui.ctx()) {
+            if self.guest_lobby.panel.is_some() {
+                self.guest_lobby_escape();
+            } else if self.calendar.form.is_some() {
+                self.calendar_pick(Pick::Discard);
+            } else if self.calendar.confirm_cancel.is_some() {
+                self.calendar_pick(Pick::Keep);
+            } else {
+                self.close_calendar();
+                self.calendar.focus_button = true;
+                return;
+            }
+        }
         let mut weeks = None;
         egui::Panel::top("crewcraft-calendar-header").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -252,16 +294,23 @@ impl Window {
                         weeks = Some(self.calendar.weeks + 1);
                     }
                     if self.calendar.form.is_none() {
-                        if ui.button("Schedule a meeting").clicked() {
+                        let schedule = ui.button("Schedule a meeting");
+                        focus_if(&mut self.calendar.focus_to, Return::Schedule, &schedule);
+                        if schedule.clicked() {
                             self.new_meeting_form(None);
                         }
-                        if self.guest_lobby.available && ui.add_enabled(!self.guest_lobby.creating, Button::new("Schedule guest meeting")).clicked() {
-                            self.new_meeting_form(Some(GuestDraft { host_name: String::new(), expiry_days: 1 }));
+                        if self.guest_lobby.available {
+                            let guest = ui.add_enabled(!self.guest_lobby.creating, Button::new("Schedule guest meeting"));
+                            focus_if(&mut self.calendar.focus_to, Return::ScheduleGuest, &guest);
+                            if guest.clicked() {
+                                self.new_meeting_form(Some(GuestDraft { host_name: String::new(), expiry_days: 1 }));
+                            }
                         }
                     }
                 }
                 if ui.button("Close calendar").clicked() {
                     self.close_calendar();
+                    self.calendar.focus_button = true;
                 }
             });
         });
@@ -288,6 +337,7 @@ impl Window {
     }
 
     fn new_meeting_form(&mut self, guest: Option<GuestDraft>) {
+        self.calendar.opener = Some(if guest.is_some() { Return::ScheduleGuest } else { Return::Schedule });
         let start = self.calendar.week.as_ref().map(|week| start_text((week.now_ms / HOUR_MS + 1) * HOUR_MS)).unwrap_or_default();
         let room = self.rooms.selected().map(str::to_owned).or_else(|| self.rooms.rows().first().map(|row| row.name.clone())).unwrap_or_default();
         self.calendar.form = Some(Form {
@@ -348,7 +398,10 @@ impl Window {
                         if ui.button("Yes, cancel the meeting").clicked() {
                             pick = Some(Pick::Cancel(meeting.room.clone(), meeting.id, meeting.version));
                         }
-                        if ui.button("Keep the meeting").clicked() {
+                        // The confirmation opens with focus on the safe answer.
+                        let keep = ui.button("Keep the meeting");
+                        focus_if(&mut self.calendar.focus_to, Return::Keep(meeting.id), &keep);
+                        if keep.clicked() {
                             pick = Some(Pick::Keep);
                         }
                     });
@@ -369,10 +422,14 @@ impl Window {
                         }
                     }
                     if meeting.state == MeetingState::Scheduled {
-                        if ui.button(format!("Edit {}", meeting.title)).clicked() {
+                        let edit = ui.button(format!("Edit {}", meeting.title));
+                        focus_if(&mut self.calendar.focus_to, Return::Edit(meeting.id), &edit);
+                        if edit.clicked() {
                             pick = Some(Pick::Edit(meeting.clone()));
                         }
-                        if ui.button(format!("Cancel {}", meeting.title)).clicked() {
+                        let cancel = ui.button(format!("Cancel {}", meeting.title));
+                        focus_if(&mut self.calendar.focus_to, Return::Cancel(meeting.id), &cancel);
+                        if cancel.clicked() {
                             pick = Some(Pick::AskCancel(meeting.id));
                         }
                     }
@@ -467,11 +524,19 @@ impl Window {
             Pick::Join(room, meeting) => self.actions.push(Action::Room(Command::JoinMeeting { room, meeting })),
             Pick::Lobby(room, meeting, title) => self.open_guest_lobby(room, meeting, title),
             Pick::Edit(meeting) => {
+                self.calendar.opener = Some(Return::Edit(meeting.id));
                 self.calendar.form = Some(Form::of(&meeting));
                 self.calendar.confirm_cancel = None;
             }
-            Pick::AskCancel(meeting) => self.calendar.confirm_cancel = Some(meeting),
-            Pick::Keep => self.calendar.confirm_cancel = None,
+            Pick::AskCancel(meeting) => {
+                self.calendar.confirm_cancel = Some(meeting);
+                self.calendar.focus_to = Some(Return::Keep(meeting));
+            }
+            Pick::Keep => {
+                if let Some(meeting) = self.calendar.confirm_cancel.take() {
+                    self.calendar.focus_to = Some(Return::Cancel(meeting));
+                }
+            }
             Pick::Cancel(room, meeting, version) => {
                 self.calendar.confirm_cancel = None;
                 self.actions.push(Action::Room(Command::CancelMeeting { room, meeting, version }));
@@ -480,7 +545,7 @@ impl Window {
                 if self.calendar.clear_guest_form() {
                     self.actions.push(Action::Room(Command::GuestLobby(GuestCommand::ClosePanel)));
                 }
-                self.calendar.form = None;
+                self.calendar.close_form();
             }
             Pick::Reload => {
                 if let Some(form) = self.calendar.form.as_mut() {
@@ -537,6 +602,15 @@ impl Window {
 }
 
 impl Calendar {
+    /// Close the form; focus goes back to the control that opened it, if the area is still showing.
+    fn close_form(&mut self) {
+        self.form = None;
+        let opener = self.opener.take();
+        if self.open {
+            self.focus_to = opener;
+        }
+    }
+
     pub(crate) fn clear_guest_form(&mut self) -> bool {
         if self.form.as_ref().is_some_and(|form| form.guest.is_some()) {
             return self.form.take().is_some_and(|form| form.saving);

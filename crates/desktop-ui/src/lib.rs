@@ -384,6 +384,8 @@ pub enum Screen {
 #[derive(Default)]
 pub struct Window {
     screen: Option<Screen>,
+    /// The screen the last frame drew: a new screen starts with nothing focused.
+    drawn: Option<Screen>,
     server: String,
     email: String,
     otpauth_uri: String,
@@ -872,6 +874,12 @@ impl Window {
     pub fn ui(&mut self, ui: &mut Ui) {
         self.prepare_previews(ui.ctx());
         let screen = self.screen();
+        // A new screen starts with nothing focused. The control that had focus is gone, and egui would otherwise hand
+        // focus to whatever on the new screen happens to share its id. The first Tab then reaches the first field.
+        if self.drawn.is_some_and(|drawn| drawn != screen) {
+            ui.memory_mut(|memory| memory.stop_text_input());
+        }
+        self.drawn = Some(screen);
         if screen == Screen::Chat {
             self.lobby_attention(ui);
             // The status line: the last problem or hint, and the last change away from focus. Both are live regions,
@@ -932,13 +940,14 @@ impl Window {
     fn enroll_ui(&mut self, ui: &mut Ui) {
         ui.heading("Join a CrewCraft server");
         ui.label("Paste the invitation link your administrator sent you, and choose a password.");
-        secret_field(ui, "Invitation link", &mut self.link, false);
+        let link_field = secret_field(ui, "Invitation link", &mut self.link, false);
         // A link that names the way in offers only that way (T611k); otherwise both are offered.
         let way = crewcraft_enroll::InvitationLink::parse(self.link.trim()).ok().and_then(|link| link.signin());
         if way != Some(crewcraft_enroll::SignInWay::Organization) {
-            secret_field(ui, "New password", &mut self.password, true);
+            let password_field = secret_field(ui, "New password", &mut self.password, true);
             let ready = !self.busy && !self.link.trim().is_empty() && !self.password.is_empty();
-            if ui.add_enabled(ready, egui::Button::new("Enroll this device")).clicked() {
+            let enter = entered(ui, &[link_field, password_field], ready);
+            if ui.add_enabled(ready, egui::Button::new("Enroll this device")).clicked() || enter {
                 let link = Zeroizing::new(self.link.trim().to_owned());
                 self.link = Zeroizing::default();
                 let password = std::mem::take(&mut self.password);
@@ -974,14 +983,17 @@ impl Window {
     fn authenticator_ui(&mut self, ui: &mut Ui) {
         ui.heading("Set up your authenticator");
         ui.label("Add this entry to your authenticator app, then type the code it shows.");
+        // The entry is read-only, but it takes focus so it can be read and copied; its label names it.
         let mut uri = self.otpauth_uri.as_str();
-        ui.add(TextEdit::singleline(&mut uri).desired_width(f32::INFINITY));
+        let label = ui.label("Authenticator entry");
+        ui.add(TextEdit::singleline(&mut uri).desired_width(f32::INFINITY)).labelled_by(label.id);
         if ui.button("Copy entry").clicked() {
             ui.ctx().copy_text(self.otpauth_uri.clone());
         }
-        secret_field(ui, "Authenticator code", &mut self.code, false);
+        let code_field = secret_field(ui, "Authenticator code", &mut self.code, false);
         let ready = !self.busy && is_code(&self.code);
-        if ui.add_enabled(ready, egui::Button::new("Confirm")).clicked() {
+        let enter = entered(ui, &[code_field], ready);
+        if ui.add_enabled(ready, egui::Button::new("Confirm")).clicked() || enter {
             let code = std::mem::take(&mut self.code);
             self.busy = true;
             self.actions.push(Action::ConfirmAuthenticator { code });
@@ -994,11 +1006,12 @@ impl Window {
             ui.label(format!("Server: {}", self.server));
         }
         let label = ui.label("Email");
-        ui.add(TextEdit::singleline(&mut self.email)).labelled_by(label.id);
-        secret_field(ui, "Password", &mut self.password, true);
-        secret_field(ui, "Authenticator code", &mut self.code, false);
+        let email_field = ui.add(TextEdit::singleline(&mut self.email)).labelled_by(label.id);
+        let password_field = secret_field(ui, "Password", &mut self.password, true);
+        let code_field = secret_field(ui, "Authenticator code", &mut self.code, false);
         let ready = !self.busy && !self.email.trim().is_empty() && !self.password.is_empty() && is_code(&self.code);
-        if ui.add_enabled(ready, egui::Button::new("Sign in")).clicked() {
+        let enter = entered(ui, &[email_field, password_field, code_field], ready);
+        if ui.add_enabled(ready, egui::Button::new("Sign in")).clicked() || enter {
             let password = std::mem::take(&mut self.password);
             let code = std::mem::take(&mut self.code);
             self.busy = true;
@@ -1080,8 +1093,12 @@ impl Window {
                 self.saved_view = false;
                 self.close_calendar();
             }
-            // The Calendar area (T370b): the work week's meetings in my rooms.
-            if ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.calendar.open, "Calendar")).clicked() && !self.calendar.open {
+            // The Calendar area (T370b): the work week's meetings in my rooms. Closing it from inside brings focus back here.
+            let calendar = ui.add_sized([ui.available_width(), 40.0], egui::Button::selectable(self.calendar.open, "Calendar"));
+            if std::mem::take(&mut self.calendar.focus_button) {
+                calendar.request_focus();
+            }
+            if calendar.clicked() && !self.calendar.open {
                 self.open_calendar();
             }
             // The Files area (T331b): every file in my rooms.
@@ -1424,7 +1441,11 @@ impl Window {
                     if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::new("Saved")).clicked() {
                         self.open_saved();
                     }
-                    if ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::new("Calendar")).clicked() {
+                    let calendar = ui.add_sized([ui.available_width(), TOUCH_TARGET], egui::Button::new("Calendar"));
+                    if std::mem::take(&mut self.calendar.focus_button) {
+                        calendar.request_focus();
+                    }
+                    if calendar.clicked() {
                         self.open_calendar();
                     }
                     let rows = self.rooms.rows();
@@ -2625,9 +2646,22 @@ fn live_label(ui: &mut Ui, id: &str, text: RichText) {
 }
 
 /// A labelled one-line field whose text is zeroed when dropped. `hidden` draws it as a password field.
-fn secret_field(ui: &mut Ui, label: &str, value: &mut Zeroizing<String>, hidden: bool) {
+fn secret_field(ui: &mut Ui, label: &str, value: &mut Zeroizing<String>, hidden: bool) -> egui::Response {
     let label = ui.label(label);
-    ui.add(TextEdit::singleline(&mut **value).password(hidden).desired_width(f32::INFINITY)).labelled_by(label.id);
+    ui.add(TextEdit::singleline(&mut **value).password(hidden).desired_width(f32::INFINITY)).labelled_by(label.id)
+}
+
+/// Enter in one of a form's one-line fields submits the form when it is ready, as its button does. When it is not
+/// ready, focus stays in that field to finish it: egui ends one-line input on Enter, which would leave focus nowhere.
+fn entered(ui: &Ui, fields: &[egui::Response], ready: bool) -> bool {
+    let Some(field) = fields.iter().find(|field| field.lost_focus()) else { return false };
+    if !ui.input(|input| input.key_pressed(Key::Enter)) {
+        return false;
+    }
+    if !ready {
+        field.request_focus();
+    }
+    ready
 }
 
 /// Six to eight digits, the shape of an authenticator code.
