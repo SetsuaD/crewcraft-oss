@@ -196,8 +196,7 @@ fn meeting_lines_show_in_the_room_and_an_open_calendar_follows_another_persons_c
         Person { email: BOB, secret: [19; 20], invitation: EnrollmentCode::from_bytes([2; 20]) },
     ];
     for person in &people {
-        let invite =
-            Invite { email: person.email.into(), bootstrap_pub: person.invitation.bootstrap_public_key(), expires_ms: setup_time + 600_000 };
+        let invite = Invite { email: person.email.into(), bootstrap_pub: person.invitation.bootstrap_public_key(), expires_ms: setup_time + 600_000 };
         state.accounts.issue_invite(invite, setup_time).unwrap();
     }
     let room = state.rooms.create_room(ALICE, "Project").unwrap();
