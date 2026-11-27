@@ -28,6 +28,9 @@ pub(crate) struct Panel {
     phase: Phase,
     confirm: Option<(u64, Confirm)>,
     notice: Option<String>,
+    /// Give keyboard focus to Back to calendar when it is next drawn: the lobby just opened, or a decision was just
+    /// sent and the control that sent it (an answer of a confirmation, or a button that waits for the change) is gone
+    /// or disabled (T407).
     focus: bool,
     /// Give keyboard focus to the confirmation's Keep button when it is next drawn: it just opened.
     focus_keep: bool,
@@ -282,6 +285,7 @@ impl Panel {
         command.map(|command| {
             self.confirm = None;
             self.phase = Phase::Changing;
+            self.focus = true;
             Pick::Send(command)
         })
     }

@@ -1,0 +1,21 @@
+{
+  "id": "T407-keyboard-panels",
+  "title": "Closing the chat's panes by keyboard, and hearing a new screen",
+  "crate": "crewcraft-desktop-ui",
+  "files": [
+    "crates/desktop-ui/src/guest_lobby.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t407_keyboard_panels.rs",
+    "docs/ACCESSIBILITY.md"
+  ],
+  "test_path": "crates/desktop-ui/tests/t407_keyboard_panels.rs",
+  "test_cmd": "cargo test -p crewcraft-desktop-ui --test t407_keyboard_panels",
+  "depends_on": [
+    "T406-keyboard-route"
+  ],
+  "spec": "Rules 1 and 4 of the Craft accessibility standard, tested with Tab, Shift+Tab, Enter, Esc and typed text only (docs/ACCESSIBILITY.md, gaps 6 and 11). A message's Delete confirmation opens with focus on Keep, and Esc or Keep closes it with focus back on Delete. In the wide chat window Esc closes the innermost of the Activity, Saved or Files pane, the search results, a message's Delete confirmation and the thread pane; when one closes, by Esc or its own close button, focus returns to the control that opened it (the app-bar button, the search box or Search button that sent the search, the reply count, or the message whose Reply opened the thread). After a confirmed change in the guest lobby (a guest removed, the link closed), focus is on Back to calendar. Each new screen on the way in (authenticator, sign-in, the chat) is said through a polite live region while nothing has focus, so no text field is focused for the person and a phone shows no keyboard on its own; the chat's line goes once focus lands on a control.",
+  "status": "done",
+  "context": [
+    "docs/ACCESSIBILITY.md"
+  ]
+}
