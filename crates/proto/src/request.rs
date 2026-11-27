@@ -44,6 +44,10 @@
 //!   newest live message by someone else. `Ok.cursor` is the resulting personal read position, not the room head.
 //! - tag 30 `Current` (T345), announced by `FEATURE_GAP_REPLAY`: `str room`. `Ok.cursor` is the captured event head,
 //!   followed by bounded `current::CurrentPage` frames until their explicit last flag. See `current` for the codec.
+//! - tag 34 `Continue` (task T352), announced by `FEATURE_CONTINUE`: `str archive`, an archive room the signed-in
+//!   person can read. Answered `Ok { cursor: 0 }`, then by one continued frame (`encode_continued`): `u8 tag (142) |
+//!   u32 id | str room`, the room the conversation continues in (docs/REQUIREMENTS.md "Continuing a conversation").
+//!   Asking again answers the same room.
 //!
 //! A response is `u8 tag | u32 id | fields`, where `id` repeats the request's:
 //! - tag 128 `Ok`: `u64 cursor`
@@ -117,6 +121,10 @@ pub const FEATURE_PINS_SAVED: u32 = 256;
 pub const FEATURE_READ_STATE: u32 = 1024;
 /// Explicit event gaps and bounded, atomic current-message recovery (T345).
 pub const FEATURE_GAP_REPLAY: u32 = 2048;
+/// Continuing an archived conversation: `Continue`, its continued frame and the `Continued` push (task T352).
+pub const FEATURE_CONTINUE: u32 = 8192;
+/// The first byte of a continued frame (task T352).
+pub const CONTINUED_TAG: u8 = 142;
 /// The first byte of a saved-message page.
 pub const SAVED_TAG: u8 = 136;
 /// Sixteen full rendered bodies, including their metadata, fit inside `frame::MAX_FRAME`.
@@ -173,6 +181,7 @@ const LIST_SAVED: u8 = 28;
 const MARK_UNREAD: u8 = 29;
 const CURRENT: u8 = 30;
 const CALL_OFFER: u8 = 31;
+const CONTINUE: u8 = 34;
 /// The largest sealed sender key a `CallSeal` carries.
 pub const MAX_SEALED: usize = 256;
 /// The most files one `PostFiles` attaches (task T330c).
@@ -314,6 +323,10 @@ pub enum Request {
         file: [u8; 16],
         offset: u64,
         length: u32,
+    },
+    /// Continue the archive room `archive` as an active conversation (task T352).
+    Continue {
+        archive: String,
     },
     /// This device's WebRTC `offer` for call `call` of `room`, with the media `credential` it was given, for the
     /// media server (task T360b6).
@@ -466,6 +479,11 @@ pub fn encode_request(id: u32, request: &Request) -> Result<Vec<u8>, CodecError>
             out.push(CURRENT);
             out.extend_from_slice(&id.to_be_bytes());
             write_str(&mut out, room, 1, MAX_NAME)?;
+        }
+        Request::Continue { archive } => {
+            out.push(CONTINUE);
+            out.extend_from_slice(&id.to_be_bytes());
+            write_str(&mut out, archive, 1, MAX_NAME)?;
         }
         Request::Ping => {
             out.push(6);
@@ -632,7 +650,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
     let tag = bytes[0];
     if !(1..=6).contains(&tag)
         && !(LIST_ROOMS..=UPLOAD_FINISH).contains(&tag)
-        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT | PIN | SAVE_MESSAGE | LIST_SAVED | MARK_UNREAD | CURRENT | CALL_OFFER)
+        && !matches!(tag, DOWNLOAD | POST_FILES | REPLY | REACT | PIN | SAVE_MESSAGE | LIST_SAVED | MARK_UNREAD | CURRENT | CALL_OFFER | CONTINUE)
         && !(CALL_START..=STORAGE_USE).contains(&tag)
     {
         return Err(CodecError::BadKind(tag));
@@ -672,6 +690,7 @@ pub fn decode_request(bytes: &[u8]) -> Result<(u32, Request), CodecError> {
             Request::MarkUnread { room, target }
         }
         CURRENT => Request::Current { room: read_string(bytes, &mut pos, 1, MAX_NAME)? },
+        CONTINUE => Request::Continue { archive: read_string(bytes, &mut pos, 1, MAX_NAME)? },
         6 => Request::Ping,
         LIST_ROOMS => Request::ListRooms,
         SEARCH => Request::Search { query: read_string(bytes, &mut pos, 1, MAX_QUERY)? },
@@ -961,6 +980,33 @@ pub fn decode_hits(bytes: &[u8]) -> Result<(u32, Vec<SearchHit>), CodecError> {
         return Err(CodecError::TrailingBytes);
     }
     Ok((id, hits))
+}
+
+/// Encode the continued frame that follows the `Ok` answering `Continue` request `id` (task T352): the room the
+/// conversation continues in. `FieldLength` if `room` is empty or longer than `message::MAX_NAME` bytes.
+pub fn encode_continued(id: u32, room: &str) -> Result<Vec<u8>, CodecError> {
+    let mut out = vec![CONTINUED_TAG];
+    out.extend_from_slice(&id.to_be_bytes());
+    write_str(&mut out, room, 1, MAX_NAME)?;
+    Ok(out)
+}
+
+/// Decode exactly one continued frame: its request id and the room. Errors in the order the bytes are read: the tag
+/// (`BadKind` for anything but `CONTINUED_TAG`), the id, the room as a string field, then `TrailingBytes`.
+pub fn decode_continued(bytes: &[u8]) -> Result<(u32, String), CodecError> {
+    let Some(&tag) = bytes.first() else {
+        return Err(CodecError::Truncated);
+    };
+    if tag != CONTINUED_TAG {
+        return Err(CodecError::BadKind(tag));
+    }
+    let mut pos: usize = 1;
+    let id = read_u32(bytes, &mut pos)?;
+    let room = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+    if pos != bytes.len() {
+        return Err(CodecError::TrailingBytes);
+    }
+    Ok((id, room))
 }
 
 /// The 16 bytes of the id frame answering `StorageUse` (task T332a): the bytes used and the quota.
@@ -1275,6 +1321,31 @@ fn check_saved_page(page: &SavedPage) -> Result<(), CodecError> {
         return Err(CodecError::FieldLength);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod continue_tests {
+    use super::*;
+
+    #[test]
+    fn continue_and_its_frame_refuse_partial_trailing_and_empty_rooms() -> Result<(), CodecError> {
+        let request = Request::Continue { archive: "old-team".into() };
+        let bytes = encode_request(9, &request)?;
+        assert_eq!(decode_request(&bytes)?, (9, request));
+        let frame = encode_continued(9, "old-team-2")?;
+        assert_eq!(decode_continued(&frame)?, (9, "old-team-2".to_owned()));
+        for whole in [&bytes, &frame] {
+            for end in 0..whole.len() {
+                assert!(decode_request(&whole[..end]).is_err() && decode_continued(&whole[..end]).is_err());
+            }
+        }
+        let mut trailing = frame;
+        trailing.push(0);
+        assert_eq!(decode_continued(&trailing), Err(CodecError::TrailingBytes));
+        assert!(encode_request(9, &Request::Continue { archive: String::new() }).is_err());
+        assert!(encode_continued(9, "").is_err());
+        Ok(())
+    }
 }
 
 #[cfg(test)]

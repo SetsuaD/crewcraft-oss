@@ -70,6 +70,8 @@ pub struct DurableServer {
     pub(crate) calls: crate::calls::Calls,
     /// The media server credentials are issued for, if any, and what it must be told (task T360b2).
     pub(crate) media: crate::media::Media,
+    /// Archives continued as active conversations, and the direct messages they continue in (task T352).
+    pub(crate) continuations: crate::continuation::Continuations,
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +221,7 @@ impl DurableServer {
         let mut parents: HashMap<(String, u64), u64> = HashMap::new();
         let mut imports = crate::import::Imports::default();
         let mut calls = crate::calls::Calls::default();
+        let mut continuations = crate::continuation::Continuations::default();
         for (index, record) in records.iter().enumerate() {
             let op = decode_op(record).map_err(|_| DurableError::Corrupt { index })?;
             // An import record (task T350a) changes the import's own bookkeeping as well as a room.
@@ -236,6 +239,12 @@ impl DurableServer {
             let op = match crate::calls::replay(&mut server, &mut calls, op) {
                 Ok(crate::calls::Replayed::Done) => continue,
                 Ok(crate::calls::Replayed::NotCall(op)) => op,
+                Err(()) => return Err(DurableError::Corrupt { index }),
+            };
+            // And a continuation record (task T352).
+            let op = match crate::continuation::replay(&mut server, &mut continuations, op) {
+                Ok(None) => continue,
+                Ok(Some(op)) => op,
                 Err(()) => return Err(DurableError::Corrupt { index }),
             };
             if let Op::FileStored { slug, uploader, file, sha256, size, name, image } = op {
@@ -301,6 +310,7 @@ impl DurableServer {
             imports,
             calls,
             media: crate::media::Media::default(),
+            continuations,
         })
     }
 
@@ -851,6 +861,8 @@ fn replay(server: &mut Server, op: Op, messages: &HashMap<String, BTreeMap<u64, 
         Op::ImportRoom { .. } | Op::ImportMessage { .. } | Op::ImportEdit { .. } | Op::ImportDelete { .. } | Op::ImportFiles { .. } => Ok(0),
         // Handled by `calls::replay` (task T360a1).
         Op::CallStart { .. } | Op::CallJoin { .. } | Op::CallLeave { .. } | Op::CallEnd { .. } => Ok(0),
+        // Handled by `continuation::replay` (task T352).
+        Op::ArchiveDirect { .. } | Op::Continue { .. } => Ok(0),
     }
 }
 
@@ -950,6 +962,8 @@ pub(crate) fn index_event(
             messages.remove(target);
         }
         EventKind::Joined { .. } | EventKind::Left { .. } | EventKind::Reacted { .. } | EventKind::CallLine { .. } | EventKind::Pinned { .. } => {}
+        // A continuation's line is not a message (task T352).
+        EventKind::Continued { .. } => {}
     }
 }
 

@@ -12,7 +12,7 @@ use crewcraft_proto::frame::{self, ReceivedFrame};
 use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::{CodecError, MAX_NAME};
 use crewcraft_proto::request::{
-    FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS,
+    FEATURE_CALLS, FEATURE_CONTINUE, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS,
     FEATURE_READ_STATE, FEATURE_SEARCH, FEATURE_THREADS, MAX_SAVED_PAGE, Request, Response, SavedMessage, SavedPage, SearchHit,
 };
 use crewcraft_proto::signin::{self, Opening, SignIn};
@@ -356,6 +356,32 @@ impl<S: Read + Write, D: FnMut(&mut S, Instant)> ChatSession<S, D> {
             return Err(ChatError::Unsupported);
         }
         self.request(Request::MarkUnread { room: room.to_owned(), target }, now_ms, 0, deadline)
+    }
+
+    /// Whether the server agreed to continuing archived conversations (`request::FEATURE_CONTINUE`, task T352).
+    pub fn continues(&self) -> bool {
+        self.features() & FEATURE_CONTINUE != 0
+    }
+
+    /// Continue the archive room `archive` (task T352) and return the room the conversation continues in: `Continue`,
+    /// then the continued frame. `Unsupported`, with nothing sent, without the feature.
+    pub fn continue_archive(&mut self, archive: &str, now_ms: u64, deadline: Instant) -> Result<String, ChatError> {
+        if !self.continues() {
+            return Err(ChatError::Unsupported);
+        }
+        let id = match self.exchange(Request::Continue { archive: archive.to_owned() }, now_ms, 0, deadline)? {
+            (id, Response::Ok { .. }) => id,
+            (_, Response::Error { code, .. }) => return Err(ChatError::Rejected(code)),
+        };
+        loop {
+            for event in self.receive(now_ms, 0, deadline)? {
+                if let ClientEvent::Continued { id: answered, room } = event
+                    && answered == id
+                {
+                    return Ok(room);
+                }
+            }
+        }
     }
 
     /// A deliberate read advances the existing monotonic server marker (T344).

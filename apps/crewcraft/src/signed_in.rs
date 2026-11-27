@@ -18,7 +18,7 @@ use crewcraft_proto::handshake::Hello;
 use crewcraft_proto::message::MAX_NAME;
 use crewcraft_proto::push::AttachedFile;
 use crewcraft_proto::request::{
-    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS,
+    FEATURE_ARCHIVE, FEATURE_CALLS, FEATURE_CONTINUE, FEATURE_FILE_LIST, FEATURE_FILES, FEATURE_GAP_REPLAY, FEATURE_LIST_ROOMS, FEATURE_PINS_SAVED, FEATURE_REACTIONS,
     FEATURE_READ_STATE, FEATURE_SEARCH, FEATURE_THREADS, MAX_CHUNK, Request, SavedMessage, SearchHit,
 };
 use crewcraft_proto::signin::{CODE_LEN, MAX_EMAIL_BYTES, MAX_PASSWORD_BYTES, SignIn, TOKEN_LEN};
@@ -144,7 +144,8 @@ pub(crate) fn sign_in(stream: Transport, credentials: &SignIn<'_>, client: &str)
             | FEATURE_FILE_LIST
             | FEATURE_PINS_SAVED
             | FEATURE_READ_STATE
-            | FEATURE_GAP_REPLAY,
+            | FEATURE_GAP_REPLAY
+            | FEATURE_CONTINUE,
         client: client.into(),
     };
     let settings = Settings::new(credentials.email);
@@ -170,7 +171,8 @@ pub(crate) fn resume(stream: Transport, ticket: &ResumeTicket, client: &str) -> 
             | FEATURE_FILE_LIST
             | FEATURE_PINS_SAVED
             | FEATURE_READ_STATE
-            | FEATURE_GAP_REPLAY,
+            | FEATURE_GAP_REPLAY
+            | FEATURE_CONTINUE,
         client: client.into(),
     };
     let settings = Settings::new(ticket.email());
@@ -211,7 +213,8 @@ pub(crate) fn finish_external(
             | FEATURE_FILE_LIST
             | FEATURE_PINS_SAVED
             | FEATURE_READ_STATE
-            | FEATURE_GAP_REPLAY,
+            | FEATURE_GAP_REPLAY
+            | FEATURE_CONTINUE,
         client: client.into(),
     };
     let settings = Settings::new(email);
@@ -479,6 +482,27 @@ impl SignedInSession {
     pub fn calls(&mut self, room: &str) -> (Option<crewcraft_client_core::room_view::OpenCall>, Vec<(u64, String)>) {
         let Some(view) = self.chat.view(room) else { return (None, Vec::new()) };
         (view.call().cloned(), view.call_lines().iter().map(|(cursor, line)| (*cursor, line.text.clone())).collect())
+    }
+
+    /// Whether the server agreed to continuing archived conversations (task T352).
+    pub fn continues(&self) -> bool {
+        self.chat.continues()
+    }
+
+    /// Continue the archive room `archive` as an active conversation (task T352): the room it continues in, the same
+    /// room every time.
+    pub fn continue_archive(&mut self, archive: &str) -> Result<String, LabError> {
+        if !valid_room(archive) {
+            return Err(LabError::Usage);
+        }
+        self.chat.continue_archive(archive, 0, Instant::now() + OPERATION_TIMEOUT).map_err(LabError::Chat)
+    }
+
+    /// The lines in `room` that link back to the archives it continues, by cursor: `(cursor, archive, text)`, as the
+    /// server pushed them (task T352).
+    pub fn continued_lines(&mut self, room: &str) -> Vec<(u64, String, String)> {
+        let Some(view) = self.chat.view(room) else { return Vec::new() };
+        view.continued_lines().iter().map(|(cursor, line)| (*cursor, line.archive.clone(), line.text.clone())).collect()
     }
 
     /// For an archive room, its imported messages' original times by cursor (task T350d2); `None` for any other room.

@@ -59,6 +59,13 @@ pub fn to_push(room: &str, cursor: u64, event: &Event) -> Push {
             author: event.actor.clone(),
             text: crate::html_text::html_text(&event.html),
         },
+        EventKind::Continued { archive } => Push::Continued {
+            room: room.to_string(),
+            cursor,
+            archive: archive.clone(),
+            author: event.actor.clone(),
+            text: crate::html_text::html_text(&event.html),
+        },
         EventKind::Reacted { target, reaction, on } => {
             Push::Reacted { room: room.to_string(), cursor, target: *target, author: event.actor.clone(), reaction: *reaction, on: *on }
         }
@@ -149,6 +156,7 @@ impl Connection {
             match current_answer(s, user, id, request)
                 .or_else(|| upload(s, user, request, now))
                 .or_else(|| calls(s, user, request, now, media_device))
+                .or_else(|| continuation(s, user, request, now))
             {
                 Some(answer) => answer,
                 None => handle_backend(&mut Backend::Durable(s), user, request, now).map(|r| (r, None)).map_err(DurableConnError::Storage),
@@ -171,10 +179,12 @@ impl Connection {
             let pins_saved = self.features & crewcraft_proto::request::FEATURE_PINS_SAVED != 0;
             let reads = self.features & crewcraft_proto::request::FEATURE_READ_STATE != 0;
             let gap_replay = self.features & crewcraft_proto::request::FEATURE_GAP_REPLAY != 0;
+            let continues = self.features & crewcraft_proto::request::FEATURE_CONTINUE != 0;
             let needs_pins_saved = matches!(request, Request::Pin { .. } | Request::SaveMessage { .. } | Request::ListSaved { .. });
             let (response, follow) = if (needs_pins_saved && !pins_saved)
                 || (matches!(request, Request::MarkUnread { .. }) && !reads)
                 || (matches!(request, Request::Current { .. }) && !gap_replay)
+                || (matches!(request, Request::Continue { .. }) && !continues)
             {
                 (refusal_of(crate::dispatch::E_NOT_ALLOWED), None)
             } else {
@@ -209,6 +219,10 @@ impl Connection {
                     let frame = crewcraft_proto::request::encode_media(id, &address, &credential).map_err(ConnError::Request)?;
                     out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
                 }
+                Some(Follow::Continued(room)) => {
+                    let frame = crewcraft_proto::request::encode_continued(id, &room).map_err(ConnError::Request)?;
+                    out.extend_from_slice(&encode(&frame).map_err(ConnError::Frame)?);
+                }
                 Some(Follow::Relay { .. }) | None => {}
             }
 
@@ -239,6 +253,10 @@ impl Connection {
                     }
                     // Nor to calls, past their history lines (task T360a1).
                     if matches!(push, Push::CallLine { .. }) && !calls_on {
+                        push = Push::Other { room: room.clone(), cursor: ev_cursor };
+                    }
+                    // Nor to continuing archives, past the line that links back to one (task T352).
+                    if matches!(push, Push::Continued { .. }) && !continues {
                         push = Push::Other { room: room.clone(), cursor: ev_cursor };
                     }
                     let posted = matches!(push, Push::Posted { .. });
@@ -463,6 +481,23 @@ fn calls(
     })
 }
 
+/// Answer `Continue` over a durable server (task T352): `None` for any other request. A person who cannot read the
+/// room is answered as for a room that does not exist; a room that is not an archive is not allowed; a storage failure
+/// is fatal.
+fn continuation(server: &mut DurableServer, user: &str, request: &Request, now_ms: u64) -> Option<Result<Answered, DurableConnError>> {
+    use crate::continuation::ContinueError;
+    let Request::Continue { archive } = request else { return None };
+    Some(match server.continue_archive(archive, user, now_ms) {
+        // A room no request could name is never answered as the continuation.
+        Ok(room) if room.is_empty() || room.len() > crewcraft_proto::message::MAX_NAME => Ok((refusal_of(crate::dispatch::E_OTHER), None)),
+        Ok(room) => Ok((Response::Ok { cursor: 0 }, Some(Follow::Continued(room)))),
+        Err(ContinueError::NotReadable) => Ok((refusal_of(crate::dispatch::E_NO_SUCH_ROOM), None)),
+        Err(ContinueError::NotArchive) => Ok((refusal_of(crate::dispatch::E_NOT_ALLOWED), None)),
+        Err(ContinueError::Durable(DurableError::Server(error))) => Ok((refusal_of(crate::dispatch::error_code(error)), None)),
+        Err(ContinueError::Durable(error)) => Err(DurableConnError::Storage(error)),
+    })
+}
+
 /// The media credential frame for `device` of `user`, just admitted to `call` of `room` (task T360b2). None when
 /// issuing failed (`CallError::MediaUnusable`): the person is in the call, without media. A server announces
 /// `FEATURE_MEDIA` only with a media server set, so a client that agreed to it and gets no frame knows issuing failed.
@@ -575,6 +610,8 @@ enum Follow {
         address: String,
         credential: Vec<u8>,
     },
+    /// The continued frame: the room an archive continues in (task T352).
+    Continued(String),
     /// An offer for the media server: the caller relays it and answers (task T360b6).
     Relay {
         call: u64,

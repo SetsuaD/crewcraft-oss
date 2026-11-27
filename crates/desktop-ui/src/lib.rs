@@ -197,6 +197,16 @@ pub enum Update {
         room: String,
         times: Vec<(u64, u64)>,
     },
+    /// The archive room `archive` continues in `room` (task T352): list it and open it.
+    Continued {
+        archive: String,
+        room: String,
+    },
+    /// The lines in `room` that link back to the archives it continues: `(cursor, archive, text)` (task T352).
+    Continuations {
+        room: String,
+        lines: Vec<(u64, String, String)>,
+    },
     /// Who reacted to each message of `room` with what (task T341b): by cursor, each reaction code with the people.
     Reactions {
         room: String,
@@ -251,6 +261,8 @@ impl fmt::Debug for Update {
             }
             Self::InCall { room, call, .. } => f.debug_struct("InCall").field("room", room).field("call", call).finish(),
             Self::Archive { room, times } => f.debug_struct("Archive").field("room", room).field("times", &times.len()).finish(),
+            Self::Continued { archive, room } => f.debug_struct("Continued").field("archive", archive).field("room", room).finish(),
+            Self::Continuations { room, lines } => f.debug_struct("Continuations").field("room", room).field("lines", &lines.len()).finish(),
             Self::Reactions { room, reactions } => f.debug_struct("Reactions").field("room", room).field("messages", &reactions.len()).finish(),
             Self::Pin { room, pinned } => f.debug_struct("Pin").field("room", room).field("target", &pinned.as_ref().map(|pin| pin.target)).finish(),
             Self::SavedMessages { messages } => f.debug_struct("SavedMessages").field("messages", &messages.len()).finish(),
@@ -390,6 +402,8 @@ pub struct Window {
     archived: std::collections::HashSet<String>,
     /// Imported messages' original times, per archive room and cursor (T350d2).
     sent_times: HashMap<String, std::collections::BTreeMap<u64, u64>>,
+    /// The lines that link back to the archives each room continues: by cursor, the archive and the text (T352).
+    continued: HashMap<String, std::collections::BTreeMap<u64, (String, String)>>,
 }
 
 /// What a message is drawn with (T340b): who is reading, the theme's colours, which message is selected, the files and
@@ -556,6 +570,7 @@ impl Window {
                 self.sent_times.remove(&room);
                 self.open_calls.remove(&room);
                 self.call_lines.remove(&room);
+                self.continued.remove(&room);
                 if self.rooms.selected() == Some(room.as_str()) {
                     self.selected_message = None;
                 }
@@ -636,6 +651,14 @@ impl Window {
                 self.archived.insert(room.clone());
                 self.sent_times.insert(room, times.into_iter().collect());
             }
+            Update::Continued { room, .. } => {
+                self.rooms.add(&room);
+                self.phone_pane = PhonePane::Conversation;
+                self.open_room(&room, true);
+            }
+            Update::Continuations { room, lines } => {
+                self.continued.insert(room, lines.into_iter().map(|(cursor, archive, text)| (cursor, (archive, text))).collect());
+            }
             Update::Reactions { room, reactions } => {
                 self.reactions.insert(room, reactions.into_iter().collect());
             }
@@ -676,6 +699,7 @@ impl Window {
                 self.storage = None;
                 self.previews.clear();
                 self.call_lines.clear();
+                self.continued.clear();
                 self.in_call = None;
                 self.open_thread = None;
                 self.thread_draft.clear();
@@ -975,7 +999,7 @@ impl Window {
         let read_only = self.archived.contains(&room);
         let threads = self.threads.get(&room).cloned().unwrap_or_default();
         let present = self.message_cursors(&room);
-        let call_lines = self.call_lines.get(&room).cloned().unwrap_or_default();
+        let call_lines = self.system_lines(&room);
         let look = Bubbles {
             me: &me,
             colors: self.bubbles,
@@ -1098,7 +1122,7 @@ impl Window {
                 let read_only = self.archived.contains(&room);
                 let threads = self.threads.get(&room).cloned().unwrap_or_default();
                 let present = self.message_cursors(&room);
-                let call_lines = self.call_lines.get(&room).cloned().unwrap_or_default();
+                let call_lines = self.system_lines(&room);
                 let look = Bubbles {
                     me: &me,
                     colors: self.bubbles,
@@ -1660,13 +1684,37 @@ impl Window {
         }
     }
 
+    /// A room's quiet lines between its messages, by cursor: its call history (T360a2) and the lines that link back to
+    /// the archives it continues (T352).
+    fn system_lines(&self, room: &str) -> std::collections::BTreeMap<u64, String> {
+        let mut lines = self.call_lines.get(room).cloned().unwrap_or_default();
+        if let Some(continued) = self.continued.get(room) {
+            lines.extend(continued.iter().map(|(cursor, (_, text))| (*cursor, text.clone())));
+        }
+        lines
+    }
+
     fn composer_ui(&mut self, ui: &mut Ui, room: &str) {
-        // An archive room takes no messages (T350d2).
+        // An archive room takes no messages (T350d2); it can be continued as an active conversation (T352).
         if self.archived.contains(room) {
             ui.add_space(6.0);
-            ui.weak("Archive: read only");
+            ui.horizontal(|ui| {
+                ui.weak("Archive: read only");
+                if ui.button("Continue this conversation").clicked() {
+                    self.actions.push(Action::Room(Command::Continue { archive: room.to_owned() }));
+                }
+            });
             ui.add_space(6.0);
             return;
+        }
+        // A room that continues an archive links back to it (T352).
+        let archives: std::collections::BTreeSet<String> =
+            self.continued.get(room).map(|lines| lines.values().map(|(archive, _)| archive.clone()).collect()).unwrap_or_default();
+        for archive in archives {
+            if ui.button(format!("Open the archive {archive}")).clicked() {
+                self.rooms.add(&archive);
+                self.open_room(&archive, true);
+            }
         }
         let editing = self.editing.as_ref().filter(|(edited_room, _)| edited_room == room).map(|(_, cursor)| *cursor);
         if editing.is_some() {

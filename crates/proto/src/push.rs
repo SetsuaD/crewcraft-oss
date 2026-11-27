@@ -40,6 +40,10 @@
 //! - tag 81 `Gap` (T345): `u64 after | u64 oldest`. With `request::FEATURE_GAP_REPLAY`, the LAST frame of a
 //!   successful Sync whose requested cursor predates the retained tail. Its cursor is the room head; the missing
 //!   event interval is after+1 through oldest-1. It advances no timeline and is not a current-state replacement.
+//! - tag 84 `Continued` (task T352): `str archive | str author | str text (0 to MAX_HTML)`. The server-built line in a
+//!   room that continues the archive room `archive` (docs/REQUIREMENTS.md "Continuing a conversation"), by `author`,
+//!   who continued it. An event of its own that advances the cursor; a client that did not agree to
+//!   `request::FEATURE_CONTINUE` is sent `Other` in its place.
 //!
 //! `room`, `author` and each mention are 1 to `message::MAX_NAME` bytes; `html` is 0 to `MAX_HTML` bytes; at most
 //! `MAX_MENTIONS` mentions.
@@ -69,6 +73,8 @@ pub const PINNED: u8 = 79;
 pub const READ_STATE: u8 = 80;
 /// An explicit missing event interval, last after the other Sync metadata (T345).
 pub const GAP: u8 = 81;
+/// The tag of `Push::Continued` (task T352).
+pub const CONTINUED: u8 = 84;
 /// The most participants a `CallState` lists.
 pub const MAX_PARTICIPANTS: usize = 255;
 /// The tag of `Push::Reacted` (task T341a).
@@ -178,6 +184,15 @@ pub enum Push {
         room: String,
         cursor: u64,
         sent_ms: u64,
+    },
+    /// The line that says this room continues the archive room `archive`, written when `author` continued it (task
+    /// T352). The text is the server's.
+    Continued {
+        room: String,
+        cursor: u64,
+        archive: String,
+        author: String,
+        text: String,
     },
     /// A call's history line by `author` (task T360a1): its start, or its end (`ended`).
     CallLine {
@@ -358,6 +373,14 @@ pub fn encode_push(push: &Push) -> Result<Vec<u8>, CodecError> {
             write_str(&mut out, room, 1, MAX_NAME)?;
             out.extend_from_slice(&cursor.to_be_bytes());
         }
+        Push::Continued { room, cursor, archive, author, text } => {
+            out.push(CONTINUED);
+            write_str(&mut out, room, 1, MAX_NAME)?;
+            out.extend_from_slice(&cursor.to_be_bytes());
+            write_str(&mut out, archive, 1, MAX_NAME)?;
+            write_str(&mut out, author, 1, MAX_NAME)?;
+            write_str(&mut out, text, 0, MAX_HTML)?;
+        }
         Push::CallLine { room, cursor, call, ended, author, text } => {
             out.push(CALL_LINE);
             write_str(&mut out, room, 1, MAX_NAME)?;
@@ -469,6 +492,7 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         && tag != PINNED
         && tag != READ_STATE
         && tag != GAP
+        && tag != CONTINUED
     {
         return Err(CodecError::BadKind(tag));
     }
@@ -537,6 +561,12 @@ pub fn decode_push(bytes: &[u8]) -> Result<Push, CodecError> {
         THREADED => Push::Threaded { room, cursor, parent: read_u64(bytes, &mut pos)? },
         ARCHIVED => Push::Archived { room, cursor },
         SENT => Push::Sent { room, cursor, sent_ms: read_u64(bytes, &mut pos)? },
+        CONTINUED => {
+            let archive = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let author = read_string(bytes, &mut pos, 1, MAX_NAME)?;
+            let text = read_string(bytes, &mut pos, 0, MAX_HTML)?;
+            Push::Continued { room, cursor, archive, author, text }
+        }
         CALL_LINE => {
             let call = read_u64(bytes, &mut pos)?;
             let ended = match read_u8(bytes, &mut pos)? {
@@ -726,5 +756,33 @@ mod pinned_tests {
             encode_push(&Push::Pinned { room: "room".into(), cursor: 8, target: 3, author: String::new(), html: "body".into(), edited: false })
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod continued_tests {
+    use super::*;
+
+    #[test]
+    fn a_continued_line_refuses_partial_and_trailing_bytes_and_an_empty_archive() -> Result<(), CodecError> {
+        let push = Push::Continued {
+            room: "old-team-2".into(),
+            cursor: 3,
+            archive: "old-team".into(),
+            author: "ana@example.org".into(),
+            text: "continued".into(),
+        };
+        let bytes = encode_push(&push)?;
+        assert_eq!(bytes[0], CONTINUED);
+        assert_eq!(decode_push(&bytes)?, push);
+        for end in 0..bytes.len() {
+            assert!(decode_push(&bytes[..end]).is_err());
+        }
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert_eq!(decode_push(&trailing), Err(CodecError::TrailingBytes));
+        let empty = Push::Continued { room: "r".into(), cursor: 1, archive: String::new(), author: "a".into(), text: String::new() };
+        assert!(encode_push(&empty).is_err());
+        Ok(())
     }
 }

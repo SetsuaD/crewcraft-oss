@@ -540,6 +540,8 @@ pub fn worker_update(event: Event) -> Vec<Update> {
         Event::Pin { room, pinned } => vec![Update::Pin { room, pinned }],
         Event::SavedMessages { messages } => vec![Update::SavedMessages { messages }],
         Event::Archive { room, times } => vec![Update::Archive { room, times }],
+        Event::Continued { archive, room } => vec![Update::Continued { archive, room }],
+        Event::Continuations { room, lines } => vec![Update::Continuations { room, lines }],
         Event::Calls { room, open, lines } => vec![Update::Calls { room, open, lines }],
         Event::Files { files } => vec![Update::Files { files }],
         Event::Storage { used, quota } => vec![Update::Storage { used, quota }],

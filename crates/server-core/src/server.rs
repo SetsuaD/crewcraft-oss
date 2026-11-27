@@ -101,6 +101,17 @@ impl Server {
         Ok(service.call_line(actor, call, ended, text))
     }
 
+    /// `RoomService::continued_line` in the room (task T352). `NoSuchRoom` first.
+    pub fn continued_line(&mut self, slug: &str, actor: &str, archive: &str, text: &str) -> Result<u64, ServerError> {
+        let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;
+        Ok(service.continued_line(actor, archive, text))
+    }
+
+    /// The cleaned display name of the room with this slug, if there is one (task T352).
+    pub fn room_name(&self, slug: &str) -> Option<&str> {
+        self.room_names.get(slug).map(String::as_str)
+    }
+
     /// `RoomService::import_post` in the room (task T350a). `NoSuchRoom` first; no rate limit.
     pub fn import_post(&mut self, slug: &str, author: &str, text: &str, deleted: bool) -> Result<u64, ServerError> {
         let service = self.rooms.get_mut(slug).ok_or(ServerError::NoSuchRoom)?;

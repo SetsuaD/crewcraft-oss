@@ -145,6 +145,17 @@ pub struct CallLineRow {
     pub text: String,
 }
 
+/// The line in a room that links back to the archive room it continues (task T352).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContinuedLine {
+    /// The archive room's slug, to open it.
+    pub archive: String,
+    /// Who continued it.
+    pub author: String,
+    /// The server's text.
+    pub text: String,
+}
+
 /// The current pinned message, including its current body even when it is outside the held history page (T343).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinnedMessage {
@@ -294,6 +305,8 @@ pub struct RoomView {
     call: Option<OpenCall>,
     /// Call history lines, by cursor (task T360a1).
     call_lines: BTreeMap<u64, CallLineRow>,
+    /// The lines that link back to the archives this room continues, by cursor (task T352).
+    continued: BTreeMap<u64, ContinuedLine>,
     /// The open call's participants' call keys, for the call they belong to (task T360d2).
     call_keys: Option<(u64, BTreeMap<String, [u8; 32]>)>,
     /// Sender keys sealed to me, by call, then (sender, kid) (task T360d2).
@@ -330,6 +343,7 @@ impl RoomView {
             sent: BTreeMap::new(),
             call: None,
             call_lines: BTreeMap::new(),
+            continued: BTreeMap::new(),
             call_keys: None,
             sealed: BTreeMap::new(),
             pinned: None,
@@ -468,6 +482,16 @@ impl RoomView {
     /// Call history lines, by cursor (task T360a1).
     pub fn call_lines(&self) -> &BTreeMap<u64, CallLineRow> {
         &self.call_lines
+    }
+
+    /// Keep the line at `cursor` that links back to an archive this room continues (task T352).
+    pub fn continued(&mut self, cursor: u64, line: ContinuedLine) {
+        self.continued.insert(cursor, line);
+    }
+
+    /// The lines that link back to the archives this room continues, by cursor (task T352).
+    pub fn continued_lines(&self) -> &BTreeMap<u64, ContinuedLine> {
+        &self.continued
     }
 
     /// Keep the participants' call keys for `call` (task T360d2): the latest list replaces the last.
@@ -620,6 +644,7 @@ impl RoomView {
         self.archived = archived;
         self.call = None;
         self.call_lines.clear();
+        self.continued.clear();
         self.call_keys = None;
         self.sealed.clear();
         self.recovery_epoch = self.recovery_epoch.saturating_add(1);

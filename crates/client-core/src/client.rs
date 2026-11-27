@@ -6,8 +6,8 @@ use crewcraft_proto::frame::{Decoder, FrameError};
 use crewcraft_proto::message::CodecError;
 use crewcraft_proto::push::{Push, decode_push};
 use crewcraft_proto::request::{
-    ANSWER_TAG, BYTES_TAG, FILES_TAG, HITS_TAG, ID_TAG, ListedFile, MEDIA_TAG, ROOMS_TAG, Request, SAVED_TAG, SavedPage, SearchHit, decode_answer,
-    decode_bytes, decode_files, decode_hits, decode_id, decode_media, decode_rooms, decode_saved,
+    ANSWER_TAG, BYTES_TAG, CONTINUED_TAG, FILES_TAG, HITS_TAG, ID_TAG, ListedFile, MEDIA_TAG, ROOMS_TAG, Request, SAVED_TAG, SavedPage, SearchHit, decode_answer,
+    decode_bytes, decode_continued, decode_files, decode_hits, decode_id, decode_media, decode_rooms, decode_saved,
 };
 
 use crate::inbox::Inbox;
@@ -44,6 +44,8 @@ pub enum ClientEvent {
     Media { id: u32, address: String, credential: Vec<u8> },
     /// The media server's WebRTC answer (SDP) to the offer of `CallOffer` request `id` (task T360b6).
     Answer { id: u32, answer: String },
+    /// The room an archive continues in, after the `Ok` answering `Continue` request `id` (task T352).
+    Continued { id: u32, room: String },
 }
 
 /// A fatal error: the connection must be closed.
@@ -121,6 +123,7 @@ impl Client {
                 || first == crewcraft_proto::push::PINNED
                 || first == crewcraft_proto::push::READ_STATE
                 || first == crewcraft_proto::push::GAP
+                || first == crewcraft_proto::push::CONTINUED
             {
                 let push = decode_push(&payload).map_err(ClientError::Malformed)?;
                 if let Push::Gap { room, cursor, after, oldest } = push {
@@ -140,6 +143,7 @@ impl Client {
                     Push::Pinned { room, .. } => room.clone(),
                     Push::ReadState { room, .. } => room.clone(),
                     Push::Gap { room, .. } => room.clone(),
+                    Push::Continued { room, .. } => room.clone(),
                 };
                 match self.inbox.on_push(push, now_ms, local_minute) {
                     Some((apply, notify)) => events.push(ClientEvent::Pushed { room, apply, notify }),
@@ -169,6 +173,9 @@ impl Client {
             } else if first == MEDIA_TAG {
                 let (id, address, credential) = decode_media(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Media { id, address, credential });
+            } else if first == CONTINUED_TAG {
+                let (id, room) = decode_continued(&payload).map_err(ClientError::Malformed)?;
+                events.push(ClientEvent::Continued { id, room });
             } else if first == ANSWER_TAG {
                 let (id, answer) = decode_answer(&payload).map_err(ClientError::Malformed)?;
                 events.push(ClientEvent::Answer { id, answer });

@@ -177,8 +177,24 @@ An **Archive** section under the room list, for the archive rooms a person is in
 messages with their original authors and times, reads "Archive: read only" where the composer would be, and offers
 Save on captured files and "not archived" on the rest. Search results from archive rooms are marked.
 
+## Continuing a conversation (T352)
+
+An archive room offers **Continue this conversation** (REQUIREMENTS "Continuing a conversation"; `Request::Continue`,
+announced by `FEATURE_CONTINUE`; `crates/server-core/src/continuation.rs`).
+
+- Only someone who can read the archive (one of its members) may continue it. The archive's **linked people** are its
+  members: an import adds only people who have accounts, and a later run adds the rest once they do, so an author
+  without an account is never added anywhere.
+- An archived one-to-one conversation (the import notes the bundle's `"direct"` kind in the journal) whose two people
+  are both linked continues in **their direct message**: the one they already have while both are still in it, or a
+  new one. There is never a second one, even when another archive between the same two people is continued too.
+- Anything else continues in **one new group room** with exactly the linked people. Someone linked later (by a later,
+  larger import) who continues it is added to that same room.
+- The room gets one line, built by the server, that links back to each archive it continues; the app shows it between
+  the messages with **Open the archive**. The archive itself stays read-only.
+- Continuing again answers the same room and changes nothing. Each change is a journal record, so a restart rebuilds
+  it.
+
 ## Later
 
-- Continuing a conversation (REQUIREMENTS 2.1): an archived one-to-one conversation between two people who now have
-  accounts continues as their direct message; anything else as a new group room linking back to the archive.
 - More readers (Slack, Mattermost, plain mailbox exports), each its own task, each only producing bundles.

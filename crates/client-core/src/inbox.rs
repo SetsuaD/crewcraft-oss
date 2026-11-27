@@ -103,6 +103,15 @@ impl Inbox {
             }
             return Some((apply, Notify::None));
         }
+        // So is the line that links back to the archive a room continues (task T352).
+        if let Push::Continued { room, cursor, archive, author, text } = push {
+            let view = self.views.get_mut(&room)?;
+            let apply = view.event(cursor, Change::Other);
+            if apply == Apply::Applied {
+                view.continued(cursor, crate::room_view::ContinuedLine { archive, author, text });
+            }
+            return Some((apply, Notify::None));
+        }
         // So does a reply's thread (task T340a).
         if let Push::Threaded { room, cursor, parent } = push {
             self.views.get_mut(&room)?.thread(cursor, parent);
@@ -138,7 +147,7 @@ impl Inbox {
             | Push::CallSealed { .. }
             | Push::Pinned { .. }
             | Push::ReadState { .. } => return None,
-            Push::Gap { .. } => return None,
+            Push::Gap { .. } | Push::Continued { .. } => return None,
         };
 
         let is_direct = self.direct.get(room).copied().unwrap_or(false);
