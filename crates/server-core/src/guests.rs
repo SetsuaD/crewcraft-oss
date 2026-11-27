@@ -16,7 +16,6 @@ use crate::calls::{CallError, Calls};
 use crate::durable::{DurableError, DurableServer};
 use crate::media::MediaEvent;
 use crate::meetings::{Draft, Meeting, MeetingError, Meetings};
-use crate::op::Op;
 use crate::rate_limit::{Limiter, TokenBucket};
 use crate::room::Role;
 use crate::server::Server;
@@ -122,7 +121,6 @@ struct Visitor {
 
 #[derive(Debug, Clone)]
 struct Link {
-    code: [u8; 32],
     expires_ms: u64,
     lobby: bool,
     closed: bool,
@@ -315,7 +313,6 @@ pub(crate) fn apply(server: &mut Server, meetings: &mut Meetings, calls: &mut Ca
             guests.links.insert(
                 *meeting,
                 Link {
-                    code: *code,
                     expires_ms: draft.expires_ms,
                     lobby: draft.lobby,
                     closed: false,
@@ -848,7 +845,7 @@ mod tests {
         drop(server);
         let (journal, records) = crate::journal::Journal::open(&scratch.0.join("rooms.log")).map_err(|_| GuestError::MediaUnavailable)?;
         let last = records.last().ok_or(GuestError::NoSuchGuest)?;
-        assert!(matches!(crate::op::decode_op(last), Ok(Op::Guest(GuestOp::Close { cancel: true, .. }))));
+        assert!(matches!(crate::op::decode_op(last), Ok(crate::op::Op::Guest(GuestOp::Close { cancel: true, .. }))));
         drop(journal);
         let mut server = DurableServer::open(&scratch.0.join("rooms.log")).map_err(GuestError::Durable)?;
         assert!(server.meeting(lobby.meeting).is_some_and(|meeting| meeting.cancelled));
