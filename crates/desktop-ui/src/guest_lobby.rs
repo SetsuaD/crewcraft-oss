@@ -279,7 +279,9 @@ impl Window {
                     if !std::mem::take(&mut self.guest_lobby.creating) {
                         return;
                     }
-                    if self.calendar.open && let Some(title) = self.calendar.finish_guest_creation(&room) {
+                    if self.calendar.open
+                        && let Some(title) = self.calendar.finish_guest_creation(&room)
+                    {
                         let mut panel = Panel::open(room, lobby.meeting, title);
                         panel.code = Some(code);
                         let _ = panel.update(lobby);

@@ -217,7 +217,8 @@ fn a_creation_completed_after_discard_announces_without_showing_the_code() {
     let code = "ABCD".repeat(6);
     let lobby = GuestLobby { entries: Vec::new(), ..snapshot(1, true) };
     update(&mut h, GuestUpdate::Snapshot { room: draft.room, lobby, code: Some(GuestCode(code.clone())) });
-    let message = "Guest meeting scheduled. Its code was not shown. Close its guest link in Calendar and schedule another guest meeting to get a new code.";
+    let message =
+        "Guest meeting scheduled. Its code was not shown. Close its guest link in Calendar and schedule another guest meeting to get a new code.";
     assert_eq!(h.get_by_label(message).accesskit_node().live(), Live::Polite);
     assert!(h.query_by_label("Copy guest code").is_none());
     assert!(h.query_by_label(code.as_str()).is_none());
