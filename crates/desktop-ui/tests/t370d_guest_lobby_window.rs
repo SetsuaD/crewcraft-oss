@@ -2,8 +2,9 @@
 //! The egui fixture follows the T370b calendar and announcement tests.
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+use crewcraft_client_core::room_view::RoomSettings;
 use crewcraft_desktop_ui::{Action, Update, Window, fonts};
-use crewcraft_proto::guest::{GuestCode, GuestDecision, GuestEntry, GuestLobby, GuestState};
+use crewcraft_proto::guest::{GuestCode, GuestDecision, GuestEntry, GuestLobby, GuestMeetingDraft, GuestState};
 use crewcraft_proto::meeting::{Audience, Meeting, MeetingState};
 use crewcraft_ui_model::Command;
 use crewcraft_ui_model::guest::{GuestCommand, GuestUpdate};
@@ -123,7 +124,16 @@ fn only_guest_meetings_offer_lobby_controls_and_direct_entry_requires_confirmati
     click(&mut h, "Allow direct entry");
     assert_action(&mut h, GuestCommand::SetLobby { meeting: MEETING, revision: 2, lobby: false, confirm_direct: true });
 
-    update(&mut h, GuestUpdate::Refused { meeting: Some(MEETING), reason: "The lobby changed.".into(), conflict: true, access_lost: false });
+    update(
+        &mut h,
+        GuestUpdate::Refused {
+            meeting: Some(MEETING),
+            reason: "The lobby changed.".into(),
+            conflict: true,
+            access_lost: false,
+            panel_unavailable: false,
+        },
+    );
     h.get_by_label("The lobby changed. Reload it before making another decision.");
     assert!(h.state_mut().take_actions().is_empty(), "the failed change is never repeated automatically");
     click(&mut h, "Admit Alex");
@@ -142,26 +152,43 @@ fn only_guest_meetings_offer_lobby_controls_and_direct_entry_requires_confirmati
     click(&mut h, "Close link and remove guests");
     assert_action(&mut h, GuestCommand::CloseLink { meeting: MEETING, revision: 4 });
 
-    update(&mut h, GuestUpdate::Refused { meeting: Some(MEETING), reason: "The lobby is unavailable.".into(), conflict: false, access_lost: true });
+    update(&mut h, GuestUpdate::Waiting { room: ROOM.into(), waiting: 1, notify: false });
+    update(
+        &mut h,
+        GuestUpdate::Refused {
+            meeting: Some(MEETING),
+            reason: "The lobby is unavailable.".into(),
+            conflict: false,
+            access_lost: true,
+            panel_unavailable: false,
+        },
+    );
     assert!(h.query_by_label("Lobby").is_none());
     assert_action(&mut h, GuestCommand::ClosePanel);
+    click(&mut h, "Chat");
+    assert!(h.query_by_label_contains("1 waiting").is_none(), "lost room access clears the badge");
+}
+
+fn submit_guest_meeting(h: &mut Harness<'_, Window>) -> GuestMeetingDraft {
+    click(h, "Schedule guest meeting");
+    click(h, "Title");
+    h.get_by_label("Title").type_text("External review");
+    h.run();
+    click(h, "Host name");
+    h.get_by_label("Host name").type_text("Host");
+    h.run();
+    click(h, "Save");
+    let actions = h.state_mut().take_actions();
+    let [Action::Room(Command::GuestLobby(GuestCommand::Create(draft)))] = actions.as_slice() else {
+        panic!("expected one guest meeting creation: {actions:?}");
+    };
+    draft.clone()
 }
 
 #[test]
 fn creation_uses_the_expiring_guest_form_and_its_code_is_not_retained_on_reopen() {
     let mut h = calendar(true);
-    click(&mut h, "Schedule guest meeting");
-    click(&mut h, "Title");
-    h.get_by_label("Title").type_text("External review");
-    h.run();
-    click(&mut h, "Host name");
-    h.get_by_label("Host name").type_text("Host");
-    h.run();
-    click(&mut h, "Save");
-    let actions = h.state_mut().take_actions();
-    let [Action::Room(Command::GuestLobby(GuestCommand::Create(draft)))] = actions.as_slice() else {
-        panic!("expected one guest meeting creation: {actions:?}");
-    };
+    let draft = submit_guest_meeting(&mut h);
     assert_eq!((draft.title.as_str(), draft.host_name.as_str()), ("External review", "Host"));
     assert!(draft.lobby && !draft.confirm_direct && draft.expires_ms > NOW);
 
@@ -178,6 +205,46 @@ fn creation_uses_the_expiring_guest_form_and_its_code_is_not_retained_on_reopen(
     assert!(h.query_by_label("Copy guest code").is_none());
     update(&mut h, GuestUpdate::Snapshot { room: ROOM.into(), lobby, code: Some(GuestCode("ABCD".repeat(6))) });
     assert!(h.query_by_label("Copy guest code").is_none());
+}
+
+#[test]
+fn a_creation_completed_after_discard_announces_without_showing_the_code() {
+    let mut h = calendar(true);
+    let draft = submit_guest_meeting(&mut h);
+    click(&mut h, "Discard changes");
+    assert_action(&mut h, GuestCommand::ClosePanel);
+
+    let code = "ABCD".repeat(6);
+    let lobby = GuestLobby { entries: Vec::new(), ..snapshot(1, true) };
+    update(&mut h, GuestUpdate::Snapshot { room: draft.room, lobby, code: Some(GuestCode(code.clone())) });
+    let message = "Guest meeting scheduled. Its code was not shown. Close its guest link in Calendar and schedule another guest meeting to get a new code.";
+    assert_eq!(h.get_by_label(message).accesskit_node().live(), Live::Polite);
+    assert!(h.query_by_label("Copy guest code").is_none());
+    assert!(h.query_by_label(code.as_str()).is_none());
+}
+
+#[test]
+fn a_missing_meeting_closes_only_its_panel_and_the_next_waiting_guest_still_announces() {
+    let mut h = calendar(true);
+    update(&mut h, GuestUpdate::Waiting { room: ROOM.into(), waiting: 1, notify: false });
+    click(&mut h, "Lobby Guest review");
+    assert_action(&mut h, GuestCommand::Open { room: ROOM.into(), meeting: MEETING });
+    update(
+        &mut h,
+        GuestUpdate::Refused {
+            meeting: Some(MEETING),
+            reason: "That meeting is unavailable.".into(),
+            conflict: false,
+            access_lost: false,
+            panel_unavailable: true,
+        },
+    );
+    assert!(h.query_by_label("Lobby").is_none());
+    assert_action(&mut h, GuestCommand::ClosePanel);
+    click(&mut h, "Chat");
+    h.get_by_label_contains("1 waiting");
+    update(&mut h, GuestUpdate::Waiting { room: ROOM.into(), waiting: 2, notify: true });
+    assert_eq!(h.get_by_label("2 guests waiting in planning.").accesskit_node().live(), Live::Polite);
 }
 
 #[test]
@@ -198,4 +265,10 @@ fn a_fresh_knock_announces_without_focus_and_access_loss_clears_the_count() {
     update(&mut h, GuestUpdate::ClearRoom { room: ROOM.into() });
     assert!(h.query_by_label_contains("2 waiting").is_none());
     assert!(h.state().announcement().is_none());
+
+    h.state_mut().apply(Update::RoomSettings { room: ROOM.into(), settings: RoomSettings { muted: true, ..RoomSettings::default() } });
+    update(&mut h, GuestUpdate::Waiting { room: ROOM.into(), waiting: 1, notify: false });
+    update(&mut h, GuestUpdate::Waiting { room: ROOM.into(), waiting: 2, notify: true });
+    h.get_by_label_contains("2 waiting");
+    assert!(h.state().announcement().is_none(), "a muted room retains its count without announcing");
 }

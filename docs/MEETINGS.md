@@ -182,14 +182,17 @@ and call binding. Staff operations keep journal family 40 and the existing wire 
    it supports. The T370c test drives enrolled staff sessions and checks media drops against the in-process
    media server.
 4. **T370d, the staff lobby in the app.** Staff can schedule a guest meeting in Calendar and copy its code
-   when it is created. The Lobby button displays confirmed guest state and actions for the selected meeting.
+   when it is created. If creation finishes after the form closes, the app confirms the meeting was created.
+   Staff can close its guest link from Calendar and schedule another meeting to get a new code.
+   The Lobby button displays confirmed guest state and actions for the selected meeting.
    Closing the link and allowing new guests to enter directly require confirmation. A changed revision calls
    for a fresh read and a fresh decision. Disconnect and loss of room access clear the roster and code.
 
    Negotiated room Sync consumes a fresh waiting count even if the timeline cursor is unchanged. The first
-   count in a session is a quiet baseline. Later observed increases in an unmuted room update the accessible
-   status line and request attention from an unfocused desktop window where supported. The count can combine
-   several arrivals into one notice. Browser guest entry and audible ringing are separate work.
+   positive lobby revision for a room is a quiet baseline, which can include arrivals since the link was created.
+   Later observed increases in an unmuted room update the accessible status line and request attention from an
+   unfocused desktop window where supported. The count can combine several arrivals into one notice. Browser
+   guest entry and audible ringing are separate work.
 
 ## Open questions for the owner
 

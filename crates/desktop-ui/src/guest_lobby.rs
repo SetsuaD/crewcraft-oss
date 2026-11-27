@@ -275,27 +275,35 @@ impl Window {
             GuestUpdate::ClearRoom { room } => self.clear_guest_room(&room),
             GuestUpdate::Snapshot { room, lobby, code } => {
                 if let Some(code) = code {
-                    if std::mem::take(&mut self.guest_lobby.creating)
-                        && self.calendar.open
-                        && let Some(title) = self.calendar.finish_guest_creation(&room)
-                    {
+                    let code = Zeroizing::new(code.0);
+                    if !std::mem::take(&mut self.guest_lobby.creating) {
+                        return;
+                    }
+                    if self.calendar.open && let Some(title) = self.calendar.finish_guest_creation(&room) {
                         let mut panel = Panel::open(room, lobby.meeting, title);
-                        panel.code = Some(Zeroizing::new(code.0));
+                        panel.code = Some(code);
                         let _ = panel.update(lobby);
                         self.guest_lobby.panel = Some(panel);
                         self.announce("Guest meeting scheduled.".to_owned());
+                    } else {
+                        self.announce(
+                            "Guest meeting scheduled. Its code was not shown. Close its guest link in Calendar and schedule another guest meeting to get a new code."
+                                .to_owned(),
+                        );
                     }
                 } else if let Some(panel) = self.guest_lobby.panel.as_mut().filter(|panel| panel.room == room && panel.meeting == lobby.meeting) {
                     let notice = panel.update(lobby);
                     self.clear_lobby_notice(notice);
                 }
             }
-            GuestUpdate::Refused { meeting, reason, conflict, access_lost } => {
+            GuestUpdate::Refused { meeting, reason, conflict, access_lost, panel_unavailable } => {
                 if let Some(meeting) = meeting {
                     let Some(panel) = self.guest_lobby.panel.as_mut().filter(|panel| panel.meeting == meeting) else { return };
                     if access_lost {
                         let room = panel.room.clone();
                         self.clear_guest_room(&room);
+                    } else if panel_unavailable {
+                        self.close_guest_lobby();
                     } else {
                         panel.phase = if conflict { Phase::Conflict } else { Phase::Ready };
                         panel.confirm = None;

@@ -36,5 +36,7 @@ pub enum GuestUpdate {
         reason: String,
         conflict: bool,
         access_lost: bool,
+        /// The selected lobby or guest is unavailable. Other lobbies in the room remain visible.
+        panel_unavailable: bool,
     },
 }

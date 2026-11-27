@@ -1277,6 +1277,7 @@ impl Run {
                 reason: "The guest lobby is unavailable on this connection.".to_owned(),
                 conflict: false,
                 access_lost: true,
+                panel_unavailable: false,
             }));
             return;
         };
@@ -1353,23 +1354,30 @@ impl Run {
     }
 
     fn guest_refused(&mut self, meeting: Option<u64>, error: LabError, listing: bool) {
-        let (reason, conflict, access_lost) = match error {
+        let (reason, conflict, access_lost, panel_unavailable) = match error {
             LabError::Chat(ChatError::Rejected(code)) => {
                 let reason = match code {
                     E_CONFLICT => "The lobby changed. Reload it before trying again.",
                     19 => "This guest link has closed.",
                     4 => "Check the meeting details and the guest link expiry.",
                     3 => "You cannot make that change to this lobby.",
+                    14 | 18 => "That guest or meeting is unavailable.",
                     _ => "The guest lobby could not be opened or changed.",
                 };
-                (reason.to_owned(), code == E_CONFLICT || code == 19, matches!(code, 1 | 14 | 18) || listing && code == 3)
+                (reason.to_owned(), code == E_CONFLICT || code == 19, code == 1 || listing && code == 3, matches!(code, 14 | 18))
             }
-            error => (self.request_failed(error).to_string(), false, false),
+            error => (self.request_failed(error).to_string(), false, false, false),
         };
-        if (conflict || access_lost) && self.open_guest_lobby.as_ref().is_some_and(|(_, open)| Some(*open) == meeting) {
+        if (conflict || access_lost || panel_unavailable)
+            && let Some((room, open)) = &self.open_guest_lobby
+            && Some(*open) == meeting
+        {
+            if access_lost {
+                self.guest_lobbies_seen.remove(room);
+            }
             self.select_guest_lobby(None);
         }
-        self.emit(Event::GuestLobby(GuestUpdate::Refused { meeting, reason, conflict, access_lost }));
+        self.emit(Event::GuestLobby(GuestUpdate::Refused { meeting, reason, conflict, access_lost, panel_unavailable }));
     }
 
     fn clear_guest_room(&mut self, room: &str) {
