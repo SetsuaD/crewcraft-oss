@@ -143,6 +143,11 @@ mod from_zero {
         panic!("timed out waiting for {what}; saw {seen:?}");
     }
 
+    /// The first update `want` matched in what `poll_until` saw (more updates can follow it in the same batch).
+    fn first<'a>(seen: &'a [Update], want: impl Fn(&Update) -> bool) -> Option<&'a Update> {
+        seen.iter().find(|&update| want(update))
+    }
+
     fn shows_text(update: &Update, room: &str, text: &str) -> bool {
         matches!(update, Update::Snapshot { room: shown_room, shown } if shown_room == room
             && shown.iter().any(|entry| matches!(entry, Shown::Line(line) if line.html.contains(text))))
@@ -204,8 +209,9 @@ mod from_zero {
         assert_eq!(updates, vec![Update::NeedsEnrollment]);
         let action = Action::Enroll { link: Zeroizing::new(format!("{link}\n")), password: Zeroizing::new(PASSWORD.to_owned()) };
         assert!(app.act(action).is_empty(), "joining must not block the window");
-        let seen = poll_until(&mut app, "the authenticator setup", |update| matches!(update, Update::AuthenticatorSetup { .. } | Update::Failed(_)));
-        let totp = match seen.last() {
+        let setup = |update: &Update| matches!(update, Update::AuthenticatorSetup { .. } | Update::Failed(_));
+        let seen = poll_until(&mut app, "the authenticator setup", setup);
+        let totp = match first(&seen, setup) {
             Some(Update::AuthenticatorSetup { otpauth_uri }) => authenticator_from(otpauth_uri),
             other => panic!("expected the authenticator setup, got {other:?}"),
         };
@@ -214,14 +220,16 @@ mod from_zero {
         // step twice, so the sign-in uses the next step's code instead of waiting 30 seconds for it.
         let step = totp.counter(unix_seconds());
         assert!(app.act(Action::ConfirmAuthenticator { code: Zeroizing::new(totp.generate_at_counter(step)) }).is_empty());
-        let seen = poll_until(&mut app, "enrollment", |update| matches!(update, Update::Enrolled { .. } | Update::Failed(_)));
-        assert!(matches!(seen.last(), Some(Update::Enrolled { .. })), "{seen:?}");
+        let enrolled = |update: &Update| matches!(update, Update::Enrolled { .. } | Update::Failed(_));
+        let seen = poll_until(&mut app, "enrollment", enrolled);
+        assert!(matches!(first(&seen, enrolled), Some(Update::Enrolled { .. })), "{seen:?}");
 
         // 5. Sign in with email, password and a fresh code; the room the administrator made is listed.
         let code = Zeroizing::new(totp.generate_at_counter(step + 1));
         assert!(app.act(Action::SignIn { email: ADMIN.to_owned(), password: Zeroizing::new(PASSWORD.to_owned()), code }).is_empty());
-        let seen = poll_until(&mut app, "sign-in", |update| matches!(update, Update::SignedIn { .. } | Update::Failed(_)));
-        match seen.last() {
+        let signed_in = |update: &Update| matches!(update, Update::SignedIn { .. } | Update::Failed(_));
+        let seen = poll_until(&mut app, "sign-in", signed_in);
+        match first(&seen, signed_in) {
             Some(Update::SignedIn { email, rooms }) => {
                 assert_eq!(email, ADMIN);
                 assert!(rooms.contains(&room), "{room} not in {rooms:?}");
@@ -248,8 +256,8 @@ mod from_zero {
         let (mut app, updates) = Controller::start_with_vault(Some(app_dir), vault.opener(), join_from_link(WAIT), no_wake(), quick());
         assert!(matches!(updates.first(), Some(Update::Enrolled { .. })), "{updates:?}");
         assert!(updates.contains(&Update::LastEmail(ADMIN.to_owned())), "{updates:?}");
-        let seen = poll_until(&mut app, "the session resumed at start", |update| matches!(update, Update::SignedIn { .. } | Update::Failed(_)));
-        assert!(matches!(seen.last(), Some(Update::SignedIn { .. })), "{seen:?}");
+        let seen = poll_until(&mut app, "the session resumed at start", signed_in);
+        assert!(matches!(first(&seen, signed_in), Some(Update::SignedIn { .. })), "{seen:?}");
         assert!(app.act(Action::Room(RoomCommand::Sync { room: room.clone() })).is_empty());
         poll_until(&mut app, "the message after the restart", |update| shows_text(update, &room, MESSAGE));
 
