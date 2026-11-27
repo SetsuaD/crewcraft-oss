@@ -8,6 +8,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Meeting system lines give a start as a UTC date and time (T370a; Craft time standard).
+chrono.workspace = true
 crewcraft-accounts.workspace = true
 # Authorization records from an external authorizer (T611b).
 crewcraft-authz.workspace = true

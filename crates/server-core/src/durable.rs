@@ -73,6 +73,8 @@ pub struct DurableServer {
     pub(crate) media: crate::media::Media,
     /// Archives continued as active conversations, and the direct messages they continue in (task T352).
     pub(crate) continuations: crate::continuation::Continuations,
+    /// Meetings, scheduled, held and cancelled (docs/MEETINGS.md, task T370a).
+    pub(crate) meetings: crate::meetings::Meetings,
 }
 
 #[derive(Debug, Clone)]
@@ -223,6 +225,7 @@ impl DurableServer {
         let mut imports = crate::import::Imports::default();
         let mut calls = crate::calls::Calls::default();
         let mut continuations = crate::continuation::Continuations::default();
+        let mut meetings = crate::meetings::Meetings::default();
         for (index, record) in records.iter().enumerate() {
             let op = decode_op(record).map_err(|_| DurableError::Corrupt { index })?;
             // An import record (task T350a) changes the import's own bookkeeping as well as a room.
@@ -246,6 +249,12 @@ impl DurableServer {
             let op = match crate::continuation::replay(&mut server, &mut continuations, op) {
                 Ok(None) => continue,
                 Ok(Some(op)) => op,
+                Err(()) => return Err(DurableError::Corrupt { index }),
+            };
+            // And a meeting record (task T370a).
+            let op = match crate::meetings::replay(&mut server, &mut meetings, op) {
+                Ok(crate::meetings::Replayed::Done) => continue,
+                Ok(crate::meetings::Replayed::NotMeeting(op)) => op,
                 Err(()) => return Err(DurableError::Corrupt { index }),
             };
             if let Op::FileStored { slug, uploader, file, sha256, size, name, image } = op {
@@ -312,6 +321,7 @@ impl DurableServer {
             calls,
             media: crate::media::Media::default(),
             continuations,
+            meetings,
         })
     }
 
@@ -876,6 +886,8 @@ fn replay(server: &mut Server, op: Op, messages: &HashMap<String, BTreeMap<u64, 
         Op::CallStart { .. } | Op::CallJoin { .. } | Op::CallLeave { .. } | Op::CallEnd { .. } => Ok(0),
         // Handled by `continuation::replay` (task T352).
         Op::ArchiveDirect { .. } | Op::Continue { .. } => Ok(0),
+        // Handled by `meetings::replay` (task T370a).
+        Op::Meeting(_) => Ok(0),
     }
 }
 
@@ -977,6 +989,7 @@ pub(crate) fn index_event(
         EventKind::Joined { .. } | EventKind::Left { .. } | EventKind::Reacted { .. } | EventKind::CallLine { .. } | EventKind::Pinned { .. } => {}
         // A continuation's line is not a message (task T352).
         EventKind::Continued { .. } => {}
+        EventKind::MeetingLine { .. } => {}
     }
 }
 

@@ -112,6 +112,11 @@ changes when it lands, and because audience never changes a staff meeting stays 
 1. **T370a, server-side staff meetings (this design's first slice).** The wire above in `crates/proto`, journal-backed
    records and the rules in `crates/server-core`, the network server's wiring, and the `crates/client-core` API
    (requests, the meetings frame, `MeetingLine`, the work-week window helper). No desktop UI.
+   **Built (T370a).** `crewcraft_proto::meeting` (the record, the meetings frame, the limits), the four requests and
+   `MeetingLine`; `crewcraft_server_core::meetings` (records under journal tag 40, the rules above, replay);
+   `connection` answers the requests behind `FEATURE_MEETINGS`, which the network server announces;
+   `crewcraft_client_core::calendar::work_week` and the `Meetings` and `MeetingLine` client events. Audit entries in
+   `audit.log` and the app are not part of it.
 2. **T370b, the calendar in the app.** The work-week agenda, the schedule and edit form (unsaved edits kept on a failed
    save, the conflict notice with an explicit reload), join buttons, start now.
 3. **T370c, guest meetings and the lobby**, with the guest entrance; then audit entries in `audit.log`.

@@ -8,6 +8,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The calendar's work week as a UTC window (T370a; Craft time standard).
+chrono.workspace = true
 crewcraft-proto.workspace = true
 
 [lints]

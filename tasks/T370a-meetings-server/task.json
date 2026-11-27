@@ -1,0 +1,44 @@
+{
+  "id": "T370a-meetings-server",
+  "title": "Staff meetings on the chat server: schedule, edit with version checks, cancel, list a week, join by id",
+  "crate": "crewcraft-server",
+  "files": [
+    "crates/proto/src/lib.rs",
+    "crates/proto/src/meeting.rs",
+    "crates/proto/src/request.rs",
+    "crates/proto/src/push.rs",
+    "crates/server-core/Cargo.toml",
+    "crates/server-core/src/lib.rs",
+    "crates/server-core/src/meetings.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/room_search.rs",
+    "crates/server-core/src/server.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "crates/client-core/Cargo.toml",
+    "crates/client-core/src/lib.rs",
+    "crates/client-core/src/calendar.rs",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/inbox.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs",
+    "apps/crewcraft-server/tests/t370a_meetings.rs",
+    "docs/MEETINGS.md",
+    "Cargo.lock"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t370a_meetings.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t370a_meetings",
+  "depends_on": [
+    "T360a1-call-records",
+    "T360b2-call-join-credential"
+  ],
+  "spec": "docs/MEETINGS.md, slice T370a. FEATURE_MEETINGS (16384) negotiates requests 44 MeetingSave (meeting 0 schedules; otherwise an edit at a version), 45 MeetingCancel, 46 MeetingList (a UTC window of at most 8 days) and 47 MeetingJoin, the meetings follow frame 143 (crewcraft_proto::meeting) and the MeetingLine push 85; a client without the bit is refused the requests (E_NOT_ALLOWED) and gets Other for the lines. Meetings are journal records under one tag (40) with a kind byte, replayed by meetings::replay. Every meeting is staff and no request changes its audience. Only room members see, list or join a meeting; anything about a meeting in a room the person is not in is E_NO_SUCH_MEETING (14). Scheduling, editing and cancelling need a member who may start a call; editing and cancelling also need the owner or a room admin or owner (E_NOT_ALLOWED). A stale version is E_CONFLICT (13) and changes nothing; an edit equal to the saved fields after trimming succeeds at the same version with no record and no system line; a meeting with any call, open or ended, or cancelled, cannot be edited or cancelled (E_NOT_ALLOWED). Bad titles, agendas, durations, starts, windows and meetings that would end in the past are E_BAD_TEXT. MeetingJoin joins the room's open call or starts one through call_start (call records and media credentials unchanged) and links the call to the meeting; a cancelled meeting cannot be joined. The server posts MeetingLine system lines for scheduled, edited and cancelled, built from the record with the start in UTC through chrono; they never count as unread. client-core decodes the frame (ClientEvent::Meetings) and the line (ClientEvent::MeetingLine after its Pushed) and has calendar::work_week. The network server advertises FEATURE_MEETINGS. No desktop UI.",
+  "status": "done",
+  "context": [
+    "docs/MEETINGS.md",
+    "docs/CALLS.md",
+    "docs/REQUIREMENTS.md"
+  ]
+}
