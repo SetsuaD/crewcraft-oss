@@ -44,7 +44,7 @@
 //!   newest live message by someone else. `Ok.cursor` is the resulting personal read position, not the room head.
 //! - tag 30 `Current` (T345), announced by `FEATURE_GAP_REPLAY`: `str room`. `Ok.cursor` is the captured event head,
 //!   followed by bounded `current::CurrentPage` frames until their explicit last flag. See `current` for the codec.
-//! - tag 34 `Continue` (task T352), announced by `FEATURE_CONTINUE`: `str archive`, an archive room the signed-in
+//! - tag 43 `Continue` (task T352), announced by `FEATURE_CONTINUE`: `str archive`, an archive room the signed-in
 //!   person can read. Answered `Ok { cursor: 0 }`, then by one continued frame (`encode_continued`): `u8 tag (142) |
 //!   u32 id | str room`, the room the conversation continues in (docs/REQUIREMENTS.md "Continuing a conversation").
 //!   Asking again answers the same room.
@@ -181,7 +181,7 @@ const LIST_SAVED: u8 = 28;
 const MARK_UNREAD: u8 = 29;
 const CURRENT: u8 = 30;
 const CALL_OFFER: u8 = 31;
-const CONTINUE: u8 = 34;
+const CONTINUE: u8 = 43;
 /// The largest sealed sender key a `CallSeal` carries.
 pub const MAX_SEALED: usize = 256;
 /// The most files one `PostFiles` attaches (task T330c).
