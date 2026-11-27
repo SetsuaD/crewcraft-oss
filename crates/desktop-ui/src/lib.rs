@@ -1887,13 +1887,14 @@ fn bubble_ui(ui: &mut Ui, row: &FeedRow, look: &Bubbles<'_>) -> Option<MessageAc
         let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
         ui.with_layout(layout, |ui| ui.weak(utc_time(sent_ms)));
     }
-    // The message's files, each with Save (T330e); an image above its chip (T333).
+    // The message's files, each with Save (T330e); an image above its chip (T333), named by its file name so a screen
+    // reader meets "photo.png, image" rather than an unnamed image.
     for chip in chips {
         let layout = if mine { Layout::right_to_left(Align::Min) } else { Layout::left_to_right(Align::Min) };
         if let Some(texture) = look.previews.get(&chip.file) {
             let size = texture.size_vec2();
             let scale = (PREVIEW_WIDTH / size.x).min(1.0);
-            ui.with_layout(layout, |ui| ui.add(egui::Image::new((texture.id(), size * scale))));
+            ui.with_layout(layout, |ui| ui.add(egui::Image::new((texture.id(), size * scale)).alt_text(chip.name.clone())));
         }
         ui.with_layout(layout, |ui| {
             // A file an import could not capture has no bytes to save (T350e).
