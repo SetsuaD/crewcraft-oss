@@ -1753,9 +1753,10 @@ mod pins_saved_tests {
             let request = Request::ListSaved { after_room, after_cursor };
             assert_eq!(decode_request(&encode_request(8, &request).unwrap()).unwrap(), (8, request));
         }
-        for tag in [0, 7, 13, 50, 63, 128, SAVED_TAG, 255] {
+        for tag in [0, 7, 13, 54, 63, 128, SAVED_TAG, 255] {
             assert_eq!(decode_request(&[tag]), Err(CodecError::BadKind(tag)));
         }
+        assert_eq!(decode_request(&[GUEST_MEETING_SAVE]), Err(CodecError::Truncated));
         assert!(encode_request(8, &Request::ListSaved { after_room: String::new(), after_cursor: 4 }).is_err());
         assert!(encode_request(8, &Request::ListSaved { after_room: "room".into(), after_cursor: 0 }).is_err());
         let mut bytes = encode_request(8, &Request::ListSaved { after_room: String::new(), after_cursor: 0 }).unwrap();
