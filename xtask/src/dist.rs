@@ -117,11 +117,8 @@ fn clean_head(root: &Path) -> Result<String> {
     if !status.stdout.is_empty() {
         return Err(Error::new("--receipt requires a clean Git worktree"));
     }
-    let head = Command::new("git")
-        .current_dir(root)
-        .args(["rev-parse", "--verify", "HEAD"])
-        .output()
-        .context(|| "running git to read HEAD".to_string())?;
+    let head =
+        Command::new("git").current_dir(root).args(["rev-parse", "--verify", "HEAD"]).output().context(|| "running git to read HEAD".to_string())?;
     if !head.status.success() {
         return Err(Error::new("git could not read HEAD"));
     }
