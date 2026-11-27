@@ -144,7 +144,7 @@ mod from_zero {
     }
 
     /// The first update `want` matched in what `poll_until` saw (more updates can follow it in the same batch).
-    fn first<'a>(seen: &'a [Update], want: impl Fn(&Update) -> bool) -> Option<&'a Update> {
+    fn first(seen: &[Update], want: impl Fn(&Update) -> bool) -> Option<&Update> {
         seen.iter().find(|&update| want(update))
     }
 
