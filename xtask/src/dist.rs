@@ -4,6 +4,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -21,12 +22,13 @@ use crate::{Context, Error, Result};
 
 pub const USAGE: &str = "\
 usage: cargo xtask dist --version <version> --out <dir> [--target linux-x86_64|windows-x86_64|macos-universal]...
-                        [--appimage-runtime <file> | --no-appimage]
+                        [--appimage-runtime <file> | --no-appimage] [--receipt <file>]
 
 Builds crewcraft and crewcraft-server in release mode for each target and writes the release assets and
 SHA256SUMS.txt into <dir>. Without --target it builds linux-x86_64 and windows-x86_64, or macos-universal on a Mac
 (which is the only place macos-universal builds). The Linux AppImage needs the pinned AppImage runtime, given with
---appimage-runtime or CREWCRAFT_APPIMAGE_RUNTIME; --no-appimage leaves it out. See docs/RELEASE.md.";
+--appimage-runtime or CREWCRAFT_APPIMAGE_RUNTIME; --no-appimage leaves it out. --receipt records a candidate build
+from a clean Git checkout, with a separate receipt path and an empty output directory. See docs/RELEASE.md.";
 
 /// The parsed `dist` command line.
 #[derive(Debug, PartialEq, Eq)]
@@ -34,6 +36,8 @@ pub struct Options {
     pub version: Version,
     pub out: PathBuf,
     pub targets: Vec<Target>,
+    /// Where to write the optional candidate build receipt.
+    pub receipt: Option<PathBuf>,
     /// The AppImage runtime file, from `--appimage-runtime` (or, when `None`, the environment at run time).
     pub appimage_runtime: Option<PathBuf>,
     /// False with `--no-appimage`.
@@ -45,6 +49,7 @@ pub fn parse_args(args: &[String]) -> Result<Options> {
     let mut version = None;
     let mut out = None;
     let mut targets = Vec::new();
+    let mut receipt = None;
     let mut appimage_runtime = None;
     let mut appimage = true;
     let mut rest = args.iter();
@@ -53,6 +58,7 @@ pub fn parse_args(args: &[String]) -> Result<Options> {
         match flag.as_str() {
             "--version" => version = Some(Version::parse(value()?)?),
             "--out" => out = Some(PathBuf::from(value()?)),
+            "--receipt" => receipt = Some(PathBuf::from(value()?)),
             "--appimage-runtime" => appimage_runtime = Some(PathBuf::from(value()?)),
             "--no-appimage" => appimage = false,
             "--target" => {
@@ -72,7 +78,7 @@ pub fn parse_args(args: &[String]) -> Result<Options> {
     if !appimage && appimage_runtime.is_some() {
         return Err(Error::new(format!("--no-appimage and --appimage-runtime contradict each other\n\n{USAGE}")));
     }
-    Ok(Options { version, out, targets, appimage_runtime, appimage })
+    Ok(Options { version, out, targets, receipt, appimage_runtime, appimage })
 }
 
 /// The workspace root (the folder above `xtask/`).
@@ -97,6 +103,59 @@ pub fn source_date_epoch(root: &Path) -> Result<u64> {
         return Err(Error::new("git could not read the commit time; set SOURCE_DATE_EPOCH"));
     }
     text.trim().parse().map_err(|_| Error::new(format!("git printed {:?} as the commit time; set SOURCE_DATE_EPOCH", text.trim())))
+}
+
+fn clean_head(root: &Path) -> Result<String> {
+    let status = Command::new("git")
+        .current_dir(root)
+        .args(["status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"])
+        .output()
+        .context(|| "running git to check the worktree".to_string())?;
+    if !status.status.success() {
+        return Err(Error::new("git could not check the worktree"));
+    }
+    if !status.stdout.is_empty() {
+        return Err(Error::new("--receipt requires a clean Git worktree"));
+    }
+    let head = Command::new("git")
+        .current_dir(root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .context(|| "running git to read HEAD".to_string())?;
+    if !head.status.success() {
+        return Err(Error::new("git could not read HEAD"));
+    }
+    let head = String::from_utf8_lossy(&head.stdout);
+    let commit = head.trim();
+    sums::validate_commit(commit)?;
+    Ok(commit.to_string())
+}
+
+fn ensure_build_head(root: &Path, commit: &str) -> Result<()> {
+    let actual = clean_head(root)?;
+    if actual != commit {
+        return Err(Error::new(format!("Git HEAD changed during the candidate build from {commit} to {actual}")));
+    }
+    Ok(())
+}
+
+fn check_candidate_output(out: &Path, receipt: &Path) -> Result<()> {
+    match fs::symlink_metadata(receipt) {
+        Ok(_) => return Err(Error::new(format!("receipt path already exists: {}", receipt.display()))),
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context(|| format!("checking receipt path {}", receipt.display())),
+    }
+    let mut entries = fs::read_dir(out).context(|| format!("checking output directory {}", out.display()))?;
+    if entries.next().is_some() {
+        return Err(Error::new(format!("--receipt requires an empty output directory: {}", out.display())));
+    }
+    let out = fs::canonicalize(out).context(|| format!("resolving {}", out.display()))?;
+    let parent = receipt.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    let parent = fs::canonicalize(parent).context(|| format!("resolving the folder for receipt {}", receipt.display()))?;
+    if parent.starts_with(out) {
+        return Err(Error::new("--receipt must be outside the package output directory"));
+    }
+    Ok(())
 }
 
 pub(crate) fn target_dir(root: &Path) -> PathBuf {
@@ -253,8 +312,14 @@ pub(crate) fn work_dir(root: &Path, name: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
-fn build_target(root: &Path, options: &Options, target: Target, epoch: u64, runtime: Option<&[u8]>) -> Result<()> {
+fn build_target(root: &Path, options: &Options, target: Target, epoch: u64, runtime: Option<&[u8]>, commit: Option<&str>) -> Result<()> {
+    if let Some(commit) = commit {
+        ensure_build_head(root, commit)?;
+    }
     let (client_path, server_path) = cargo_build(root, target, epoch)?;
+    if let Some(commit) = commit {
+        ensure_build_head(root, commit)?;
+    }
     let client = read(&client_path)?;
     let server = read(&server_path)?;
     let svg = read(&root.join("assets/icon/crewcraft.svg"))?;
@@ -339,24 +404,45 @@ fn build_target(root: &Path, options: &Options, target: Target, epoch: u64, runt
     Ok(())
 }
 
-/// Runs `dist`: builds every requested target, then writes `SHA256SUMS.txt` over everything in the output folder.
+/// Runs `dist`, then writes `SHA256SUMS.txt` and the candidate receipt if requested.
 pub fn run(options: &Options) -> Result<()> {
     let root = workspace_root()?;
-    let epoch = source_date_epoch(&root)?;
     // xtask shares the workspace version, which is what the binaries print for --version.
     let built = env!("CARGO_PKG_VERSION");
     if built != options.version.to_string() {
-        println!("warning: the binaries report version {built}, not {}; set workspace.package.version before a release", options.version);
+        let message = format!("the binaries report version {built}, not {}; set workspace.package.version before a release", options.version);
+        if options.receipt.is_some() {
+            return Err(Error::new(message));
+        }
+        println!("warning: {message}");
     }
+    let linux = options.targets.contains(&Target::LinuxX86_64);
+    let candidate = if let Some(receipt) = &options.receipt {
+        if linux && !options.appimage {
+            return Err(Error::new("--receipt requires an AppImage for Linux targets"));
+        }
+        Some((receipt, clean_head(&root)?))
+    } else {
+        None
+    };
+    let epoch = source_date_epoch(&root)?;
     if options.targets.contains(&Target::MacosUniversal) {
         macos::require_macos()?;
     }
-    let runtime = if options.appimage && options.targets.contains(&Target::LinuxX86_64) { Some(appimage_runtime(options)?) } else { None };
+    let runtime = if options.appimage && linux { Some(appimage_runtime(options)?) } else { None };
     fs::create_dir_all(&options.out).context(|| format!("creating {}", options.out.display()))?;
+    if let Some((receipt, _)) = &candidate {
+        check_candidate_output(&options.out, receipt)?;
+    }
     for &target in &options.targets {
-        build_target(&root, options, target, epoch, runtime.as_deref())?;
+        let commit = candidate.as_ref().map(|(_, commit)| commit.as_str());
+        build_target(&root, options, target, epoch, runtime.as_deref(), commit)?;
     }
     let text = sums::write_sums(&options.out)?;
+    if let Some((receipt, commit)) = candidate {
+        ensure_build_head(&root, &commit)?;
+        sums::write_build_receipt(receipt, &commit, &options.version, &text)?;
+    }
     println!("== {} in {}\n{text}", sums::SUMS_FILE, options.out.display());
     Ok(())
 }

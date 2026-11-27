@@ -152,6 +152,35 @@ fn dist_arguments() {
     assert!(dist::parse_args(&args(&["--version", "0.1.0", "--out"])).is_err());
 }
 
+#[test]
+fn dist_receipt_refuses_to_package_binaries_under_a_different_version() {
+    let dir = fresh_dir("t307-dist-receipt");
+    let out = dir.join("packages");
+    let receipt = dir.join("linux.receipt");
+    // Without the version check, the missing runtime still stops this fixture before any build.
+    let missing_runtime = dir.join("no-runtime");
+    let arguments = [
+        "--version",
+        "0.0.0-alpha.99",
+        "--out",
+        out.to_str().unwrap(),
+        "--target",
+        "linux-x86_64",
+        "--appimage-runtime",
+        missing_runtime.to_str().unwrap(),
+        "--receipt",
+        receipt.to_str().unwrap(),
+    ];
+    let args = arguments.map(str::to_owned);
+    let options = dist::parse_args(&args).unwrap();
+    assert_eq!(options.receipt.as_deref(), Some(receipt.as_path()));
+    let error = dist::run(&options).unwrap_err().to_string();
+    assert!(error.contains("the binaries report version"), "{error}");
+    assert!(!out.exists());
+    assert!(!receipt.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // ---------------------------------------------------------------- SHA256SUMS.txt
 
 #[test]
@@ -184,6 +213,146 @@ fn sums_cover_every_asset_in_the_folder() {
     );
     assert_eq!(text, expected);
     assert_eq!(std::fs::read_to_string(dir.join(sums::SUMS_FILE)).unwrap(), expected);
+}
+
+struct ReleaseAssembly {
+    root: PathBuf,
+    assets: PathBuf,
+    receipts: Vec<PathBuf>,
+    version: Version,
+    source: String,
+    expected: String,
+}
+
+impl ReleaseAssembly {
+    fn new() -> Self {
+        let root = fresh_dir("t307-preflight");
+        let assets = root.join("assets");
+        std::fs::create_dir(&assets).unwrap();
+        let version = version("0.1.0-beta.1");
+        let source = "ab".repeat(20);
+        let mut rows = BTreeMap::new();
+        let mut receipts = Vec::new();
+        for target in Target::ALL {
+            let mut files = Vec::new();
+            for asset in target.assets() {
+                let name = asset.file_name(&version);
+                let bytes = format!("synthetic release fixture for {name}\n").into_bytes();
+                std::fs::write(assets.join(&name), &bytes).unwrap();
+                rows.insert(name.clone(), hex(&Sha256::digest(&bytes)));
+                files.push((name, bytes));
+            }
+            let receipt = root.join(format!("{}.receipt", target.name()));
+            sums::write_build_receipt(&receipt, &source, &version, &sums::format_sums(&files).unwrap()).unwrap();
+            receipts.push(receipt);
+        }
+        let expected = rows.into_iter().map(|(name, digest)| format!("{digest}  {name}\n")).collect();
+        Self { root, assets, receipts, version, source, expected }
+    }
+
+    fn replace_receipt_text(&self, index: usize, from: &str, to: &str) {
+        let path = &self.receipts[index];
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(text.contains(from));
+        std::fs::write(path, text.replacen(from, to, 1)).unwrap();
+    }
+}
+
+impl Drop for ReleaseAssembly {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+#[test]
+fn preflight_combines_exact_revision_receipts_into_canonical_checksums() {
+    let mut assembly = ReleaseAssembly::new();
+    let first = &assembly.receipts[0];
+    let before = std::fs::read_to_string(first).unwrap();
+    let (metadata, checksums) = before.split_once(&format!("version {}\n", assembly.version)).unwrap();
+    assert_eq!(metadata, format!("source {}\n", assembly.source));
+    assert!(sums::write_build_receipt(first, &"cd".repeat(20), &assembly.version, checksums).is_err());
+    assert_eq!(std::fs::read_to_string(first).unwrap(), before, "a builder cannot overwrite an existing receipt");
+
+    assembly.receipts.reverse();
+    let text = sums::preflight(&assembly.assets, &assembly.version, &assembly.source, &assembly.receipts).unwrap();
+    assert_eq!(text, assembly.expected);
+    assert_eq!(std::fs::read_to_string(assembly.assets.join(sums::SUMS_FILE)).unwrap(), assembly.expected);
+}
+
+#[test]
+fn preflight_replaces_existing_checksums_without_modifying_hardlinked_asset() {
+    let assembly = ReleaseAssembly::new();
+    let artifact = assembly.assets.join(Asset::ClientMsi.file_name(&assembly.version));
+    let original_bytes = std::fs::read(&artifact).unwrap();
+    let checksums = assembly.assets.join(sums::SUMS_FILE);
+    match std::fs::hard_link(&artifact, &checksums) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => return,
+        Err(error) => panic!("could not link the fixture artifact: {error}"),
+    }
+
+    let text = sums::preflight(&assembly.assets, &assembly.version, &assembly.source, &assembly.receipts).unwrap();
+    assert_eq!(std::fs::read(&artifact).unwrap(), original_bytes);
+    assert_eq!(text, assembly.expected);
+    assert_eq!(std::fs::read_to_string(checksums).unwrap(), assembly.expected);
+}
+
+fn reject_assembly(case: &str, change: impl FnOnce(&mut ReleaseAssembly)) {
+    let mut assembly = ReleaseAssembly::new();
+    change(&mut assembly);
+    let outcome = sums::preflight(&assembly.assets, &assembly.version, &assembly.source, &assembly.receipts);
+    assert!(outcome.is_err(), "{case} must be refused");
+    assert!(!assembly.assets.join(sums::SUMS_FILE).exists(), "{case} must not leave a fresh manifest");
+}
+
+#[test]
+fn preflight_rejects_wrong_version_stale_and_mixed_receipts() {
+    reject_assembly("receipt version mismatch", |assembly| {
+        assembly.replace_receipt_text(0, "version 0.1.0-beta.1\n", "version 0.1.0-beta.2\n");
+    });
+    reject_assembly("every receipt from an older revision", |assembly| {
+        let older = "cd".repeat(20);
+        for index in 0..assembly.receipts.len() {
+            assembly.replace_receipt_text(index, &assembly.source, &older);
+        }
+    });
+    reject_assembly("one receipt from another revision", |assembly| {
+        assembly.replace_receipt_text(0, &assembly.source, &"cd".repeat(20));
+    });
+}
+
+#[test]
+fn preflight_rejects_missing_extra_and_modified_assets() {
+    reject_assembly("missing package", |assembly| {
+        std::fs::remove_file(assembly.assets.join(Asset::ClientMsi.file_name(&assembly.version))).unwrap();
+    });
+    reject_assembly("extra package from another release", |assembly| {
+        let name = Asset::ClientDeb.file_name(&version("0.1.0-beta.2"));
+        std::fs::write(assembly.assets.join(name), b"old build").unwrap();
+    });
+    reject_assembly("package changed after its builder receipt", |assembly| {
+        std::fs::write(assembly.assets.join(Asset::ClientDmg.file_name(&assembly.version)), b"edited package").unwrap();
+    });
+}
+
+#[test]
+fn preflight_requires_each_asset_to_be_covered_once() {
+    reject_assembly("unreceipted platform", |assembly| {
+        assert!(assembly.receipts.pop().is_some());
+    });
+    reject_assembly("duplicate row in one receipt", |assembly| {
+        let text = std::fs::read_to_string(&assembly.receipts[0]).unwrap();
+        let row = text.lines().nth(2).unwrap();
+        assembly.replace_receipt_text(0, row, &format!("{row}\n{row}"));
+    });
+    reject_assembly("duplicate coverage across different receipts", |assembly| {
+        let first = std::fs::read_to_string(&assembly.receipts[0]).unwrap();
+        let duplicate = first.lines().nth(2).unwrap();
+        let second_path = &assembly.receipts[1];
+        let second = std::fs::read_to_string(second_path).unwrap();
+        std::fs::write(second_path, format!("{second}{duplicate}\n")).unwrap();
+    });
 }
 
 // ---------------------------------------------------------------- readers written for this test
