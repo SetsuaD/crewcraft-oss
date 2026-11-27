@@ -60,6 +60,9 @@ pub enum Command {
     Attach { room: String, path: std::path::PathBuf },
     /// Post `text` (may be empty) with `files`, uploads made with `Attach` (task T330e).
     PostFiles { room: String, text: String, files: Vec<[u8; 16]> },
+    /// Continue the archive room `archive` as an active conversation (task T352); the window opens the room it
+    /// continues in.
+    Continue { archive: String },
     /// Save file `file` (`size` bytes, named `name`) to `to`, or, with `None`, to a new file in the person's
     /// Downloads folder (task T330e).
     Save { file: [u8; 16], size: u64, name: String, to: Option<std::path::PathBuf> },

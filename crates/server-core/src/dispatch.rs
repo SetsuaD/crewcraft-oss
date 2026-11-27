@@ -165,6 +165,7 @@ pub(crate) fn handle_backend(backend: &mut Backend<'_>, user: &str, request: &Re
         | Request::CallSeal { .. }
         | Request::CallOffer { .. }
         | Request::PostFiles { .. }
+        | Request::Continue { .. }
         | Request::Reply { .. } => {
             return Ok(refusal(E_NO_STORAGE));
         }

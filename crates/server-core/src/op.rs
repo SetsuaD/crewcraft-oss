@@ -24,6 +24,9 @@
 //!   call | u64 ended_ms`
 //! - tag 24 `ImportFiles` (task T350e): `str slug | str key | u8 count | count × (str name | u64 size | u8 stored (0 or
 //!   1) | [16 file id when stored])`, the message's whole file list
+//! - tag 34, continuing archives (task T352), then `u8 kind`: kind 1 `ArchiveDirect`: `str slug`, an archive room that
+//!   was a one-to-one conversation in its source; kind 2 `Continue`: `str archive | str actor | u8 direct (0 or 1) |
+//!   u32 count | count × str person | u64 now_ms`, the archive continued by `actor` and who it makes sure are members
 
 use crewcraft_proto::message::CodecError;
 
@@ -189,6 +192,19 @@ pub enum Op {
         author: String,
         parent: u64,
         text: String,
+        now_ms: u64,
+    },
+    /// The archive room `slug` was a one-to-one conversation in its source (task T352).
+    ArchiveDirect {
+        slug: String,
+    },
+    /// `actor` continued the archive room `archive` (task T352): in the direct message of the two `people` when
+    /// `direct`, otherwise in the archive's own continuation room, making sure `people` are members of it.
+    Continue {
+        archive: String,
+        actor: String,
+        direct: bool,
+        people: Vec<String>,
         now_ms: u64,
     },
 }
@@ -378,6 +394,21 @@ pub fn encode_op(op: &Op) -> Result<Vec<u8>, CodecError> {
             encode_str(&mut out, author)?;
             out.extend_from_slice(&parent.to_be_bytes());
             encode_str(&mut out, text)?;
+            out.extend_from_slice(&now_ms.to_be_bytes());
+        }
+        Op::ArchiveDirect { slug } => {
+            out.extend_from_slice(&[CONTINUATION, ARCHIVE_DIRECT]);
+            encode_str(&mut out, slug)?;
+        }
+        Op::Continue { archive, actor, direct, people, now_ms } => {
+            out.extend_from_slice(&[CONTINUATION, CONTINUE]);
+            encode_str(&mut out, archive)?;
+            encode_str(&mut out, actor)?;
+            out.push(u8::from(*direct));
+            out.extend_from_slice(&u32::try_from(people.len()).map_err(|_| CodecError::FieldLength)?.to_be_bytes());
+            for person in people {
+                encode_str(&mut out, person)?;
+            }
             out.extend_from_slice(&now_ms.to_be_bytes());
         }
     }
@@ -664,9 +695,41 @@ pub fn decode_op(bytes: &[u8]) -> Result<Op, CodecError> {
             }
             Ok(Op::ImportFiles { slug, key, files })
         }
+        CONTINUATION => {
+            let op = match decode_array::<1>(bytes, &mut pos)? {
+                [ARCHIVE_DIRECT] => Op::ArchiveDirect { slug: decode_str(bytes, &mut pos)? },
+                [CONTINUE] => {
+                    let archive = decode_str(bytes, &mut pos)?;
+                    let actor = decode_str(bytes, &mut pos)?;
+                    let direct = match decode_array::<1>(bytes, &mut pos)? {
+                        [0] => false,
+                        [1] => true,
+                        [other] => return Err(CodecError::BadKind(other)),
+                    };
+                    let count = u32::from_be_bytes(decode_array::<4>(bytes, &mut pos)?);
+                    // Each person takes at least four bytes, so the count cannot ask for more than the record holds.
+                    let mut people = Vec::new();
+                    for _ in 0..count {
+                        people.push(decode_str(bytes, &mut pos)?);
+                    }
+                    let now_ms = decode_u64(bytes, &mut pos)?;
+                    Op::Continue { archive, actor, direct, people, now_ms }
+                }
+                [other] => return Err(CodecError::BadKind(other)),
+            };
+            if pos != bytes.len() {
+                return Err(CodecError::TrailingBytes);
+            }
+            Ok(op)
+        }
         _ => Err(CodecError::BadKind(tag)),
     }
 }
+
+/// The tag of the continuation records (task T352), and the kinds that follow it.
+const CONTINUATION: u8 = 34;
+const ARCHIVE_DIRECT: u8 = 1;
+const CONTINUE: u8 = 2;
 
 /// The tag of `Op::FileStored` (task T330a).
 const FILE_STORED: u8 = 16;
@@ -744,6 +807,39 @@ fn decode_u64(bytes: &[u8], pos: &mut usize) -> Result<u64, CodecError> {
     ]);
     *pos += 8;
     Ok(val)
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+
+    #[test]
+    fn continuation_records_round_trip_and_refuse_partial_bytes_and_unknown_kinds() -> Result<(), CodecError> {
+        let records = [
+            Op::ArchiveDirect { slug: "ana-and-bo".into() },
+            Op::Continue {
+                archive: "old-team".into(),
+                actor: "ana@example.org".into(),
+                direct: false,
+                people: vec!["ana@example.org".into(), "bo@example.org".into()],
+                now_ms: 7,
+            },
+        ];
+        for op in records {
+            let bytes = encode_op(&op)?;
+            assert_eq!(decode_op(&bytes)?, op);
+            for end in 0..bytes.len() {
+                assert!(decode_op(&bytes[..end]).is_err());
+            }
+            let mut unknown = bytes.clone();
+            unknown[1] = 9;
+            assert_eq!(decode_op(&unknown), Err(CodecError::BadKind(9)));
+            let mut trailing = bytes;
+            trailing.push(0);
+            assert_eq!(decode_op(&trailing), Err(CodecError::TrailingBytes));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

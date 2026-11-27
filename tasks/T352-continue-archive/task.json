@@ -1,0 +1,45 @@
+{
+  "id": "T352-continue-archive",
+  "title": "Continue an archived conversation as an active one",
+  "crate": "crewcraft-server",
+  "files": [
+    "crates/proto/src/request.rs",
+    "crates/proto/src/push.rs",
+    "crates/server-core/src/lib.rs",
+    "crates/server-core/src/continuation.rs",
+    "crates/server-core/src/op.rs",
+    "crates/server-core/src/room_service.rs",
+    "crates/server-core/src/room_search.rs",
+    "crates/server-core/src/server.rs",
+    "crates/server-core/src/durable.rs",
+    "crates/server-core/src/import.rs",
+    "crates/server-core/src/dispatch.rs",
+    "crates/server-core/src/connection.rs",
+    "apps/crewcraft-server/src/main.rs",
+    "apps/crewcraft-server/src/server_install.rs",
+    "crates/client-core/src/client.rs",
+    "crates/client-core/src/inbox.rs",
+    "crates/client-core/src/room_view.rs",
+    "apps/crewcraft/src/chat_session.rs",
+    "apps/crewcraft/src/signed_in.rs",
+    "apps/crewcraft/src/worker.rs",
+    "apps/crewcraft/src/app.rs",
+    "crates/ui-model/src/lib.rs",
+    "crates/desktop-ui/src/lib.rs",
+    "crates/desktop-ui/tests/t352_continue_window.rs",
+    "apps/crewcraft-server/tests/t352_continue_archive.rs",
+    "docs/IMPORT.md"
+  ],
+  "test_path": "apps/crewcraft-server/tests/t352_continue_archive.rs",
+  "test_cmd": "cargo test -p crewcraft-server --test t352_continue_archive",
+  "depends_on": [
+    "T350a-import-engine",
+    "T350d2-archive-app"
+  ],
+  "spec": "FEATURE_CONTINUE (8192) announces Request::Continue (43) with an archive room. Only a person who can read the archive (a member) may continue it; anyone else is answered E_NO_SUCH_ROOM, and a room that is not an archive E_NOT_ALLOWED. The answer is Ok followed by a continued frame (tag 142) naming the room the conversation continues in. An archive's linked people are its members: the import adds only account holders, and a later run adds the rest once they have accounts, so an author without an account is never added. An archived one-to-one conversation (the import records it with journal op 34 kind 1) whose two people are both linked continues in their direct message: the one they already have while both are still in it, or a new one, never a second, even from another archive between the same two people. Any other archive continues in one new group room with exactly its linked people; a person linked later who continues it is added to that same room. The room gets one server-built line linking back to each archive it continues: EventKind::Continued, pushed as Push::Continued (84) with the archive's slug, the person who continued it and the text, and as Other to clients without the feature. Continuing again answers the same room and records nothing; each change is journal op 34 kind 2 and replays after a restart. The app offers Continue this conversation beside Archive: read only, lists and opens the room it continues in, shows the line between messages and offers Open the archive.",
+  "status": "done",
+  "context": [
+    "docs/REQUIREMENTS.md",
+    "docs/IMPORT.md"
+  ]
+}

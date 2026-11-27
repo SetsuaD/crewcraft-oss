@@ -14,6 +14,7 @@ pub mod audit;
 pub mod calls;
 pub mod cert_policy;
 pub mod connection;
+pub mod continuation;
 pub mod current;
 pub mod cursor_log;
 pub mod devices;

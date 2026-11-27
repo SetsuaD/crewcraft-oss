@@ -50,6 +50,7 @@ impl RoomSearch {
             }
             EventKind::Joined { .. } | EventKind::Left { .. } | EventKind::Reacted { .. } | EventKind::CallLine { .. } | EventKind::Pinned { .. } => {
             }
+            EventKind::Continued { .. } => {}
         }
     }
 

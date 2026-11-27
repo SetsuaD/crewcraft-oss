@@ -44,6 +44,11 @@ pub enum EventKind {
         call: u64,
         ended: bool,
     },
+    /// The line that says this room continues the archive room `archive` (task T352). The text is in the event's
+    /// `html`.
+    Continued {
+        archive: String,
+    },
 }
 
 /// Who reacted to one message: by reaction code, the people, sorted (task T341a).
@@ -356,6 +361,19 @@ impl RoomService {
             cursor: self.log.head() + 1,
             actor: actor.to_string(),
             kind: EventKind::CallLine { call, ended },
+            html: render(text),
+            mentions: Vec::new(),
+        };
+        self.log.append(event)
+    }
+
+    /// Append the line by `actor` that says this room continues the archive room `archive` (task T352), rendered from
+    /// `text`, which the caller builds. Like a call's history line, it never counts as unread.
+    pub fn continued_line(&mut self, actor: &str, archive: &str, text: &str) -> u64 {
+        let event = Event {
+            cursor: self.log.head() + 1,
+            actor: actor.to_string(),
+            kind: EventKind::Continued { archive: archive.to_owned() },
             html: render(text),
             mentions: Vec::new(),
         };

@@ -158,6 +158,17 @@ pub enum Event {
         room: String,
         times: Vec<(u64, u64)>,
     },
+    /// The archive room `archive` continues in `room`, which is followed from now on (task T352).
+    Continued {
+        archive: String,
+        room: String,
+    },
+    /// The lines in `room` that link back to the archives it continues, `(cursor, archive, text)`, whenever they
+    /// change (task T352).
+    Continuations {
+        room: String,
+        lines: Vec<(u64, String, String)>,
+    },
     /// The files in the person's rooms, newest message first (task T331b).
     Files {
         files: Vec<crewcraft_proto::request::ListedFile>,
@@ -309,6 +320,8 @@ pub enum Problem {
     /// The server supplied current pin metadata while its retained history could not replay this room (T343).
     HistoryGap,
     ReadStateNotOffered,
+    /// The server does not offer continuing archived conversations (task T352).
+    ContinueNotOffered,
     /// A file on this computer could not be read or written (task T330e).
     LocalFile(io::ErrorKind),
 }
@@ -341,6 +354,7 @@ impl std::fmt::Display for Problem {
             Self::PinsSavedNotOffered => "This server does not offer pins and saved messages.",
             Self::HistoryGap => "Some earlier messages are outside the server's retained history.",
             Self::ReadStateNotOffered => "This server does not offer shared unread positions.",
+            Self::ContinueNotOffered => "This server does not offer continuing archived conversations.",
             Self::LocalFile(_) => "CrewCraft could not read or write that file on this computer.",
         })
     }
@@ -367,6 +381,7 @@ impl Problem {
                 | Self::PinsSavedNotOffered
                 | Self::HistoryGap
                 | Self::ReadStateNotOffered
+                | Self::ContinueNotOffered
                 | Self::LocalFile(_)
         )
     }
@@ -528,6 +543,7 @@ impl Worker {
             saved_sent: None,
             saved_requested: false,
             archive_sent: BTreeMap::new(),
+            continued_sent: BTreeMap::new(),
             in_call: None,
             next_heartbeat: Instant::now(),
             crypto: None,
@@ -630,6 +646,8 @@ struct Run {
     calls_sent: BTreeMap<String, RoomCalls>,
     /// The last archive times sent, per archive room (task T350d2).
     archive_sent: BTreeMap<String, Vec<(u64, u64)>>,
+    /// The last continuation lines sent, per room (task T352).
+    continued_sent: BTreeMap<String, Vec<(u64, String, String)>>,
     /// The last reactions sent, per room (task T341b).
     reactions_sent: BTreeMap<String, crewcraft_ui_model::RoomReactions>,
     /// Pin metadata is sent even when the room's message snapshot stays unchanged (T343).
@@ -732,6 +750,7 @@ impl Run {
                 }
                 Some(Input::Command(Command::PostFiles { room, text, files })) => self.post_files(room, text, files),
                 Some(Input::Command(Command::Save { file, size, name, to })) => self.save(file, size, &name, to),
+                Some(Input::Command(Command::Continue { archive })) => self.continue_archive(archive),
                 Some(Input::SignOut) => {
                     self.retry = None;
                     let was_signed_in = self.session.is_some();
@@ -1005,6 +1024,25 @@ impl Run {
                 self.open = None;
             }
             self.emit(Event::MarkedUnread { room });
+        }
+    }
+
+    /// Continue an archive room (task T352). The room it continues in is followed; the window opens it.
+    fn continue_archive(&mut self, archive: String) {
+        let Some(session) = self.session.as_mut() else {
+            return self.emit(Event::Failed(Problem::NotSignedIn));
+        };
+        if !session.continues() {
+            return self.emit(Event::Failed(Problem::ContinueNotOffered));
+        }
+        match session.continue_archive(&archive) {
+            Ok(room) => match self.follow(&room) {
+                Ok(()) => self.emit(Event::Continued { archive, room }),
+                Err(problem) => self.emit(Event::Failed(problem)),
+            },
+            Err(error) => {
+                self.request_failed(error);
+            }
         }
     }
 
@@ -1442,6 +1480,15 @@ impl Run {
             if changed {
                 self.calls_sent.insert(room.to_owned(), calls.clone());
                 self.emit(Event::Calls { room: room.to_owned(), open: calls.0, lines: calls.1 });
+            }
+        }
+        // The lines that link back to the archives the room continues, when they change (task T352).
+        if let Some(session) = self.session.as_mut() {
+            let lines = session.continued_lines(room);
+            let changed = recovered || self.continued_sent.get(room).map_or(!lines.is_empty(), |last| *last != lines);
+            if changed {
+                self.continued_sent.insert(room.to_owned(), lines.clone());
+                self.emit(Event::Continuations { room: room.to_owned(), lines });
             }
         }
         // The call's keys, for the call this app is in (task T360d3).

@@ -332,6 +332,13 @@ impl DurableServer {
                     Some(slug)
                 }
             };
+            // A one-to-one conversation can continue as its two people's direct message (task T352).
+            if room.kind == RoomKind::Direct
+                && !dry_run
+                && let Some(slug) = &slug
+            {
+                self.mark_direct(slug)?;
+            }
             for member in &room.members {
                 if !has_account(member) {
                     report.people_skipped.entry(room.key.clone()).or_default().insert(member.clone());
